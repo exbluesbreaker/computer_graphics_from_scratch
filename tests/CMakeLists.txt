@@ -12,7 +12,9 @@ FetchContent_MakeAvailable(Catch2)
 
 add_executable(cgfs_tests
     vec3_test.cpp
-    color_test.cpp)
+    color_test.cpp
+    canvas_test.cpp
+    image_io_test.cpp)
 target_link_libraries(cgfs_tests PRIVATE cgfs::cgfs Catch2::Catch2WithMain)
 cgfs_set_warnings(cgfs_tests)
 

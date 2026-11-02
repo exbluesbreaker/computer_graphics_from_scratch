@@ -48,12 +48,23 @@ function(cgfs_set_warnings target)
     endif()
 endfunction()
 
+# --- Third-party code -----------------------------------------------------------------
+add_subdirectory(third_party)
+
 # --- The library ----------------------------------------------------------------------
-# Header-only for now (vec3, color); it becomes a static library once canvas.cpp lands.
-add_library(cgfs INTERFACE)
+add_library(cgfs STATIC
+    src/canvas.cpp
+    src/image_io.cpp)
 add_library(cgfs::cgfs ALIAS cgfs)
-target_include_directories(cgfs INTERFACE ${PROJECT_SOURCE_DIR}/include)
-target_compile_features(cgfs INTERFACE cxx_std_20)
+target_include_directories(cgfs PUBLIC ${PROJECT_SOURCE_DIR}/include)
+target_compile_features(cgfs PUBLIC cxx_std_20)
+target_link_libraries(cgfs PRIVATE stb_image_write)
+cgfs_set_warnings(cgfs)
+
+# --- Applications ---------------------------------------------------------------------
+if(CGFS_BUILD_APPS)
+    add_subdirectory(apps)
+endif()
 
 # --- Tests ----------------------------------------------------------------------------
 if(CGFS_BUILD_TESTS)
