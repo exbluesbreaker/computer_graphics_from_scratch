@@ -1,0 +1,42 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CGFS_BUILD_TESTS": "ON",
+                "CGFS_BUILD_APPS": "ON"
+            }
+        },
+        {
+            "name": "dev",
+            "inherits": "base",
+            "displayName": "Debug with sanitizers",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CGFS_ENABLE_SANITIZERS": "ON"
+            }
+        },
+        {
+            "name": "release",
+            "inherits": "base",
+            "displayName": "Release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CGFS_ENABLE_SANITIZERS": "OFF"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "dev", "configurePreset": "dev" },
+        { "name": "release", "configurePreset": "release" }
+    ],
+    "testPresets": [
+        { "name": "dev", "configurePreset": "dev", "output": { "outputOnFailure": true } },
+        { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } }
+    ]
+}
