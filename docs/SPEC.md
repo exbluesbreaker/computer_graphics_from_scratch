@@ -4,6 +4,12 @@ Software 3D renderer written from scratch in C++.
 
 ## 1. Purpose
 
+The project exists for accelerated education about computer graphics. It implements the
+renderers of the book *Computer Graphics from Scratch* by Gabriel Gambetta
+(https://gabrielgambetta.com/computer-graphics-from-scratch/) step by step in C++,
+with every algorithm written by hand and pinned by tests, so that the code can be read
+alongside the book as a worked example.
+
 This document is the design reference for the renderer: what it renders and with which
 formulas, how the code is structured, how it is built and tested, and how it is expected
 to grow. The current feature set is a ray tracer for spheres with ambient, point and
@@ -482,8 +488,9 @@ threading yet.
 
 ## 13. Roadmap
 
-The project follows the structure of *Computer Graphics from Scratch* (Gabriel
-Gambetta). The architecture in section 4 is meant to absorb these steps as additions:
+The project follows the chapters of *Computer Graphics from Scratch*
+(https://gabrielgambetta.com/computer-graphics-from-scratch/). The architecture in
+section 4 is meant to absorb these steps as additions:
 
 - Specular reflection: `Sphere::specular`, a `view` parameter on `ComputeLighting`.
 - Shadows: `ClosestIntersection` factored out of `TraceRay`, reused for shadow rays.
@@ -519,3 +526,18 @@ The judgment calls behind this design, so they are not relitigated by accident.
 6. Google-based clang-format with 4-space indentation and 100 columns; `PascalCase`
    methods to match the book.
 7. No window or live preview. Save a file and open it.
+
+## 15. Implementation notes
+
+Measurements and known behaviours of the implementation, recorded 2026-11-02.
+
+- Catch2 is pinned to v3.16.1.
+- The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
+  the development machine; it stays as insurance against a different standard library.
+- Measured on the development machine, Release, single thread: the 1920 x 1080 diffuse
+  scene renders in about 75 ms, the 320 x 180 golden scenes in under 10 ms.
+- Odd canvas sizes: `Render` leaves the last column and row untouched (the loops cover
+  `-width/2 <= x < width/2`, `-height/2 <= y < height/2`), and the pixel mapping in 3.1
+  puts y = 0 on the top row for odd heights. Both are tested so a change is deliberate.
+- The `.clang-format` file is in place, but clang-format was not available on the
+  development machine, so the sources were formatted by hand to its rules.
