@@ -35,8 +35,11 @@ function(cgfs_set_warnings target)
             target_compile_options(${target} PRIVATE /WX)
         endif()
     else()
+        # -Wmissing-field-initializers (part of -Wextra) fires on designated initializers
+        # that rely on default member values, which is how scenes are written here.
         target_compile_options(${target} PRIVATE
-            -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow)
+            -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow
+            -Wno-missing-field-initializers)
         if(CGFS_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE -Werror)
         endif()
@@ -54,7 +57,10 @@ add_subdirectory(third_party)
 # --- The library ----------------------------------------------------------------------
 add_library(cgfs STATIC
     src/canvas.cpp
-    src/image_io.cpp)
+    src/demo_scenes.cpp
+    src/image_io.cpp
+    src/raytracer.cpp
+    src/viewport.cpp)
 add_library(cgfs::cgfs ALIAS cgfs)
 target_include_directories(cgfs PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_compile_features(cgfs PUBLIC cxx_std_20)

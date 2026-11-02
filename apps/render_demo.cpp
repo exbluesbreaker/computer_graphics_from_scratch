@@ -2,6 +2,9 @@
 // a file.
 
 #include <cgfs/canvas.h>
+#include <cgfs/demo_scenes.h>
+#include <cgfs/raytracer.h>
+#include <cgfs/viewport.h>
 
 #include <chrono>
 #include <cstdlib>
@@ -14,19 +17,40 @@
 namespace {
 
 struct Options {
-    std::string scene = "axes";
+    std::string scene = "diffuse";
     int width = 1920;
     int height = 1080;
+    double distance = 1.0;
     std::string output = "render.png";
 };
 
 constexpr std::string_view kUsage =
-    "usage: render_demo [--scene axes] [--width N] [--height N] [--output PATH]\n"
+    "usage: render_demo [--scene diffuse|flat|axes] [--width N] [--height N]\n"
+    "                   [--distance D] [--output PATH]\n"
     "\n"
-    "  --scene   which picture to draw (default: axes)\n"
-    "  --width   canvas width in pixels (default: 1920)\n"
-    "  --height  canvas height in pixels (default: 1080)\n"
-    "  --output  output file, .png or .ppm (default: render.png)\n";
+    "  --scene     diffuse: spheres on a floor with ambient, point and directional light\n"
+    "              flat:    the spheres under full ambient light only\n"
+    "              axes:    the coordinate axes and corner dots (no ray tracing)\n"
+    "              (default: diffuse)\n"
+    "  --width     canvas width in pixels (default: 1920)\n"
+    "  --height    canvas height in pixels (default: 1080)\n"
+    "  --distance  viewport distance; larger zooms in (default: 1)\n"
+    "  --output    output file, .png or .ppm (default: render.png)\n";
+
+double ParsePositiveDouble(std::string_view name, const std::string& text) {
+    std::size_t consumed = 0;
+    double value = 0.0;
+    try {
+        value = std::stod(text, &consumed);
+    } catch (const std::exception&) {
+        consumed = 0;
+    }
+    if (consumed != text.size() || value <= 0.0) {
+        throw std::runtime_error(std::string(name) + " expects a positive number, got '" +
+                                 text + "'");
+    }
+    return value;
+}
 
 int ParsePositiveInt(std::string_view name, const std::string& text) {
     std::size_t consumed = 0;
@@ -61,6 +85,8 @@ std::optional<Options> ParseArgs(int argc, char** argv) {
             options.width = ParsePositiveInt(arg, value);
         } else if (arg == "--height") {
             options.height = ParsePositiveInt(arg, value);
+        } else if (arg == "--distance") {
+            options.distance = ParsePositiveDouble(arg, value);
         } else if (arg == "--output") {
             options.output = value;
         } else {
@@ -100,11 +126,22 @@ void DrawAxes(cgfs::Canvas& canvas) {
     DrawDot(canvas, half_w - 9, -half_h + 8, kBlack);      // bottom-right
 }
 
+void RenderScene(const cgfs::Scene& scene, double distance, cgfs::Canvas& canvas) {
+    // The viewport width follows the canvas aspect ratio so the spheres stay round.
+    const cgfs::Viewport viewport = cgfs::Viewport::MatchingCanvasAspect(canvas, 1.0, distance);
+    cgfs::RayTracer(scene, viewport).Render(canvas);
+}
+
 void Draw(const Options& options, cgfs::Canvas& canvas) {
-    if (options.scene == "axes") {
+    if (options.scene == "diffuse") {
+        RenderScene(cgfs::demo::DiffuseScene(), options.distance, canvas);
+    } else if (options.scene == "flat") {
+        RenderScene(cgfs::demo::FlatScene(), options.distance, canvas);
+    } else if (options.scene == "axes") {
         DrawAxes(canvas);
     } else {
-        throw std::runtime_error("unknown scene '" + options.scene + "'");
+        throw std::runtime_error("unknown scene '" + options.scene +
+                                 "' (expected diffuse, flat or axes)");
     }
 }
 
