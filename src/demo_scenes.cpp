@@ -40,4 +40,14 @@ Scene DiffuseScene() {
     return scene;
 }
 
+Scene SpecularScene() {
+    Scene scene = DiffuseScene();
+    // The spheres in the order DiffuseScene builds them.
+    scene.spheres[0].specular = 500.0;   // red: shiny
+    scene.spheres[1].specular = 500.0;   // blue: shiny
+    scene.spheres[2].specular = 10.0;    // green: somewhat shiny
+    scene.spheres[3].specular = 1000.0;  // yellow floor: very shiny
+    return scene;
+}
+
 }  // namespace cgfs::demo

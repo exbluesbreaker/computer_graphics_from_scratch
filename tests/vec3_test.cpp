@@ -10,6 +10,7 @@ using cgfs::Cross;
 using cgfs::Dot;
 using cgfs::Length;
 using cgfs::Normalized;
+using cgfs::Reflect;
 using cgfs::Vec3;
 
 TEST_CASE("Vec3 default-constructs to zero", "[vec3]") {
@@ -60,4 +61,14 @@ TEST_CASE("Length and Normalized", "[vec3]") {
     CHECK(Length(Vec3{}) == 0.0);
     CHECK(Normalized(Vec3{0.0, 0.0, 5.0}) == Vec3{0.0, 0.0, 1.0});
     CHECK_THAT(Length(Normalized(Vec3{1.0, 2.0, 3.0})), WithinAbs(1.0, 1e-12));
+}
+
+TEST_CASE("Reflect mirrors a vector about the normal", "[vec3]") {
+    const Vec3 up{0.0, 1.0, 0.0};
+    CHECK(Reflect(Vec3{1.0, 1.0, 0.0}, up) == Vec3{-1.0, 1.0, 0.0});  // 45 degrees in, 45 out
+    CHECK(Reflect(up, up) == up);                                      // along the normal
+    CHECK(Reflect(Vec3{1.0, 0.0, 0.0}, up) == Vec3{-1.0, 0.0, 0.0});  // grazing: reversed
+    CHECK(Reflect(Vec3{3.0, 2.0, -1.0}, up) == Vec3{-3.0, 2.0, 1.0});
+    static_assert(Reflect(Vec3{1.0, 1.0, 0.0}, Vec3{0.0, 1.0, 0.0}) == Vec3{-1.0, 1.0, 0.0},
+                  "Reflect is constexpr");
 }

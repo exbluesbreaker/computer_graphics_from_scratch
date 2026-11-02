@@ -7,9 +7,9 @@ by Gabriel Gambetta. Every algorithm is implemented by hand and pinned by tests,
 code can be read as a worked version of the book. No graphics libraries are involved:
 vector math, the pixel canvas and the image writers are all part of the project.
 
-It currently ray-traces spheres with ambient, point and directional diffuse lighting and
-writes the result to a PNG or PPM file. `docs/SPEC.md` describes the design, the
-architecture and the roadmap.
+It currently ray-traces spheres with ambient, point and directional lights, diffuse
+shading and specular highlights, and writes the result to a PNG or PPM file.
+`docs/SPEC.md` describes the design, the architecture and the roadmap.
 
 ## Requirements
 
@@ -30,26 +30,27 @@ ctest --preset dev
 Use `--preset release` for an optimized build in `build/release`. Then:
 
 ```bash
-./build/release/apps/render_demo                       # 1920x1080 diffuse scene -> render.png
+./build/release/apps/render_demo                       # 1920x1080 specular scene -> render.png
 ./build/release/apps/render_demo --scene flat --width 480 --height 270 --output flat.png
 ./build/release/apps/render_demo --distance 2 --output zoomed.ppm
 ./build/release/apps/render_demo --help
 ```
 
-Scenes: `diffuse` (three spheres on a yellow floor with ambient, point and directional
-lights), `flat` (the spheres under full ambient light), `axes` (the coordinate axes and
-corner dots, no ray tracing). A larger `--distance` narrows the field of view.
+Scenes: `specular` (three shiny spheres on a shiny yellow floor with ambient, point and
+directional lights; the lights show up as highlights), `diffuse` (the same scene with
+matte surfaces), `flat` (the spheres under full ambient light), `axes` (the coordinate
+axes and corner dots, no ray tracing). A larger `--distance` narrows the field of view.
 
 ## Layout
 
 ```
 include/cgfs/   public headers, one per module
-    vec3.h        Vec3 and Dot, Cross, Length, Normalized
+    vec3.h        Vec3 and Dot, Cross, Length, Normalized, Reflect
     color.h       Color (double channels, nominal 0..255), Rgb8, ToRgb8
     canvas.h      Canvas: pixel buffer with a centered coordinate system, Save()
     image_io.h    PPM writer and reader, PNG writer
     viewport.h    Viewport: CanvasToViewport(x, y), field of view
-    scene.h       Sphere, the lights (a std::variant) and Scene
+    scene.h       Sphere (with its specular exponent), the lights (a std::variant) and Scene
     raytracer.h   IntersectRaySphere and RayTracer: Render, TraceRay, ComputeLighting
     demo_scenes.h the scenes shared by render_demo and the golden tests
 src/            implementations
@@ -73,4 +74,5 @@ committing:
 ```bash
 ./build/release/apps/render_demo --scene flat --width 320 --height 180 --output tests/golden/flat_320x180.ppm
 ./build/release/apps/render_demo --scene diffuse --width 320 --height 180 --output tests/golden/diffuse_320x180.ppm
+./build/release/apps/render_demo --scene specular --width 320 --height 180 --output tests/golden/specular_320x180.ppm
 ```

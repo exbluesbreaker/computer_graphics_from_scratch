@@ -26,7 +26,8 @@ struct SphereIntersection {
 [[nodiscard]] SphereIntersection IntersectRaySphere(Vec3 origin, Vec3 direction,
                                                     const Sphere& sphere);
 
-/// A minimal ray tracer: one ray per canvas pixel, spheres only, diffuse lighting.
+/// A minimal ray tracer: one ray per canvas pixel, spheres only, diffuse and specular
+/// lighting.
 ///
 /// The camera sits at the origin and looks through the viewport. For each pixel we cast
 /// a ray from the camera through the matching viewport point, find the closest sphere it
@@ -48,9 +49,16 @@ public:
     /// the shaded closest sphere, or the scene's background color.
     [[nodiscard]] Color TraceRay(Vec3 origin, Vec3 direction, double t_min, double t_max) const;
 
-    /// Total light intensity arriving at `point` with unit `normal` (diffuse model):
-    ///   i = sum(ambient I) + sum(I * <N, L> / (|N| |L|)) over lights in front of the surface.
-    [[nodiscard]] double ComputeLighting(Vec3 point, Vec3 normal) const;
+    /// Total light intensity leaving `point` (unit `normal`) toward the viewer, where
+    /// `view` points from the point back to the viewer and `specular` is the surface's
+    /// shininess exponent s (kMatte: no highlight). For each point or directional light
+    /// with direction L and intensity I:
+    ///   i += I * <N, L> / (|N| |L|)          diffuse, when <N, L> > 0
+    ///   i += I * (<R, V> / (|R| |V|))^s      specular, when s != kMatte and <R, V> > 0,
+    ///                                        with R = 2 N <N, L> - L the mirror of L
+    /// plus the intensity of every ambient light.
+    [[nodiscard]] double ComputeLighting(Vec3 point, Vec3 normal, Vec3 view,
+                                         double specular) const;
 
 private:
     const Scene& scene_;

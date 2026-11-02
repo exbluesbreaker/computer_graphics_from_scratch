@@ -19,6 +19,7 @@ using cgfs::Color;
 using cgfs::DirectionalLight;
 using cgfs::IntersectRaySphere;
 using cgfs::kInfinity;
+using cgfs::kMatte;
 using cgfs::PointLight;
 using cgfs::RayTracer;
 using cgfs::Rgb8;
@@ -32,6 +33,7 @@ namespace {
 
 const Vec3 kOrigin{};
 const Vec3 kForward{0.0, 0.0, 1.0};
+const Vec3 kUp{0.0, 1.0, 0.0};
 const Sphere kUnitSphereAhead{.center = {0.0, 0.0, 5.0}, .radius = 1.0, .color = kRed};
 
 }  // namespace
@@ -73,8 +75,9 @@ TEST_CASE("ComputeLighting: ambient light adds its intensity everywhere", "[rayt
     const Scene scene{.lights = {AmbientLight{.intensity = 0.3}}};
     const Viewport viewport(4, 4);
     const RayTracer tracer(scene, viewport);
-    CHECK(tracer.ComputeLighting(Vec3{}, Vec3{0.0, 1.0, 0.0}) == 0.3);
-    CHECK(tracer.ComputeLighting(Vec3{7.0, -2.0, 3.0}, Vec3{0.0, 0.0, -1.0}) == 0.3);
+    CHECK(tracer.ComputeLighting(Vec3{}, kUp, kUp, kMatte) == 0.3);
+    CHECK(tracer.ComputeLighting(Vec3{7.0, -2.0, 3.0}, -kForward, -kForward, kMatte) == 0.3);
+    CHECK(tracer.ComputeLighting(Vec3{}, kUp, kUp, 500.0) == 0.3);  // shininess: no effect
 }
 
 TEST_CASE("ComputeLighting: a point light straight above lights at full intensity",
@@ -82,7 +85,7 @@ TEST_CASE("ComputeLighting: a point light straight above lights at full intensit
     const Scene scene{.lights = {PointLight{.intensity = 0.8, .position = {0.0, 5.0, 0.0}}}};
     const Viewport viewport(4, 4);
     const RayTracer tracer(scene, viewport);
-    CHECK(tracer.ComputeLighting(Vec3{}, Vec3{0.0, 1.0, 0.0}) == 0.8);
+    CHECK(tracer.ComputeLighting(Vec3{}, kUp, kUp, kMatte) == 0.8);
 }
 
 TEST_CASE("ComputeLighting: a light behind the surface contributes nothing", "[raytracer]") {
@@ -90,8 +93,9 @@ TEST_CASE("ComputeLighting: a light behind the surface contributes nothing", "[r
                                  DirectionalLight{.intensity = 0.5, .direction = {0.0, 1.0, 0.0}}}};
     const Viewport viewport(4, 4);
     const RayTracer tracer(scene, viewport);
-    CHECK(tracer.ComputeLighting(Vec3{}, Vec3{0.0, -1.0, 0.0}) == 0.0);
-    CHECK(tracer.ComputeLighting(Vec3{}, Vec3{1.0, 0.0, 0.0}) == 0.0);  // grazing: <N, L> = 0
+    CHECK(tracer.ComputeLighting(Vec3{}, -kUp, -kUp, kMatte) == 0.0);
+    const Vec3 sideways{1.0, 0.0, 0.0};
+    CHECK(tracer.ComputeLighting(Vec3{}, sideways, sideways, kMatte) == 0.0);  // <N, L> = 0
 }
 
 TEST_CASE("ComputeLighting: intensity follows the cosine of the angle", "[raytracer]") {
@@ -99,7 +103,7 @@ TEST_CASE("ComputeLighting: intensity follows the cosine of the angle", "[raytra
     const Viewport viewport(4, 4);
     const RayTracer tracer(scene, viewport);
     const Vec3 tilted{0.0, 0.5, std::sqrt(3.0) / 2};  // 60 degrees away from the light
-    CHECK_THAT(tracer.ComputeLighting(Vec3{}, tilted), WithinAbs(0.5, 1e-12));
+    CHECK_THAT(tracer.ComputeLighting(Vec3{}, tilted, tilted, kMatte), WithinAbs(0.5, 1e-12));
 }
 
 TEST_CASE("ComputeLighting: does not depend on the length of the light direction",
@@ -108,7 +112,82 @@ TEST_CASE("ComputeLighting: does not depend on the length of the light direction
                                  PointLight{.intensity = 0.3, .position = {0.0, 0.001, 0.0}}}};
     const Viewport viewport(4, 4);
     const RayTracer tracer(scene, viewport);
-    CHECK_THAT(tracer.ComputeLighting(Vec3{}, Vec3{0.0, 1.0, 0.0}), WithinAbs(1.0, 1e-12));
+    CHECK_THAT(tracer.ComputeLighting(Vec3{}, kUp, kUp, kMatte), WithinAbs(1.0, 1e-12));
+}
+
+// The specular tests share one setup: a surface facing up, lit by a directional light
+// from 45 degrees, L = (1, 1, 0). The light mirrors off toward R = (-1, 1, 0), and the
+// diffuse term alone is cos 45 = 1 / sqrt(2).
+namespace {
+
+const Scene kSpecularScene{
+    .lights = {DirectionalLight{.intensity = 1.0, .direction = {1.0, 1.0, 0.0}}}};
+const Vec3 kMirror{-1.0, 1.0, 0.0};
+const double kDiffuseOnly = 1.0 / std::sqrt(2.0);
+
+}  // namespace
+
+TEST_CASE("ComputeLighting: a matte surface has no highlight from any direction",
+          "[raytracer]") {
+    const Viewport viewport(4, 4);
+    const RayTracer tracer(kSpecularScene, viewport);
+    CHECK_THAT(tracer.ComputeLighting(Vec3{}, kUp, kMirror, kMatte),
+               WithinAbs(kDiffuseOnly, 1e-12));
+    CHECK_THAT(tracer.ComputeLighting(Vec3{}, kUp, kUp, kMatte), WithinAbs(kDiffuseOnly, 1e-12));
+}
+
+TEST_CASE("ComputeLighting: the full highlight appears in the mirror direction",
+          "[raytracer]") {
+    const Viewport viewport(4, 4);
+    const RayTracer tracer(kSpecularScene, viewport);
+    // cos 0 = 1 to any power: the whole light intensity is added on top of the diffuse term.
+    CHECK_THAT(tracer.ComputeLighting(Vec3{}, kUp, kMirror, 10.0),
+               WithinAbs(kDiffuseOnly + 1.0, 1e-12));
+    CHECK_THAT(tracer.ComputeLighting(Vec3{}, kUp, kMirror, 500.0),
+               WithinAbs(kDiffuseOnly + 1.0, 1e-12));
+}
+
+TEST_CASE("ComputeLighting: the highlight fades as cos^s away from the mirror direction",
+          "[raytracer]") {
+    const Viewport viewport(4, 4);
+    const RayTracer tracer(kSpecularScene, viewport);
+    // Looking straight down the normal is 45 degrees off the mirror direction.
+    CHECK_THAT(tracer.ComputeLighting(Vec3{}, kUp, kUp, 2.0),
+               WithinAbs(kDiffuseOnly + 0.5, 1e-12));  // (1 / sqrt(2))^2
+    CHECK_THAT(tracer.ComputeLighting(Vec3{}, kUp, kUp, 10.0),
+               WithinAbs(kDiffuseOnly + 1.0 / 32, 1e-12));  // (1 / sqrt(2))^10
+}
+
+TEST_CASE("ComputeLighting: no highlight when the viewer is not on the reflected side",
+          "[raytracer]") {
+    const Viewport viewport(4, 4);
+    const RayTracer tracer(kSpecularScene, viewport);
+    // From the light's own side <R, V> < 0: only the diffuse term remains.
+    CHECK_THAT(tracer.ComputeLighting(Vec3{}, kUp, Vec3{1.0, 0.5, 0.0}, 10.0),
+               WithinAbs(kDiffuseOnly, 1e-12));
+    CHECK_THAT(tracer.ComputeLighting(Vec3{}, kUp, -kMirror, 10.0),
+               WithinAbs(kDiffuseOnly, 1e-12));
+}
+
+TEST_CASE("ComputeLighting: the highlight does not depend on the lengths of L and V",
+          "[raytracer]") {
+    const Scene scene{
+        .lights = {DirectionalLight{.intensity = 1.0, .direction = {10.0, 10.0, 0.0}}}};
+    const Viewport viewport(4, 4);
+    const RayTracer tracer(scene, viewport);
+    CHECK_THAT(tracer.ComputeLighting(Vec3{}, kUp, 0.25 * kMirror, 10.0),
+               WithinAbs(kDiffuseOnly + 1.0, 1e-12));
+    CHECK_THAT(tracer.ComputeLighting(Vec3{}, kUp, 3.0 * kUp, 2.0),
+               WithinAbs(kDiffuseOnly + 0.5, 1e-12));
+}
+
+TEST_CASE("ComputeLighting: a point light makes a highlight too", "[raytracer]") {
+    // The light sits at (1, 1, 0), so from the origin L = (1, 1, 0) as in the other tests.
+    const Scene scene{.lights = {PointLight{.intensity = 0.5, .position = {1.0, 1.0, 0.0}}}};
+    const Viewport viewport(4, 4);
+    const RayTracer tracer(scene, viewport);
+    CHECK_THAT(tracer.ComputeLighting(Vec3{}, kUp, kMirror, 10.0),
+               WithinAbs(0.5 * (kDiffuseOnly + 1.0), 1e-12));
 }
 
 TEST_CASE("TraceRay: the closest sphere in range wins", "[raytracer]") {
@@ -133,6 +212,7 @@ TEST_CASE("TraceRay: the closest sphere in range wins", "[raytracer]") {
 TEST_CASE("TraceRay: shades the hit point with the lights", "[raytracer]") {
     const Viewport viewport(4, 4);
     Scene scene{.spheres = {kUnitSphereAhead}};
+    REQUIRE(scene.spheres[0].specular == kMatte);  // the default: diffuse only
     const RayTracer tracer(scene, viewport);
 
     // A point light at the camera hits the front of the sphere head-on: full intensity.
@@ -146,6 +226,31 @@ TEST_CASE("TraceRay: shades the hit point with the lights", "[raytracer]") {
     // A light from behind the sphere does not reach the front: black.
     scene.lights = {DirectionalLight{.intensity = 1.0, .direction = kForward}};
     CHECK(tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity) == Color{0.0, 0.0, 0.0});
+}
+
+TEST_CASE("TraceRay: a shiny sphere adds the highlight seen from the ray's origin",
+          "[raytracer]") {
+    const Viewport viewport(4, 4);
+    Scene scene{.spheres = {kUnitSphereAhead}};
+    scene.spheres[0].specular = 500.0;
+    const RayTracer tracer(scene, viewport);
+
+    // A point light at the camera mirrors straight back into the camera: the diffuse
+    // and the specular term each contribute the full intensity.
+    scene.lights = {PointLight{.intensity = 0.5, .position = kOrigin}};
+    CHECK(tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity) == kRed);
+    scene.lights = {PointLight{.intensity = 1.0, .position = kOrigin}};
+    CHECK(tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity) == Color{510.0, 0.0, 0.0});
+
+    // A light from 45 degrees to the side mirrors off 45 degrees past the camera, so the
+    // highlight is cos(45)^s: it depends on the sphere's own shininess.
+    scene.lights = {DirectionalLight{.intensity = 1.0, .direction = {-1.0, 0.0, -1.0}}};
+    scene.spheres[0].specular = 2.0;
+    CHECK_THAT(tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity).r,
+               WithinAbs(255.0 * (1.0 / std::sqrt(2.0) + 0.5), 1e-9));
+    scene.spheres[0].specular = kMatte;
+    CHECK_THAT(tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity).r,
+               WithinAbs(255.0 / std::sqrt(2.0), 1e-9));
 }
 
 TEST_CASE("Render: draws the scene through the viewport", "[raytracer]") {

@@ -8,10 +8,18 @@
 
 namespace cgfs {
 
+/// The `specular` value of a surface with no highlight at all. The book's convention:
+/// -1 means "skip the specular term", any other value is the exponent.
+inline constexpr double kMatte = -1.0;
+
 struct Sphere {
     Vec3 center;
     double radius = 1.0;
     Color color;
+    /// Shininess: the exponent s of the specular term (see RayTracer::ComputeLighting).
+    /// A higher value gives a smaller, sharper highlight: 10 is somewhat shiny, 500 is
+    /// shiny, 1000 very shiny. kMatte disables the highlight.
+    double specular = kMatte;
 };
 
 /// Light that comes from everywhere equally; brightens every point the same.

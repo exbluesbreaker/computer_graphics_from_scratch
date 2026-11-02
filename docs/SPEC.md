@@ -13,7 +13,8 @@ alongside the book as a worked example.
 This document is the design reference for the renderer: what it renders and with which
 formulas, how the code is structured, how it is built and tested, and how it is expected
 to grow. The current feature set is a ray tracer for spheres with ambient, point and
-directional diffuse lighting; section 13 lists what comes next.
+directional lights, diffuse shading and specular highlights; section 13 lists what comes
+next.
 
 ## 2. Goals and non-goals
 
@@ -21,8 +22,8 @@ Goals:
 
 - G1. Behaviour pinned by tests: unit tests for every module and golden-image tests that
   fix the renderer's output pixel for pixel.
-- G2. A structure that accommodates the planned next steps (specular highlights,
-  shadows, reflections, a movable camera, and later a rasterizer) without rewrites.
+- G2. A structure that accommodates the planned next steps (shadows, reflections, a
+  movable camera, and later a rasterizer) without rewrites.
 - G3. CMake as the only build system. A fresh clone builds and tests with three
   commands on Linux with GCC or Clang.
 - G4. No required third-party runtime dependencies. "From scratch" is the point of the
@@ -92,9 +93,10 @@ For a ray `P(t) = O + t * D` and a sphere with center `C` and radius `r`, let
 - `TraceRay(O, D, t_min, t_max)` tests every sphere, keeps the smallest root `t` with
   `t_min <= t <= t_max` across all spheres and both roots, and returns the scene's
   background color when nothing is hit. Infinite roots never count as hits.
-- On a hit, `P = O + t * D`, `N = (P - C) / |P - C|`, and the result is
-  `sphere.color * ComputeLighting(P, N)`. The product may exceed 255 per channel; it is
-  clamped only when written to the canvas.
+- On a hit, `P = O + t * D`, `N = (P - C) / |P - C|`, `V = -D` (from the point back
+  toward the ray's origin), and the result is
+  `sphere.color * ComputeLighting(P, N, V, sphere.specular)`. The product may exceed 255
+  per channel; it is clamped only when written to the canvas.
 - Pixel order during rendering is an implementation detail. The output must not depend
   on it.
 
@@ -106,12 +108,26 @@ Three light types, each with an `intensity`:
 - Point: has a `position`; the light direction at `P` is `L = position - P`.
 - Directional: has a `direction` that points toward the light; `L = direction`.
 
-`ComputeLighting(P, N)` returns
+Every sphere has a `specular` exponent `s`. The value `-1` (`kMatte`, the default)
+means the surface has no highlight; the demo scenes use 10 (somewhat shiny), 500 (shiny)
+and 1000 (very shiny).
 
-`i = sum(ambient I) + sum over point and directional lights of I * <N, L> / (|N| |L|)`
+`ComputeLighting(P, N, V, s)`, with `V` pointing from `P` toward the viewer, returns
 
-where terms with `<N, L> <= 0` are skipped. `N` is unit length by construction; the
-division by `|N|` is kept so the code reads like the formula.
+```
+i = sum(ambient I)
+  + sum over point and directional lights of
+        I * <N, L> / (|N| |L|)                      diffuse, skipped when <N, L> <= 0
+      + I * (<R, V> / (|R| |V|))^s                  specular, with R = 2 N <N, L> - L,
+                                                    skipped when s = -1 or <R, V> <= 0
+```
+
+`R` is the direction of `L` mirrored about the normal (`Reflect(L, N)`): the highlight is
+strongest when the viewer sits exactly where the light bounces to, and falls off as
+`cos^s` of the angle between `R` and `V`, so a larger `s` gives a smaller, sharper spot.
+As in the book, the specular term is not gated on `<N, L> > 0`; only the diffuse term is.
+`N` is unit length by construction; the division by `|N|` is kept so the code reads like
+the formula.
 
 ### 3.6 Numeric conventions
 
@@ -203,6 +219,7 @@ constexpr double Dot(Vec3 a, Vec3 b);
 constexpr Vec3   Cross(Vec3 a, Vec3 b);
 double           Length(Vec3 v);          // sqrt(Dot(v, v))
 Vec3             Normalized(Vec3 v);      // v / Length(v); precondition: Length(v) > 0
+constexpr Vec3   Reflect(Vec3 v, Vec3 normal);   // 2 N <N, v> - v; precondition: |normal| = 1
 ```
 
 No matrices yet. A `Mat4` arrives with the camera-transform step (section 13).
@@ -285,7 +302,8 @@ canvas, so there is no lifetime coupling between the two.
 ### 5.6 `scene.h`
 
 ```cpp
-struct Sphere { Vec3 center; double radius = 1.0; Color color; };
+inline constexpr double kMatte = -1.0;    // the specular value of a surface with no highlight
+struct Sphere { Vec3 center; double radius = 1.0; Color color; double specular = kMatte; };
 
 struct AmbientLight     { double intensity = 0; };
 struct PointLight       { double intensity = 0; Vec3 position; };
@@ -301,9 +319,9 @@ struct Scene {
 
 `std::variant` instead of a class hierarchy: lights are a small closed set, value
 semantics keep scenes copyable and trivially testable, and `std::visit` dispatches on
-the light type. `Sphere` will gain `specular` and `reflective` fields in later steps;
-aggregate initialization with designated initializers keeps existing scene code
-compiling.
+the light type. `Sphere` will gain a `reflective` field in a later step; aggregate
+initialization with designated initializers keeps existing scene code compiling, as it
+did when `specular` was added.
 
 ### 5.7 `raytracer.h`
 
@@ -319,7 +337,9 @@ public:
     void   Render(Canvas& canvas) const;
     // precondition: canvas dimensions equal the viewport's; violation throws std::invalid_argument
     Color  TraceRay(Vec3 origin, Vec3 direction, double t_min, double t_max) const;
-    double ComputeLighting(Vec3 point, Vec3 normal) const;     // normal must be unit length
+    double ComputeLighting(Vec3 point, Vec3 normal, Vec3 view, double specular) const;
+    // normal must be unit length; view points from the point toward the viewer;
+    // specular is the exponent s, or kMatte for no highlight
 };
 ```
 
@@ -393,7 +413,8 @@ All tests live in `tests/` and run through CTest. They must pass in both presets
 
 Unit tests:
 
-- `vec3`: arithmetic, `Dot`, `Cross`, `Length`, `Normalized`.
+- `vec3`: arithmetic, `Dot`, `Cross`, `Length`, `Normalized`, `Reflect` (a 45-degree
+  vector mirrors to the other side, the normal maps to itself, a grazing vector reverses).
 - `color`: scaling, addition, `ToRgb8` clamping and truncation (e.g. `254.9 -> 254`,
   `300 -> 255`, `-5 -> 0`).
 - `canvas`: default dimensions; `Clear` with and without a color; `PutPixel` at the
@@ -412,34 +433,42 @@ Unit tests:
     negative root.
   - `ComputeLighting`: ambient only; a point light straight above a point lit at full
     intensity; a light behind the surface contributes nothing; the result does not
-    depend on the length of `L`.
+    depend on the length of `L`. Specular: a matte surface ignores the view direction;
+    the full light intensity is added when `V` is the mirror direction; the highlight
+    falls off as `cos^s` (checked for s = 2 and s = 10 at 45 degrees); nothing is added
+    when `<R, V> <= 0`; the result does not depend on the lengths of `L` and `V`; point
+    lights produce highlights too.
   - `TraceRay`: a single sphere with full ambient light returns its color on the axis
-    and the background color for a ray that misses.
+    and the background color for a ray that misses; a shiny sphere lit from the camera
+    gets the diffuse term plus the full highlight, with the sphere's own exponent.
 
 Golden-image tests:
 
-- `tests/golden/` holds 320 x 180 renders of the two demo scenes (flat ambient, and the
-  diffuse scene with the yellow floor sphere), made with the aspect-matched viewport and
+- `tests/golden/` holds 320 x 180 renders of the three demo scenes (flat ambient, the
+  diffuse scene with the yellow floor sphere, and the specular scene with the same
+  geometry and lights but shiny surfaces), made with the aspect-matched viewport and
   stored as binary PPM. They are the reference output of the renderer and are committed.
 - `golden_test.cpp` renders the same scenes and compares every channel of every pixel
   with the reference image. The test passes when no channel differs by more than 1. The
   tolerance absorbs floating-point differences between compilers and standard
   libraries; everything else is exact.
-- The two scenes are defined once, in `demo_scenes`, shared by `render_demo` and the
+- The scenes are defined once, in `demo_scenes`, shared by `render_demo` and the
   golden test, so the app and the test cannot drift apart.
 - The references are regenerated only when rendering behaviour changes on purpose, with
-  `render_demo --scene <flat|diffuse> --width 320 --height 180 --output tests/golden/...`
-  from a Release build, and the pictures are reviewed before they are committed.
+  `render_demo --scene <flat|diffuse|specular> --width 320 --height 180 --output tests/golden/...`
+  from a Release build, and the pictures are reviewed before they are committed. The
+  `flat` and `diffuse` references double as regression tests: the specular code path
+  must not change the output of matte scenes.
 
 ## 9. Demo application
 
 `render_demo` renders one of the demo pictures to a file:
 
 ```
-render_demo [--scene diffuse|flat|axes] [--width N] [--height N] [--distance D] [--output PATH]
+render_demo [--scene specular|diffuse|flat|axes] [--width N] [--height N] [--distance D] [--output PATH]
 ```
 
-Defaults: `diffuse`, 1920 x 1080, distance 1, `render.png`. The `axes` scene draws the
+Defaults: `specular`, 1920 x 1080, distance 1, `render.png`. The `axes` scene draws the
 coordinate axes and corner dots; it exercises the canvas without ray tracing. The
 viewport width always matches the canvas aspect ratio. The output format follows the
 extension. The program prints the render time in milliseconds and exits non-zero with a
@@ -477,10 +506,10 @@ added for it.
 
 Targets apply to Release builds on a single core. Debug builds have no targets.
 
-| Scene                              | Size        | Target                                           |
-|------------------------------------|-------------|--------------------------------------------------|
-| diffuse demo (4 spheres, 3 lights) | 1920 x 1080 | under 1 second; around 100 ms is the expectation |
-| diffuse demo                       | 320 x 180   | under 50 ms, so the golden test stays cheap      |
+| Scene                               | Size        | Target                                           |
+|-------------------------------------|-------------|--------------------------------------------------|
+| specular demo (4 spheres, 3 lights) | 1920 x 1080 | under 1 second; around 150 ms is the expectation |
+| specular demo                       | 320 x 180   | under 50 ms, so the golden test stays cheap      |
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
@@ -492,9 +521,9 @@ The project follows the chapters of *Computer Graphics from Scratch*
 (https://gabrielgambetta.com/computer-graphics-from-scratch/). The architecture in
 section 4 is meant to absorb these steps as additions:
 
-- Specular reflection: `Sphere::specular`, a `view` parameter on `ComputeLighting`.
 - Shadows: `ClosestIntersection` factored out of `TraceRay`, reused for shadow rays.
-- Reflections: `Sphere::reflective`, recursion depth parameter on `TraceRay`.
+- Reflections: `Sphere::reflective`, recursion depth parameter on `TraceRay`; the
+  reflected ray direction is `Reflect(-D, N)`.
 - Arbitrary camera: `Mat4` (or a rotation matrix plus position) in a `mat.h` header
   next to `vec3.h`; `Camera` struct in `scene.h`; `Render` transforms `D` before tracing.
 - Row-parallel rendering with `std::thread` or a parallel algorithm, with golden tests
@@ -535,7 +564,8 @@ Measurements and known behaviours of the implementation, recorded 2026-11-02.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
   the development machine; it stays as insurance against a different standard library.
 - Measured on the development machine, Release, single thread: the 1920 x 1080 diffuse
-  scene renders in about 75 ms, the 320 x 180 golden scenes in under 10 ms.
+  scene renders in about 80 ms and the specular scene in about 140 ms (the `pow` per
+  light per pixel is the difference); the 320 x 180 golden scenes in under 10 ms.
 - Odd canvas sizes: `Render` leaves the last column and row untouched (the loops cover
   `-width/2 <= x < width/2`, `-height/2 <= y < height/2`), and the pixel mapping in 3.1
   puts y = 0 on the top row for odd heights. Both are tested so a change is deliberate.

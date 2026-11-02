@@ -63,4 +63,12 @@ struct Vec3 {
 /// v scaled to unit length. Precondition: Length(v) > 0.
 [[nodiscard]] inline Vec3 Normalized(Vec3 v) { return v / Length(v); }
 
+/// v mirrored about the unit vector `normal`: 2 N <N, v> - v.
+///
+/// Both v and the result point away from the surface, so for a direction toward a
+/// light this is the direction the light bounces off in. Precondition: |normal| = 1.
+[[nodiscard]] constexpr Vec3 Reflect(Vec3 v, Vec3 normal) {
+    return 2.0 * normal * Dot(normal, v) - v;
+}
+
 }  // namespace cgfs

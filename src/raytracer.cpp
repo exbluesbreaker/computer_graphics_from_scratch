@@ -25,6 +25,19 @@ double Diffuse(double light_intensity, Vec3 normal, Vec3 to_light) {
     return light_intensity * n_dot_l / (Length(normal) * Length(to_light));
 }
 
+/// The specular contribution of the same light seen from `view`: the light bounces off
+/// in the mirror direction R = 2 N <N, L> - L, and the highlight fades with the angle
+/// between R and V as cos^exponent. Zero when the viewer is not on the reflected side.
+double Specular(double light_intensity, Vec3 normal, Vec3 to_light, Vec3 view,
+                double exponent) {
+    const Vec3 reflected = Reflect(to_light, normal);
+    const double r_dot_v = Dot(reflected, view);
+    if (r_dot_v <= 0) {
+        return 0.0;
+    }
+    return light_intensity * std::pow(r_dot_v / (Length(reflected) * Length(view)), exponent);
+}
+
 }  // namespace
 
 SphereIntersection IntersectRaySphere(Vec3 origin, Vec3 direction, const Sphere& sphere) {
@@ -83,23 +96,35 @@ Color RayTracer::TraceRay(Vec3 origin, Vec3 direction, double t_min, double t_ma
         return scene_.background_color;
     }
 
-    const Vec3 point = origin + closest_t * direction;        // intersection point
+    const Vec3 point = origin + closest_t * direction;              // intersection point
     const Vec3 normal = Normalized(point - closest_sphere->center);  // sphere normal there
-    return closest_sphere->color * ComputeLighting(point, normal);
+    const Vec3 view = -direction;                                    // back toward the eye
+    return closest_sphere->color * ComputeLighting(point, normal, view, closest_sphere->specular);
 }
 
-double RayTracer::ComputeLighting(Vec3 point, Vec3 normal) const {
+double RayTracer::ComputeLighting(Vec3 point, Vec3 normal, Vec3 view, double specular) const {
     assert(std::abs(Length(normal) - 1.0) < 1e-9 && "normal must be unit length");
+
+    // One point or directional light arriving along `to_light`. As in the book, the
+    // highlight is not gated on <N, L> > 0: only the diffuse term checks that the light
+    // is in front of the surface.
+    const auto shade = [&](double light_intensity, Vec3 to_light) {
+        double i = Diffuse(light_intensity, normal, to_light);
+        if (specular != kMatte) {
+            i += Specular(light_intensity, normal, to_light, view, specular);
+        }
+        return i;
+    };
 
     double intensity = 0.0;
     for (const Light& light : scene_.lights) {
         std::visit(Overloaded{
                        [&](const AmbientLight& l) { intensity += l.intensity; },
                        [&](const PointLight& l) {
-                           intensity += Diffuse(l.intensity, normal, l.position - point);
+                           intensity += shade(l.intensity, l.position - point);
                        },
                        [&](const DirectionalLight& l) {
-                           intensity += Diffuse(l.intensity, normal, l.direction);
+                           intensity += shade(l.intensity, l.direction);
                        },
                    },
                    light);
