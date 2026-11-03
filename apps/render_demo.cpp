@@ -17,7 +17,7 @@
 namespace {
 
 struct Options {
-    std::string scene = "specular";
+    std::string scene = "reflective";
     int width = 1920;
     int height = 1080;
     double distance = 1.0;
@@ -25,14 +25,15 @@ struct Options {
 };
 
 constexpr std::string_view kUsage =
-    "usage: render_demo [--scene specular|diffuse|flat|axes] [--width N] [--height N]\n"
-    "                   [--distance D] [--output PATH]\n"
+    "usage: render_demo [--scene reflective|specular|diffuse|flat|axes] [--width N]\n"
+    "                   [--height N] [--distance D] [--output PATH]\n"
     "\n"
-    "  --scene     specular: shiny spheres on a floor; the lights show up as highlights\n"
-    "              diffuse:  the same spheres and lights, every surface matte\n"
-    "              flat:     the spheres under full ambient light only\n"
-    "              axes:     the coordinate axes and corner dots (no ray tracing)\n"
-    "              (default: specular)\n"
+    "  --scene     reflective: shiny spheres on a floor that mirror each other and the floor\n"
+    "              specular:   the same spheres and lights without reflections\n"
+    "              diffuse:    the same scene with every surface matte\n"
+    "              flat:       the spheres under full ambient light only\n"
+    "              axes:       the coordinate axes and corner dots (no ray tracing)\n"
+    "              (default: reflective)\n"
     "  --width     canvas width in pixels (default: 1920)\n"
     "  --height    canvas height in pixels (default: 1080)\n"
     "  --distance  viewport distance; larger zooms in (default: 1)\n"
@@ -134,7 +135,9 @@ void RenderScene(const cgfs::Scene& scene, double distance, cgfs::Canvas& canvas
 }
 
 void Draw(const Options& options, cgfs::Canvas& canvas) {
-    if (options.scene == "specular") {
+    if (options.scene == "reflective") {
+        RenderScene(cgfs::demo::ReflectiveScene(), options.distance, canvas);
+    } else if (options.scene == "specular") {
         RenderScene(cgfs::demo::SpecularScene(), options.distance, canvas);
     } else if (options.scene == "diffuse") {
         RenderScene(cgfs::demo::DiffuseScene(), options.distance, canvas);
@@ -144,7 +147,7 @@ void Draw(const Options& options, cgfs::Canvas& canvas) {
         DrawAxes(canvas);
     } else {
         throw std::runtime_error("unknown scene '" + options.scene +
-                                 "' (expected specular, diffuse, flat or axes)");
+                                 "' (expected reflective, specular, diffuse, flat or axes)");
     }
 }
 

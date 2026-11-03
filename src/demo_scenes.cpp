@@ -50,4 +50,13 @@ Scene SpecularScene() {
     return scene;
 }
 
+Scene ReflectiveScene() {
+    Scene scene = SpecularScene();
+    scene.spheres[0].reflective = 0.2;  // red: a bit reflective
+    scene.spheres[1].reflective = 0.3;  // blue: a bit more reflective
+    scene.spheres[2].reflective = 0.4;  // green: even more reflective
+    scene.spheres[3].reflective = 0.5;  // yellow floor: half reflective
+    return scene;
+}
+
 }  // namespace cgfs::demo

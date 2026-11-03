@@ -21,7 +21,8 @@ using cgfs::Hit;
 using cgfs::IntersectRaySphere;
 using cgfs::kInfinity;
 using cgfs::kMatte;
-using cgfs::kShadowEpsilon;
+using cgfs::kReflectionDepth;
+using cgfs::kSurfaceEpsilon;
 using cgfs::PointLight;
 using cgfs::RayTracer;
 using cgfs::Rgb8;
@@ -278,14 +279,14 @@ TEST_CASE("ComputeLighting: the sphere the point lies on does not shadow it", "[
     CHECK(tracer.ComputeLighting(Vec3{0.0, -3.0, 0.0}, kUp, kUp, kMatte) == 0.0);
 }
 
-TEST_CASE("ComputeLighting: a shadow ray starts kShadowEpsilon along L", "[raytracer]") {
+TEST_CASE("ComputeLighting: a shadow ray starts kSurfaceEpsilon along L", "[raytracer]") {
     // Along L = (0, 10, 0) the epsilon is 0.01 units. A sphere that lies below the point
     // and whose top pokes just short of that is skipped; one that reaches just past it
     // counts.
     Scene scene{.lights = {kLightAbove}};
     const Viewport viewport(4, 4);
     const RayTracer tracer(scene, viewport);
-    const double epsilon_y = kShadowEpsilon * 10.0;
+    const double epsilon_y = kSurfaceEpsilon * 10.0;
 
     scene.spheres = {UnitSphereAt({0.0, -1.0 + epsilon_y - 1e-6, 0.0})};  // top at t < 0.001
     CHECK(tracer.ComputeLighting(kOrigin, kUp, kUp, kMatte) == 1.0);
@@ -431,6 +432,112 @@ TEST_CASE("TraceRay: a sphere in the light's way leaves the hit point in shadow"
     // The same sphere beyond the light (t = 1.2 and 1.4) changes nothing.
     scene.spheres.back().center = {0.0, 0.0, -9.0};
     CHECK(tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity) == kRed);
+}
+
+// The reflection tests use ambient light only, so every local color is exact and the
+// result depends on the geometry of the bounces alone.
+namespace {
+
+/// Two half-mirrors facing each other along the Z axis: the red sphere ahead of the
+/// camera and a green one behind it. A ray down the axis bounces between them, picking
+/// up half of the color it sees at each bounce, until its depth runs out:
+///   depth 0: red
+///   depth 1: red/2 + green/2
+///   depth 2: red/2 + (green/2 + red/2)/2
+///   depth 3: red/2 + (green/2 + (red/2 + green/2)/2)/2
+Scene TwoMirrorsScene() {
+    return {
+        .spheres =
+            {{.center = {0.0, 0.0, 5.0}, .radius = 1.0, .color = kRed, .reflective = 0.5},
+             {.center = {0.0, 0.0, -5.0}, .radius = 1.0, .color = kGreen, .reflective = 0.5}},
+        .lights = {AmbientLight{.intensity = 1.0}},
+        .background_color = kBlack,
+    };
+}
+
+}  // namespace
+
+TEST_CASE("TraceRay: a surface with reflective 0 ignores the recursion depth", "[raytracer]") {
+    const Viewport viewport(4, 4);
+    const Scene scene{.spheres = {kUnitSphereAhead},
+                      .lights = {AmbientLight{.intensity = 1.0}},
+                      .background_color = kBlue};
+    REQUIRE(scene.spheres[0].reflective == 0.0);  // the default
+    const RayTracer tracer(scene, viewport);
+    CHECK(tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity, 0) == kRed);
+    CHECK(tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity, 3) == kRed);
+    CHECK(tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity) == kRed);
+}
+
+TEST_CASE("TraceRay: a reflective sphere mixes in what it sees in the mirror direction",
+          "[raytracer]") {
+    const Viewport viewport(4, 4);
+    // The camera ray hits the front of the sphere head-on and bounces straight back,
+    // where there is nothing but the background.
+    Scene scene{.spheres = {kUnitSphereAhead},
+                .lights = {AmbientLight{.intensity = 1.0}},
+                .background_color = kBlue};
+    const RayTracer tracer(scene, viewport);
+
+    scene.spheres[0].reflective = 0.5;
+    CHECK(tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity, 1) == Color{127.5, 0.0, 127.5});
+    scene.spheres[0].reflective = 0.25;
+    CHECK(tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity, 1) == Color{191.25, 0.0, 63.75});
+    scene.spheres[0].reflective = 1.0;  // a perfect mirror shows only the reflection
+    CHECK(tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity, 1) == kBlue);
+
+    // With no depth left there is no reflection: the local color alone.
+    CHECK(tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity, 0) == kRed);
+}
+
+TEST_CASE("TraceRay: the reflected ray obeys the mirror law", "[raytracer]") {
+    const Viewport viewport(4, 4);
+    // A ray from (2, 1, 0) along (-1, -1, 0) meets the unit sphere at the origin in
+    // (1, 0, 0), where the normal is +X, at 45 degrees: it bounces off along (1, -1, 0).
+    // Mirroring the ray's own direction instead of the view vector would send it along
+    // (-1, 1, 0), into the sphere, and the reflection would show the sphere itself.
+    Scene scene{
+        .spheres = {{.center = kOrigin, .radius = 1.0, .color = kRed, .reflective = 0.5}},
+        .lights = {AmbientLight{.intensity = 1.0}},
+        .background_color = kBlack,
+    };
+    const RayTracer tracer(scene, viewport);
+    const Vec3 start{2.0, 1.0, 0.0};
+    const Vec3 toward{-1.0, -1.0, 0.0};
+    REQUIRE(tracer.ClosestIntersection(start, toward, 0.5, kInfinity).t == 1.0);
+    CHECK(tracer.TraceRay(start, toward, 0.5, kInfinity, 1) == Color{127.5, 0.0, 0.0});
+
+    // A green sphere placed on the bounced ray shows up in the mirror.
+    scene.spheres.push_back({.center = {3.0, -2.0, 0.0}, .radius = 1.0, .color = kGreen});
+    CHECK(tracer.TraceRay(start, toward, 0.5, kInfinity, 1) == Color{127.5, 127.5, 0.0});
+}
+
+TEST_CASE("TraceRay: the recursion depth limits how many times a ray bounces", "[raytracer]") {
+    const Viewport viewport(4, 4);
+    const Scene scene = TwoMirrorsScene();
+    const RayTracer tracer(scene, viewport);
+    const auto trace = [&](int depth) {
+        return tracer.TraceRay(kOrigin, kForward, 1.0, kInfinity, depth);
+    };
+    CHECK(trace(0) == Color{255.0, 0.0, 0.0});
+    CHECK(trace(1) == Color{127.5, 127.5, 0.0});
+    CHECK(trace(2) == Color{191.25, 63.75, 0.0});
+    CHECK(trace(3) == Color{159.375, 95.625, 0.0});
+    CHECK(trace(-1) == trace(0));  // never bounces
+
+    // Each bounce starts on the sphere it leaves, which solves the intersection equation
+    // at t = 0 there; had that root counted, the red sphere would reflect itself and
+    // depth 1 would be red/2 + red/2 = red.
+}
+
+TEST_CASE("Render: camera rays bounce kReflectionDepth = 3 times", "[raytracer]") {
+    static_assert(kReflectionDepth == 3, "the book's value");
+    // The center pixel of the canvas looks straight down the Z axis, like the ray above.
+    const Scene scene = TwoMirrorsScene();
+    Canvas canvas(4, 4, kWhite);
+    const Viewport viewport(canvas);
+    RayTracer(scene, viewport).Render(canvas);
+    CHECK(canvas.GetPixel(0, 0) == Rgb8{159, 95, 0});  // Color{159.375, 95.625, 0} truncated
 }
 
 TEST_CASE("Render: draws the scene through the viewport", "[raytracer]") {

@@ -33,17 +33,23 @@ struct Hit {
     double t = kInfinity;
 };
 
-/// Where a shadow ray starts, in units of its direction L. The lit point lies on a sphere,
-/// so that sphere solves the intersection equation at t = 0; starting a little past it
-/// keeps a surface from shadowing itself.
-inline constexpr double kShadowEpsilon = 0.001;
+/// Where a ray cast from a point on a surface starts, in units of its direction: the
+/// shadow rays toward the lights and the reflected rays. The point lies on a sphere, so
+/// that sphere solves the intersection equation at t = 0; starting a little past it keeps
+/// a surface from shadowing or reflecting itself.
+inline constexpr double kSurfaceEpsilon = 0.001;
+
+/// How many times a camera ray may bounce off reflective surfaces: the recursion depth
+/// Render passes to TraceRay.
+inline constexpr int kReflectionDepth = 3;
 
 /// A minimal ray tracer: one ray per canvas pixel, spheres only, diffuse and specular
-/// lighting with shadows.
+/// lighting with shadows and reflections.
 ///
 /// The camera sits at the origin and looks through the viewport. For each pixel we cast
 /// a ray from the camera through the matching viewport point, find the closest sphere it
-/// hits, and shade that point with the scene's lights that can see it.
+/// hits, shade that point with the scene's lights that can see it, and mix in what a
+/// reflective surface shows of the rest of the scene.
 class RayTracer {
 public:
     /// Keeps references: the scene and viewport must outlive the tracer.
@@ -66,7 +72,14 @@ public:
 
     /// The color seen along the ray origin + t * direction for t in [t_min, t_max]:
     /// the shaded closest sphere, or the scene's background color.
-    [[nodiscard]] Color TraceRay(Vec3 origin, Vec3 direction, double t_min, double t_max) const;
+    ///
+    /// For a sphere with reflective r > 0 the shading is the local color only when
+    /// `recursion_depth` is 0; otherwise the ray bounces off the hit point P in the mirror
+    /// direction R = Reflect(-D, N), what it sees there is traced with one level less of
+    /// depth, starting kSurfaceEpsilon along R so the sphere does not reflect itself, and
+    /// the result is local_color * (1 - r) + reflected_color * r.
+    [[nodiscard]] Color TraceRay(Vec3 origin, Vec3 direction, double t_min, double t_max,
+                                 int recursion_depth = kReflectionDepth) const;
 
     /// Total light intensity leaving `point` (unit `normal`) toward the viewer, where
     /// `view` points from the point back to the viewer and `specular` is the surface's

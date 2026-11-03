@@ -8,7 +8,8 @@ code can be read as a worked version of the book. No graphics libraries are invo
 vector math, the pixel canvas and the image writers are all part of the project.
 
 It currently ray-traces spheres with ambient, point and directional lights, diffuse
-shading, specular highlights and shadows, and writes the result to a PNG or PPM file.
+shading, specular highlights, shadows and reflections, and writes the result to a PNG or
+PPM file.
 `docs/SPEC.md` describes the design, the architecture and the roadmap.
 
 ## Requirements
@@ -30,17 +31,18 @@ ctest --preset dev
 Use `--preset release` for an optimized build in `build/release`. Then:
 
 ```bash
-./build/release/apps/render_demo                       # 1920x1080 specular scene -> render.png
+./build/release/apps/render_demo                       # 1920x1080 reflective scene -> render.png
 ./build/release/apps/render_demo --scene flat --width 480 --height 270 --output flat.png
 ./build/release/apps/render_demo --distance 2 --output zoomed.ppm
 ./build/release/apps/render_demo --help
 ```
 
-Scenes: `specular` (three shiny spheres on a shiny yellow floor with ambient, point and
-directional lights; the lights show up as highlights and the spheres cast shadows),
-`diffuse` (the same scene with matte surfaces), `flat` (the spheres under full ambient
-light, so no shading and no shadows), `axes` (the coordinate axes and corner dots, no ray
-tracing). A larger `--distance` narrows the field of view.
+Scenes: `reflective` (three shiny spheres on a shiny yellow floor with ambient, point and
+directional lights; the lights show up as highlights, the spheres cast shadows and mirror
+each other and the floor), `specular` (the same scene without reflections), `diffuse`
+(the same scene with matte surfaces), `flat` (the spheres under full ambient light, so no
+shading and no shadows), `axes` (the coordinate axes and corner dots, no ray tracing). A
+larger `--distance` narrows the field of view.
 
 ## Layout
 
@@ -51,9 +53,10 @@ include/cgfs/   public headers, one per module
     canvas.h      Canvas: pixel buffer with a centered coordinate system, Save()
     image_io.h    PPM writer and reader, PNG writer
     viewport.h    Viewport: CanvasToViewport(x, y), field of view
-    scene.h       Sphere (with its specular exponent), the lights (a std::variant) and Scene
-    raytracer.h   IntersectRaySphere and RayTracer: Render, ClosestIntersection, TraceRay,
-                  ComputeLighting (with shadows)
+    scene.h       Sphere (with its specular exponent and reflectivity), the lights (a
+                  std::variant) and Scene
+    raytracer.h   IntersectRaySphere and RayTracer: Render, ClosestIntersection, TraceRay
+                  (recursive, for reflections), ComputeLighting (with shadows)
     demo_scenes.h the scenes shared by render_demo and the golden tests
 src/            implementations
 apps/           render_demo
@@ -77,4 +80,5 @@ committing:
 ./build/release/apps/render_demo --scene flat --width 320 --height 180 --output tests/golden/flat_320x180.ppm
 ./build/release/apps/render_demo --scene diffuse --width 320 --height 180 --output tests/golden/diffuse_320x180.ppm
 ./build/release/apps/render_demo --scene specular --width 320 --height 180 --output tests/golden/specular_320x180.ppm
+./build/release/apps/render_demo --scene reflective --width 320 --height 180 --output tests/golden/reflective_320x180.ppm
 ```

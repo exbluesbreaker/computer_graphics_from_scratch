@@ -12,7 +12,11 @@ namespace cgfs::demo {
 [[nodiscard]] Scene DiffuseScene();
 
 /// The diffuse scene with a shininess on every sphere, so the lights show up as
-/// specular highlights. The project's reference image.
+/// specular highlights.
 [[nodiscard]] Scene SpecularScene();
+
+/// The specular scene with a reflectivity on every sphere, so they mirror each other and
+/// the floor. The book's final ray-traced scene and the project's reference image.
+[[nodiscard]] Scene ReflectiveScene();
 
 }  // namespace cgfs::demo

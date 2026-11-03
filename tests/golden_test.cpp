@@ -70,3 +70,7 @@ TEST_CASE("diffuse scene matches the reference render", "[golden]") {
 TEST_CASE("specular scene matches the reference render", "[golden]") {
     CheckMatchesGolden(cgfs::demo::SpecularScene(), "specular_320x180.ppm");
 }
+
+TEST_CASE("reflective scene matches the reference render", "[golden]") {
+    CheckMatchesGolden(cgfs::demo::ReflectiveScene(), "reflective_320x180.ppm");
+}

@@ -20,6 +20,9 @@ struct Sphere {
     /// A higher value gives a smaller, sharper highlight: 10 is somewhat shiny, 500 is
     /// shiny, 1000 very shiny. kMatte disables the highlight.
     double specular = kMatte;
+    /// How much of what the surface sees in the mirror direction shows in its color: 0 is
+    /// the local shading alone, 1 a perfect mirror (see RayTracer::TraceRay).
+    double reflective = 0.0;
 };
 
 /// Light that comes from everywhere equally; brightens every point the same.
