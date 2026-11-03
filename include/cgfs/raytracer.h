@@ -26,12 +26,24 @@ struct SphereIntersection {
 [[nodiscard]] SphereIntersection IntersectRaySphere(Vec3 origin, Vec3 direction,
                                                     const Sphere& sphere);
 
+/// The closest sphere a ray meets, as found by RayTracer::ClosestIntersection. `sphere`
+/// points into the scene; it is null when the ray hits nothing, and then t is +inf.
+struct Hit {
+    const Sphere* sphere = nullptr;
+    double t = kInfinity;
+};
+
+/// Where a shadow ray starts, in units of its direction L. The lit point lies on a sphere,
+/// so that sphere solves the intersection equation at t = 0; starting a little past it
+/// keeps a surface from shadowing itself.
+inline constexpr double kShadowEpsilon = 0.001;
+
 /// A minimal ray tracer: one ray per canvas pixel, spheres only, diffuse and specular
-/// lighting.
+/// lighting with shadows.
 ///
 /// The camera sits at the origin and looks through the viewport. For each pixel we cast
 /// a ray from the camera through the matching viewport point, find the closest sphere it
-/// hits, and shade that point with the scene's lights.
+/// hits, and shade that point with the scene's lights that can see it.
 class RayTracer {
 public:
     /// Keeps references: the scene and viewport must outlive the tracer.
@@ -45,6 +57,13 @@ public:
     /// viewport was built for.
     void Render(Canvas& canvas) const;
 
+    /// The first sphere along origin + t * direction with t in [t_min, t_max], and the t
+    /// where the ray meets it. Both roots of every sphere are candidates, so a ray that
+    /// starts inside a sphere hits its far side. Shared by TraceRay (the rays from the
+    /// camera) and ComputeLighting (the shadow rays toward the lights).
+    [[nodiscard]] Hit ClosestIntersection(Vec3 origin, Vec3 direction, double t_min,
+                                          double t_max) const;
+
     /// The color seen along the ray origin + t * direction for t in [t_min, t_max]:
     /// the shaded closest sphere, or the scene's background color.
     [[nodiscard]] Color TraceRay(Vec3 origin, Vec3 direction, double t_min, double t_max) const;
@@ -52,11 +71,16 @@ public:
     /// Total light intensity leaving `point` (unit `normal`) toward the viewer, where
     /// `view` points from the point back to the viewer and `specular` is the surface's
     /// shininess exponent s (kMatte: no highlight). For each point or directional light
-    /// with direction L and intensity I:
+    /// with direction L and intensity I that is not blocked:
     ///   i += I * <N, L> / (|N| |L|)          diffuse, when <N, L> > 0
     ///   i += I * (<R, V> / (|R| |V|))^s      specular, when s != kMatte and <R, V> > 0,
     ///                                        with R = 2 N <N, L> - L the mirror of L
     /// plus the intensity of every ambient light.
+    ///
+    /// A light is blocked, and the point is in its shadow, when a sphere lies on the
+    /// segment from the point toward it: ClosestIntersection(P, L, kShadowEpsilon, t_max)
+    /// finds one, with t_max = 1 for a point light (L = position - P reaches exactly to
+    /// the light) and +inf for a directional light. Ambient light is never blocked.
     [[nodiscard]] double ComputeLighting(Vec3 point, Vec3 normal, Vec3 view,
                                          double specular) const;
 

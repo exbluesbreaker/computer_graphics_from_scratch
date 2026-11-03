@@ -13,8 +13,8 @@ alongside the book as a worked example.
 This document is the design reference for the renderer: what it renders and with which
 formulas, how the code is structured, how it is built and tested, and how it is expected
 to grow. The current feature set is a ray tracer for spheres with ambient, point and
-directional lights, diffuse shading and specular highlights; section 13 lists what comes
-next.
+directional lights, diffuse shading, specular highlights and shadows; section 13 lists
+what comes next.
 
 ## 2. Goals and non-goals
 
@@ -22,8 +22,8 @@ Goals:
 
 - G1. Behaviour pinned by tests: unit tests for every module and golden-image tests that
   fix the renderer's output pixel for pixel.
-- G2. A structure that accommodates the planned next steps (shadows, reflections, a
-  movable camera, and later a rasterizer) without rewrites.
+- G2. A structure that accommodates the planned next steps (reflections, a movable
+  camera, and later a rasterizer) without rewrites.
 - G3. CMake as the only build system. A fresh clone builds and tests with three
   commands on Linux with GCC or Clang.
 - G4. No required third-party runtime dependencies. "From scratch" is the point of the
@@ -90,9 +90,13 @@ For a ray `P(t) = O + t * D` and a sphere with center `C` and radius `r`, let
 - `Render` casts one ray per canvas pixel from `O = (0, 0, 0)` through
   `D = CanvasToViewport(x, y)` with `t_min = 1` and `t_max = +inf`, and writes the
   returned color with `PutPixel`.
-- `TraceRay(O, D, t_min, t_max)` tests every sphere, keeps the smallest root `t` with
-  `t_min <= t <= t_max` across all spheres and both roots, and returns the scene's
-  background color when nothing is hit. Infinite roots never count as hits.
+- `ClosestIntersection(O, D, t_min, t_max)` tests every sphere and returns the sphere
+  with the smallest root `t` such that `t_min <= t <= t_max`, over all spheres and both
+  roots, together with that `t`. Both bounds are inclusive. Infinite roots never count,
+  so a miss returns no sphere and `t = +inf`. It serves the camera rays and the shadow
+  rays alike.
+- `TraceRay(O, D, t_min, t_max)` calls `ClosestIntersection` and returns the scene's
+  background color when nothing is hit.
 - On a hit, `P = O + t * D`, `N = (P - C) / |P - C|`, `V = -D` (from the point back
   toward the ray's origin), and the result is
   `sphere.color * ComputeLighting(P, N, V, sphere.specular)`. The product may exceed 255
@@ -116,11 +120,19 @@ and 1000 (very shiny).
 
 ```
 i = sum(ambient I)
-  + sum over point and directional lights of
+  + sum over point and directional lights that are not blocked of
         I * <N, L> / (|N| |L|)                      diffuse, skipped when <N, L> <= 0
       + I * (<R, V> / (|R| |V|))^s                  specular, with R = 2 N <N, L> - L,
                                                     skipped when s = -1 or <R, V> <= 0
 ```
+
+A light is blocked, and `P` is in its shadow, when
+`ClosestIntersection(P, L, kShadowEpsilon, t_max)` finds a sphere, with `t_max = 1` for
+a point light (`L = position - P` reaches exactly to the light, so only spheres between
+the two count) and `t_max = +inf` for a directional light. `kShadowEpsilon = 0.001`
+starts the shadow ray a little past `P` because `P` lies on a sphere, which solves the
+intersection equation at `t = 0`; without it every surface would shadow itself. A
+blocked light contributes neither diffuse nor specular; ambient light is never blocked.
 
 `R` is the direction of `L` mirrored about the normal (`Reflect(L, N)`): the highlight is
 strongest when the viewer sits exactly where the light bounces to, and falls off as
@@ -331,11 +343,15 @@ inline constexpr double kInfinity = std::numeric_limits<double>::infinity();
 struct SphereIntersection { double t1 = kInfinity, t2 = kInfinity; };
 SphereIntersection IntersectRaySphere(Vec3 origin, Vec3 direction, const Sphere& sphere);
 
+struct Hit { const Sphere* sphere = nullptr; double t = kInfinity; };   // null sphere: a miss
+inline constexpr double kShadowEpsilon = 0.001;   // where a shadow ray starts, in units of L
+
 class RayTracer {
 public:
     RayTracer(const Scene& scene, const Viewport& viewport);   // stores references
     void   Render(Canvas& canvas) const;
     // precondition: canvas dimensions equal the viewport's; violation throws std::invalid_argument
+    Hit    ClosestIntersection(Vec3 origin, Vec3 direction, double t_min, double t_max) const;
     Color  TraceRay(Vec3 origin, Vec3 direction, double t_min, double t_max) const;
     double ComputeLighting(Vec3 point, Vec3 normal, Vec3 view, double specular) const;
     // normal must be unit length; view points from the point toward the viewer;
@@ -343,8 +359,9 @@ public:
 };
 ```
 
-The scene and viewport must outlive the tracer. `TraceRay` and `ComputeLighting` are
-public so the tests can exercise them directly.
+The scene and viewport must outlive the tracer. `Hit::sphere` points into the scene's
+sphere vector and is valid as long as that vector is not modified. `ClosestIntersection`,
+`TraceRay` and `ComputeLighting` are public so the tests can exercise them directly.
 
 ## 6. Build system
 
@@ -431,16 +448,29 @@ Unit tests:
   - `IntersectRaySphere`: miss gives two infinite roots; hit gives two finite roots in
     the right order; tangent gives equal roots; origin inside the sphere gives one
     negative root.
+  - `ClosestIntersection`: the closest sphere in `[t_min, t_max]` wins regardless of
+    scene order; a `t_min` inside a sphere hits its far side; a miss (ray passes by,
+    sphere behind the ray, range stops short or starts past it, empty scene) has a null
+    sphere and `t = +inf`; both range bounds are inclusive.
   - `ComputeLighting`: ambient only; a point light straight above a point lit at full
     intensity; a light behind the surface contributes nothing; the result does not
     depend on the length of `L`. Specular: a matte surface ignores the view direction;
     the full light intensity is added when `V` is the mirror direction; the highlight
     falls off as `cos^s` (checked for s = 2 and s = 10 at 45 degrees); nothing is added
     when `<R, V> <= 0`; the result does not depend on the lengths of `L` and `V`; point
-    lights produce highlights too.
+    lights produce highlights too. Shadows: a sphere between the point and a point light
+    removes the diffuse and the specular term (also when it touches the light or
+    contains the point); a sphere beyond the light, behind the point or off to the side
+    does not; a directional light is blocked at any distance but only ahead of the
+    point; each light is shadowed independently and ambient light never is; the sphere
+    the point lies on does not shadow it (straight up and at a grazing 60 degrees), while
+    the same sphere does shadow a point that is not on it; a blocker whose far side ends
+    just short of `kShadowEpsilon` along `L` is skipped and one just past it counts.
   - `TraceRay`: a single sphere with full ambient light returns its color on the axis
     and the background color for a ray that misses; a shiny sphere lit from the camera
-    gets the diffuse term plus the full highlight, with the sphere's own exponent.
+    gets the diffuse term plus the full highlight, with the sphere's own exponent; a
+    sphere between the hit point and a point light leaves only the ambient light, and
+    the same sphere beyond the light changes nothing.
 
 Golden-image tests:
 
@@ -448,6 +478,9 @@ Golden-image tests:
   diffuse scene with the yellow floor sphere, and the specular scene with the same
   geometry and lights but shiny surfaces), made with the aspect-matched viewport and
   stored as binary PPM. They are the reference output of the renderer and are committed.
+  The diffuse and specular references show the shadows the spheres cast on the floor and
+  on each other; the flat reference has no shadows because ambient light is never
+  blocked.
 - `golden_test.cpp` renders the same scenes and compares every channel of every pixel
   with the reference image. The test passes when no channel differs by more than 1. The
   tolerance absorbs floating-point differences between compilers and standard
@@ -457,8 +490,9 @@ Golden-image tests:
 - The references are regenerated only when rendering behaviour changes on purpose, with
   `render_demo --scene <flat|diffuse|specular> --width 320 --height 180 --output tests/golden/...`
   from a Release build, and the pictures are reviewed before they are committed. The
-  `flat` and `diffuse` references double as regression tests: the specular code path
-  must not change the output of matte scenes.
+  `flat` reference doubles as a regression test: neither the specular nor the shadow code
+  path may change the output of an ambient-only scene, and `diffuse` pins the shadows of
+  matte surfaces independently of the highlights.
 
 ## 9. Demo application
 
@@ -513,7 +547,8 @@ Targets apply to Release builds on a single core. Debug builds have no targets.
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
-threading yet.
+threading yet. Every hit point casts one shadow ray per point or directional light, each
+of which tests every sphere, so lighting costs about as much as the camera ray itself.
 
 ## 13. Roadmap
 
@@ -521,7 +556,6 @@ The project follows the chapters of *Computer Graphics from Scratch*
 (https://gabrielgambetta.com/computer-graphics-from-scratch/). The architecture in
 section 4 is meant to absorb these steps as additions:
 
-- Shadows: `ClosestIntersection` factored out of `TraceRay`, reused for shadow rays.
 - Reflections: `Sphere::reflective`, recursion depth parameter on `TraceRay`; the
   reflected ray direction is `Reflect(-D, N)`.
 - Arbitrary camera: `Mat4` (or a rotation matrix plus position) in a `mat.h` header
@@ -558,16 +592,25 @@ The judgment calls behind this design, so they are not relitigated by accident.
 
 ## 15. Implementation notes
 
-Measurements and known behaviours of the implementation, recorded 2026-11-02.
+Measurements and known behaviours of the implementation, recorded 2026-11-02 and
+updated 2026-11-03 with shadows.
 
 - Catch2 is pinned to v3.16.1.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
   the development machine; it stays as insurance against a different standard library.
-- Measured on the development machine, Release, single thread: the 1920 x 1080 diffuse
-  scene renders in about 80 ms and the specular scene in about 140 ms (the `pow` per
-  light per pixel is the difference); the 320 x 180 golden scenes in under 10 ms.
+- Measured on the development machine, Release, single thread, with shadows: the
+  1920 x 1080 diffuse scene renders in about 85 ms and the specular scene in about
+  100 ms; the 320 x 180 golden scenes in under 10 ms. Before shadows the figures were
+  80 ms and 140 ms: the shadow rays cost little, and a shadowed light skips its `pow`,
+  which is why the specular scene got faster.
+- Shadow rays start at `kShadowEpsilon = 0.001` along `L`, the book's value. With a
+  point light that is `|L|` units away the offset is `0.001 |L|` in world units, so it
+  scales with the distance to the light; no shadow acne has been seen on the demo
+  scenes.
 - Odd canvas sizes: `Render` leaves the last column and row untouched (the loops cover
   `-width/2 <= x < width/2`, `-height/2 <= y < height/2`), and the pixel mapping in 3.1
   puts y = 0 on the top row for odd heights. Both are tested so a change is deliberate.
-- The `.clang-format` file is in place, but clang-format was not available on the
-  development machine, so the sources were formatted by hand to its rules.
+- The `.clang-format` file is in place and clang-format 18 is now installed on the
+  development machine, but the sources were formatted by hand to its rules and
+  `clang-format --dry-run` still reports a handful of differences in older files. A
+  reformat is a separate, mechanical change; new code follows the surrounding style.

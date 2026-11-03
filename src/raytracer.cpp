@@ -78,37 +78,46 @@ void RayTracer::Render(Canvas& canvas) const {
     }
 }
 
-Color RayTracer::TraceRay(Vec3 origin, Vec3 direction, double t_min, double t_max) const {
-    double closest_t = kInfinity;
-    const Sphere* closest_sphere = nullptr;
+Hit RayTracer::ClosestIntersection(Vec3 origin, Vec3 direction, double t_min,
+                                   double t_max) const {
+    Hit closest;
     for (const Sphere& sphere : scene_.spheres) {
         const auto [t1, t2] = IntersectRaySphere(origin, direction, sphere);
-        if (t_min <= t1 && t1 <= t_max && t1 < closest_t) {
-            closest_t = t1;
-            closest_sphere = &sphere;
+        if (t_min <= t1 && t1 <= t_max && t1 < closest.t) {
+            closest = {&sphere, t1};
         }
-        if (t_min <= t2 && t2 <= t_max && t2 < closest_t) {
-            closest_t = t2;
-            closest_sphere = &sphere;
+        if (t_min <= t2 && t2 <= t_max && t2 < closest.t) {
+            closest = {&sphere, t2};
         }
     }
-    if (closest_sphere == nullptr) {
+    return closest;
+}
+
+Color RayTracer::TraceRay(Vec3 origin, Vec3 direction, double t_min, double t_max) const {
+    const Hit hit = ClosestIntersection(origin, direction, t_min, t_max);
+    if (hit.sphere == nullptr) {
         return scene_.background_color;
     }
 
-    const Vec3 point = origin + closest_t * direction;              // intersection point
-    const Vec3 normal = Normalized(point - closest_sphere->center);  // sphere normal there
-    const Vec3 view = -direction;                                    // back toward the eye
-    return closest_sphere->color * ComputeLighting(point, normal, view, closest_sphere->specular);
+    const Vec3 point = origin + hit.t * direction;                 // intersection point
+    const Vec3 normal = Normalized(point - hit.sphere->center);    // sphere normal there
+    const Vec3 view = -direction;                                  // back toward the eye
+    return hit.sphere->color * ComputeLighting(point, normal, view, hit.sphere->specular);
 }
 
 double RayTracer::ComputeLighting(Vec3 point, Vec3 normal, Vec3 view, double specular) const {
     assert(std::abs(Length(normal) - 1.0) < 1e-9 && "normal must be unit length");
 
-    // One point or directional light arriving along `to_light`. As in the book, the
-    // highlight is not gated on <N, L> > 0: only the diffuse term checks that the light
-    // is in front of the surface.
-    const auto shade = [&](double light_intensity, Vec3 to_light) {
+    // One point or directional light arriving along `to_light`, which reaches the light
+    // itself at t = t_max (1 for a point light, never for a directional one). Any sphere
+    // on that stretch of the ray puts the point in shadow and the light is skipped
+    // entirely. As in the book, the highlight is not gated on <N, L> > 0: only the
+    // diffuse term checks that the light is in front of the surface.
+    const auto shade = [&](double light_intensity, Vec3 to_light, double t_max) {
+        const Hit blocker = ClosestIntersection(point, to_light, kShadowEpsilon, t_max);
+        if (blocker.sphere != nullptr) {
+            return 0.0;
+        }
         double i = Diffuse(light_intensity, normal, to_light);
         if (specular != kMatte) {
             i += Specular(light_intensity, normal, to_light, view, specular);
@@ -121,10 +130,10 @@ double RayTracer::ComputeLighting(Vec3 point, Vec3 normal, Vec3 view, double spe
         std::visit(Overloaded{
                        [&](const AmbientLight& l) { intensity += l.intensity; },
                        [&](const PointLight& l) {
-                           intensity += shade(l.intensity, l.position - point);
+                           intensity += shade(l.intensity, l.position - point, 1.0);
                        },
                        [&](const DirectionalLight& l) {
-                           intensity += shade(l.intensity, l.direction);
+                           intensity += shade(l.intensity, l.direction, kInfinity);
                        },
                    },
                    light);

@@ -8,7 +8,7 @@ code can be read as a worked version of the book. No graphics libraries are invo
 vector math, the pixel canvas and the image writers are all part of the project.
 
 It currently ray-traces spheres with ambient, point and directional lights, diffuse
-shading and specular highlights, and writes the result to a PNG or PPM file.
+shading, specular highlights and shadows, and writes the result to a PNG or PPM file.
 `docs/SPEC.md` describes the design, the architecture and the roadmap.
 
 ## Requirements
@@ -37,9 +37,10 @@ Use `--preset release` for an optimized build in `build/release`. Then:
 ```
 
 Scenes: `specular` (three shiny spheres on a shiny yellow floor with ambient, point and
-directional lights; the lights show up as highlights), `diffuse` (the same scene with
-matte surfaces), `flat` (the spheres under full ambient light), `axes` (the coordinate
-axes and corner dots, no ray tracing). A larger `--distance` narrows the field of view.
+directional lights; the lights show up as highlights and the spheres cast shadows),
+`diffuse` (the same scene with matte surfaces), `flat` (the spheres under full ambient
+light, so no shading and no shadows), `axes` (the coordinate axes and corner dots, no ray
+tracing). A larger `--distance` narrows the field of view.
 
 ## Layout
 
@@ -51,7 +52,8 @@ include/cgfs/   public headers, one per module
     image_io.h    PPM writer and reader, PNG writer
     viewport.h    Viewport: CanvasToViewport(x, y), field of view
     scene.h       Sphere (with its specular exponent), the lights (a std::variant) and Scene
-    raytracer.h   IntersectRaySphere and RayTracer: Render, TraceRay, ComputeLighting
+    raytracer.h   IntersectRaySphere and RayTracer: Render, ClosestIntersection, TraceRay,
+                  ComputeLighting (with shadows)
     demo_scenes.h the scenes shared by render_demo and the golden tests
 src/            implementations
 apps/           render_demo
