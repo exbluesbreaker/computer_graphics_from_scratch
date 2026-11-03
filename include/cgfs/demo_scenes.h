@@ -19,4 +19,9 @@ namespace cgfs::demo {
 /// the floor. The book's final ray-traced scene and the project's reference image.
 [[nodiscard]] Scene ReflectiveScene();
 
+/// A chrome ball on a dark polished floor under a night sky, ringed by six colored
+/// spheres of different finishes, with three marbles close to the camera. Two point
+/// lights throw crossing shadows and highlights. Nothing new, only more of it.
+[[nodiscard]] Scene MirrorBallScene();
+
 }  // namespace cgfs::demo

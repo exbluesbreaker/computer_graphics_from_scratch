@@ -497,14 +497,16 @@ Unit tests:
 
 Golden-image tests:
 
-- `tests/golden/` holds 320 x 180 renders of the four demo scenes (flat ambient, the
+- `tests/golden/` holds 320 x 180 renders of the five demo scenes (flat ambient, the
   diffuse scene with the yellow floor sphere, the specular scene with the same geometry
-  and lights but shiny surfaces, and the reflective scene with the same again plus a
-  reflectivity per sphere), made with the aspect-matched viewport and stored as binary
-  PPM. They are the reference output of the renderer and are committed. The diffuse,
-  specular and reflective references show the shadows the spheres cast on the floor and
-  on each other; the flat reference has no shadows because ambient light is never
-  blocked; only the reflective reference shows reflections.
+  and lights but shiny surfaces, the reflective scene with the same again plus a
+  reflectivity per sphere, and the mirror ball scene: fourteen spheres of mixed finishes
+  under two point lights, which exercises every feature at once), made with the
+  aspect-matched viewport and stored as binary PPM. They are the reference output of the
+  renderer and are committed. The diffuse, specular, reflective and mirror ball
+  references show the shadows the spheres cast on the floor and on each other; the flat
+  reference has no shadows because ambient light is never blocked; only the reflective
+  and mirror ball references show reflections.
 - `golden_test.cpp` renders the same scenes and compares every channel of every pixel
   with the reference image. The test passes when no channel differs by more than 1. The
   tolerance absorbs floating-point differences between compilers and standard
@@ -512,7 +514,7 @@ Golden-image tests:
 - The scenes are defined once, in `demo_scenes`, shared by `render_demo` and the
   golden test, so the app and the test cannot drift apart.
 - The references are regenerated only when rendering behaviour changes on purpose, with
-  `render_demo --scene <flat|diffuse|specular|reflective> --width 320 --height 180 --output tests/golden/...`
+  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball> --width 320 --height 180 --output tests/golden/...`
   from a Release build, and the pictures are reviewed before they are committed. The
   `flat` reference doubles as a regression test: neither the specular nor the shadow code
   path may change the output of an ambient-only scene, `diffuse` pins the shadows of
@@ -524,11 +526,15 @@ Golden-image tests:
 `render_demo` renders one of the demo pictures to a file:
 
 ```
-render_demo [--scene reflective|specular|diffuse|flat|axes] [--width N] [--height N] [--distance D] [--output PATH]
+render_demo [--scene reflective|specular|diffuse|flat|mirrorball|axes] [--width N] [--height N] [--distance D] [--output PATH]
 ```
 
-Defaults: `reflective`, 1920 x 1080, distance 1, `render.png`. The `axes` scene draws the
-coordinate axes and corner dots; it exercises the canvas without ray tracing. The
+Defaults: `reflective`, 1920 x 1080, distance 1, `render.png`. The `mirrorball` scene is
+the project's own composition, built from the same features as the book's scene: a
+chrome ball ringed by six colored spheres of different finishes on a dark polished floor,
+marbles in front, spheres floating above, two point lights for crossing shadows and a
+dusk-blue sky. The `axes` scene draws the coordinate axes and corner dots; it exercises
+the canvas without ray tracing. The
 viewport width always matches the canvas aspect ratio. The output format follows the
 extension. The program prints the render time in milliseconds and exits non-zero with a
 message on bad arguments or I/O failure. Argument parsing is hand-written; no library is
@@ -629,7 +635,9 @@ updated 2026-11-03 with shadows and reflections.
   diffuse and specular figures were 80 ms and 140 ms: the shadow rays cost little, and a
   shadowed light skips its `pow`, which is why the specular scene got faster. The three
   bounces of the reflective scene roughly double the specular time rather than
-  quadrupling it, because most bounces leave the scene after one or two hits.
+  quadrupling it, because most bounces leave the scene after one or two hits. The mirror
+  ball scene (14 spheres, 4 lights) takes about 360 ms at 1920 x 1080 and 10 ms at
+  320 x 180.
 - Shadow and reflected rays start at `kSurfaceEpsilon = 0.001` along their direction,
   the book's value. A shadow ray toward a point light `|L|` units away is offset by
   `0.001 |L|` in world units, so the offset scales with the distance to the light; a

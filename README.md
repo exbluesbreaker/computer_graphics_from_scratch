@@ -41,8 +41,10 @@ Scenes: `reflective` (three shiny spheres on a shiny yellow floor with ambient, 
 directional lights; the lights show up as highlights, the spheres cast shadows and mirror
 each other and the floor), `specular` (the same scene without reflections), `diffuse`
 (the same scene with matte surfaces), `flat` (the spheres under full ambient light, so no
-shading and no shadows), `axes` (the coordinate axes and corner dots, no ray tracing). A
-larger `--distance` narrows the field of view.
+shading and no shadows), `mirrorball` (a chrome ball on a dark polished floor under a
+dusk sky, ringed by colored spheres of different finishes, with marbles in front and
+spheres floating above; two point lights throw crossing shadows), `axes` (the coordinate
+axes and corner dots, no ray tracing). A larger `--distance` narrows the field of view.
 
 ## Layout
 
@@ -81,4 +83,5 @@ committing:
 ./build/release/apps/render_demo --scene diffuse --width 320 --height 180 --output tests/golden/diffuse_320x180.ppm
 ./build/release/apps/render_demo --scene specular --width 320 --height 180 --output tests/golden/specular_320x180.ppm
 ./build/release/apps/render_demo --scene reflective --width 320 --height 180 --output tests/golden/reflective_320x180.ppm
+./build/release/apps/render_demo --scene mirrorball --width 320 --height 180 --output tests/golden/mirrorball_320x180.ppm
 ```

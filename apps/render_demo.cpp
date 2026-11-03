@@ -25,13 +25,14 @@ struct Options {
 };
 
 constexpr std::string_view kUsage =
-    "usage: render_demo [--scene reflective|specular|diffuse|flat|axes] [--width N]\n"
-    "                   [--height N] [--distance D] [--output PATH]\n"
+    "usage: render_demo [--scene reflective|specular|diffuse|flat|mirrorball|axes]\n"
+    "                   [--width N] [--height N] [--distance D] [--output PATH]\n"
     "\n"
     "  --scene     reflective: shiny spheres on a floor that mirror each other and the floor\n"
     "              specular:   the same spheres and lights without reflections\n"
     "              diffuse:    the same scene with every surface matte\n"
     "              flat:       the spheres under full ambient light only\n"
+    "              mirrorball: a chrome ball ringed by colored spheres under a night sky\n"
     "              axes:       the coordinate axes and corner dots (no ray tracing)\n"
     "              (default: reflective)\n"
     "  --width     canvas width in pixels (default: 1920)\n"
@@ -143,11 +144,14 @@ void Draw(const Options& options, cgfs::Canvas& canvas) {
         RenderScene(cgfs::demo::DiffuseScene(), options.distance, canvas);
     } else if (options.scene == "flat") {
         RenderScene(cgfs::demo::FlatScene(), options.distance, canvas);
+    } else if (options.scene == "mirrorball") {
+        RenderScene(cgfs::demo::MirrorBallScene(), options.distance, canvas);
     } else if (options.scene == "axes") {
         DrawAxes(canvas);
     } else {
         throw std::runtime_error("unknown scene '" + options.scene +
-                                 "' (expected reflective, specular, diffuse, flat or axes)");
+                                 "' (expected reflective, specular, diffuse, flat, mirrorball "
+                                 "or axes)");
     }
 }
 
