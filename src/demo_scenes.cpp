@@ -3,7 +3,9 @@
 #include <cgfs/rasterizer.h>
 
 #include <cmath>
+#include <cstddef>
 #include <numbers>
+#include <vector>
 
 // These scenes are shared by render_demo and the golden-image tests. Changing them
 // changes the reference images in tests/golden/.
@@ -46,6 +48,26 @@ Color Wheel(double turn) {
 
 /// The color `t` of the way from `from` to `to`, for t in [0, 1].
 Color Mix(Color from, Color to, double t) { return from * (1.0 - t) + to * t; }
+
+/// `per_side` points along each edge of the rectangle |x| <= half_x, |y| <= half_y,
+/// clockwise from the top-left corner: 4 * per_side points, each corner included once.
+std::vector<Point> AroundRectangle(int half_x, int half_y, int per_side) {
+    std::vector<Point> points;
+    points.reserve(static_cast<std::size_t>(4 * per_side));
+    for (int k = 0; k < per_side; ++k) {
+        points.push_back({-half_x + 2 * half_x * k / per_side, half_y});  // top, left to right
+    }
+    for (int k = 0; k < per_side; ++k) {
+        points.push_back({half_x, half_y - 2 * half_y * k / per_side});  // right, top to bottom
+    }
+    for (int k = 0; k < per_side; ++k) {
+        points.push_back({half_x - 2 * half_x * k / per_side, -half_y});  // bottom, right to left
+    }
+    for (int k = 0; k < per_side; ++k) {
+        points.push_back({-half_x, -half_y + 2 * half_y * k / per_side});  // left, bottom to top
+    }
+    return points;
+}
 
 }  // namespace
 
@@ -249,6 +271,71 @@ void DrawLinesScene(Canvas& canvas) {
             DrawLine(canvas, {0, 0}, around[side],
                      Wheel(static_cast<double>(index) / kBurstLines));
         }
+    }
+}
+
+void DrawTrianglesScene(Canvas& canvas) {
+    constexpr Color kBackground{18.0, 20.0, 28.0};
+
+    canvas.Clear(kBackground);
+
+    const int left = -canvas.width() / 2;
+    const int right = canvas.width() / 2 - 1;
+    const int bottom = -canvas.height() / 2;
+    const int top = canvas.height() / 2 - 1;
+    const int reach_x = canvas.width() * 2 / 5;
+    const int reach_y = canvas.height() * 2 / 5;
+
+    // A big triangle in every corner, drawn the way the book's demo draws its one
+    // triangle: filled, then outlined in a brighter shade of the same color. Between
+    // them they have a flat top, a vertical edge, a flat bottom and a vertex beyond the
+    // canvas edge, which the canvas clips.
+    struct OutlinedTriangle {
+        Point a;
+        Point b;
+        Point c;
+        Color fill;
+        Color outline;
+    };
+    const OutlinedTriangle corners[] = {
+        {{left, top},
+         {left + reach_x, top},
+         {left + reach_x / 3, top - reach_y},
+         {70.0, 60.0, 110.0},
+         {170.0, 150.0, 230.0}},  // top-left: flat top
+        {{right, top},
+         {right, top - reach_y},
+         {right - reach_x, top - reach_y / 4},
+         {50.0, 90.0, 90.0},
+         {120.0, 210.0, 200.0}},  // top-right: vertical edge
+        {{right, bottom},
+         {right - reach_x, bottom},
+         {right - reach_x / 4, bottom + reach_y},
+         {90.0, 90.0, 50.0},
+         {220.0, 220.0, 130.0}},  // bottom-right: flat bottom
+        {{left - reach_x / 5, bottom + reach_y},
+         {left + reach_x, bottom + reach_y / 3},
+         {left, bottom},
+         {110.0, 70.0, 60.0},
+         {240.0, 160.0, 120.0}},  // bottom-left: one vertex off the canvas
+    };
+    for (const OutlinedTriangle& t : corners) {
+        DrawFilledTriangle(canvas, t.a, t.b, t.c, t.fill);
+        DrawWireframeTriangle(canvas, t.a, t.b, t.c, t.outline);
+    }
+
+    // A color wheel: wedges from the origin to consecutive points around a rectangle,
+    // once around the hue wheel. Neighbouring wedges share an edge, which both of them
+    // interpolate from the same two endpoints, so they tile without gaps; the wedge drawn
+    // later owns the shared pixels.
+    constexpr int kWedgesPerSide = 6;
+    const std::vector<Point> rim =
+        AroundRectangle(canvas.width() * 3 / 10, canvas.height() * 3 / 10, kWedgesPerSide);
+    const int wedges = static_cast<int>(rim.size());
+    for (int k = 0; k < wedges; ++k) {
+        const Point a = rim[static_cast<std::size_t>(k)];
+        const Point b = rim[static_cast<std::size_t>((k + 1) % wedges)];
+        DrawFilledTriangle(canvas, {0, 0}, a, b, Wheel(static_cast<double>(k) / wedges));
     }
 }
 

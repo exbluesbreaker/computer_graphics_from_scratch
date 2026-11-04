@@ -102,3 +102,7 @@ TEST_CASE("mirror ball scene matches the reference render", "[golden]") {
 TEST_CASE("lines scene matches the reference drawing", "[golden]") {
     CheckDrawingMatchesGolden(cgfs::demo::DrawLinesScene, "lines_320x180.ppm");
 }
+
+TEST_CASE("triangles scene matches the reference drawing", "[golden]") {
+    CheckDrawingMatchesGolden(cgfs::demo::DrawTrianglesScene, "triangles_320x180.ppm");
+}

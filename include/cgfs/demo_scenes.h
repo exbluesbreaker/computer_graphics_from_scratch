@@ -36,4 +36,12 @@ namespace cgfs::demo {
 /// arithmetic only, so the picture is identical on every platform.
 void DrawLinesScene(Canvas& canvas);
 
+/// The rasterizer's second picture, made of filled triangles: a big triangle in every
+/// corner, each filled and then outlined the way the book's demo does it (a flat top, a
+/// flat bottom, a vertical edge and a vertex outside the canvas among them), and in the
+/// middle a color wheel of 24 wedges between the origin and the rim of a rectangle,
+/// which share their edges and tile without gaps. Clears the canvas to a dark background
+/// first; integer geometry only, like DrawLinesScene.
+void DrawTrianglesScene(Canvas& canvas);
+
 }  // namespace cgfs::demo
