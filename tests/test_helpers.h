@@ -3,6 +3,7 @@
 // Teaches Catch2 how to print the project's value types in assertion messages.
 
 #include <cgfs/color.h>
+#include <cgfs/rasterizer.h>
 #include <cgfs/vec3.h>
 
 #include <catch2/catch_tostring.hpp>
@@ -31,6 +32,13 @@ struct StringMaker<cgfs::Rgb8> {
     static std::string convert(const cgfs::Rgb8& c) {
         return "Rgb8(" + std::to_string(c.r) + ", " + std::to_string(c.g) + ", " +
                std::to_string(c.b) + ")";
+    }
+};
+
+template <>
+struct StringMaker<cgfs::Point> {
+    static std::string convert(const cgfs::Point& p) {
+        return "(" + std::to_string(p.x) + ", " + std::to_string(p.y) + ")";
     }
 };
 

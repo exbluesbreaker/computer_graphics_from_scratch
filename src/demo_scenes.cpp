@@ -1,5 +1,7 @@
 #include <cgfs/demo_scenes.h>
 
+#include <cgfs/rasterizer.h>
+
 #include <cmath>
 #include <numbers>
 
@@ -17,6 +19,33 @@ std::vector<Sphere> ThreeSpheres() {
         {.center = {-2.0, 0.0, 4.0}, .radius = 1.0, .color = colors::kGreen},
     };
 }
+
+/// A fully saturated color `turn` of the way around the color wheel: red at 0, yellow at
+/// 1/6, green at 1/3, cyan at 1/2, blue at 2/3, magenta at 5/6 and back to red at 1.
+/// Precondition: 0 <= turn < 1. Plain arithmetic, no trigonometry.
+Color Wheel(double turn) {
+    const double position = 6.0 * turn;  // which of the six sectors, and how far into it
+    const int sector = static_cast<int>(position);
+    const double rising = 255.0 * (position - sector);
+    const double falling = 255.0 - rising;
+    switch (sector) {
+        case 0:
+            return {255.0, rising, 0.0};
+        case 1:
+            return {falling, 255.0, 0.0};
+        case 2:
+            return {0.0, 255.0, rising};
+        case 3:
+            return {0.0, falling, 255.0};
+        case 4:
+            return {rising, 0.0, 255.0};
+        default:
+            return {255.0, 0.0, falling};
+    }
+}
+
+/// The color `t` of the way from `from` to `to`, for t in [0, 1].
+Color Mix(Color from, Color to, double t) { return from * (1.0 - t) + to * t; }
 
 }  // namespace
 
@@ -154,6 +183,73 @@ Scene MirrorBallScene() {
                              .specular = 1000.0,
                              .reflective = 0.5});
     return scene;
+}
+
+void DrawLinesScene(Canvas& canvas) {
+    constexpr Color kBackground{18.0, 20.0, 28.0};
+    constexpr Color kAxis{58.0, 62.0, 78.0};
+    constexpr Color kEnvelopeStart{40.0, 90.0, 150.0};
+    constexpr Color kEnvelopeEnd{150.0, 215.0, 255.0};
+
+    canvas.Clear(kBackground);
+
+    // The outermost pixels of the canvas (see Canvas for the coordinate range).
+    const int left = -canvas.width() / 2;
+    const int right = canvas.width() / 2 - 1;
+    const int bottom = -canvas.height() / 2;
+    const int top = canvas.height() / 2 - 1;
+
+    // Axes through the origin: a horizontal and a vertical line, the two cases in which
+    // Interpolate returns a constant.
+    DrawLine(canvas, {left, 0}, {right, 0}, kAxis);
+    DrawLine(canvas, {0, bottom}, {0, top}, kAxis);
+
+    // String art in every corner. Line k joins the point k steps along the horizontal
+    // edge to the point n - k steps along the vertical edge; none of the lines is curved,
+    // yet together they outline a parabola. The lines reach 2/5 of the way along each
+    // edge, so the envelopes of neighbouring corners do not meet.
+    constexpr int kEnvelopeLines = 16;
+    const int reach_x = canvas.width() * 2 / 5;
+    const int reach_y = canvas.height() * 2 / 5;
+    const Point corners[] = {{left, top}, {right, top}, {right, bottom}, {left, bottom}};
+    for (const Point corner : corners) {
+        const int toward_middle_x = corner.x < 0 ? 1 : -1;
+        const int toward_middle_y = corner.y < 0 ? 1 : -1;
+        for (int k = 1; k < kEnvelopeLines; ++k) {
+            const Point on_horizontal_edge{
+                corner.x + toward_middle_x * (reach_x * k / kEnvelopeLines), corner.y};
+            const Point on_vertical_edge{
+                corner.x,
+                corner.y + toward_middle_y * (reach_y * (kEnvelopeLines - k) / kEnvelopeLines)};
+            const double t = static_cast<double>(k) / kEnvelopeLines;
+            DrawLine(canvas, on_horizontal_edge, on_vertical_edge,
+                     Mix(kEnvelopeStart, kEnvelopeEnd, t));
+        }
+    }
+
+    // A sunburst: lines from the origin to points evenly spaced around a rectangle, going
+    // clockwise from the top-left corner and once around the color wheel. Each quadrant
+    // of the rectangle produces a different mix of the horizontal-ish and vertical-ish
+    // branches of DrawLine, with and without swapped endpoints.
+    constexpr int kBurstPerSide = 12;
+    constexpr int kBurstLines = 4 * kBurstPerSide;
+    const int half_x = canvas.width() * 3 / 10;
+    const int half_y = canvas.height() * 3 / 10;
+    for (int k = 0; k < kBurstPerSide; ++k) {
+        const int along_x = 2 * half_x * k / kBurstPerSide;  // 0 .. just short of 2 half_x
+        const int along_y = 2 * half_y * k / kBurstPerSide;
+        const Point around[] = {
+            {-half_x + along_x, half_y},   // top edge, left to right
+            {half_x, half_y - along_y},    // right edge, top to bottom
+            {half_x - along_x, -half_y},   // bottom edge, right to left
+            {-half_x, -half_y + along_y},  // left edge, bottom to top
+        };
+        for (int side = 0; side < 4; ++side) {
+            const int index = side * kBurstPerSide + k;
+            DrawLine(canvas, {0, 0}, around[side],
+                     Wheel(static_cast<double>(index) / kBurstLines));
+        }
+    }
 }
 
 }  // namespace cgfs::demo

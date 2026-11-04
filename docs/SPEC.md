@@ -13,8 +13,8 @@ alongside the book as a worked example.
 This document is the design reference for the renderer: what it renders and with which
 formulas, how the code is structured, how it is built and tested, and how it is expected
 to grow. The current feature set is a ray tracer for spheres with ambient, point and
-directional lights, diffuse shading, specular highlights, shadows and reflections;
-section 13 lists what comes next.
+directional lights, diffuse shading, specular highlights, shadows and reflections, and
+the first step of the rasterizer, line drawing; section 13 lists what comes next.
 
 ## 2. Goals and non-goals
 
@@ -22,8 +22,8 @@ Goals:
 
 - G1. Behaviour pinned by tests: unit tests for every module and golden-image tests that
   fix the renderer's output pixel for pixel.
-- G2. A structure that accommodates the planned next steps (a movable camera, and later
-  a rasterizer) without rewrites.
+- G2. A structure that accommodates the planned next steps (a movable camera for the
+  ray tracer, the rest of the rasterizer) without rewrites.
 - G3. CMake as the only build system. A fresh clone builds and tests with three
   commands on Linux with GCC or Clang.
 - G4. No required third-party runtime dependencies. "From scratch" is the point of the
@@ -150,7 +150,35 @@ As in the book, the specular term is not gated on `<N, L> > 0`; only the diffuse
 `N` is unit length by construction; the division by `|N|` is kept so the code reads like
 the formula.
 
-### 3.6 Numeric conventions
+### 3.6 Rasterizer: lines
+
+The rasterizer draws 2D primitives straight into the canvas with `PutPixel`; nothing of
+the ray tracer is involved. A `Point` is a canvas position in the centered integer
+coordinates of 3.1.
+
+- `Interpolate(i0, d0, i1, d1)` returns the values of a dependent variable `d` at the
+  integers `i0, i0 + 1, ..., i1`, given `d = d0` at `i0` and `d = d1` at `i1`: that is
+  `i1 - i0 + 1` values, with `values[i - i0]` the value at `i`. The slope is
+  `a = (d1 - d0) / (i1 - i0)` and the values are the running sum
+  `d0, d0 + a, d0 + 2a, ...`, computed by repeated addition as in the book's listing.
+  When `i0 == i1` the result is `{d0}`. Precondition: `i0 <= i1`; with `i0 > i1` the
+  result is empty.
+- `DrawLine(P0, P1, color)` draws the segment from `P0` to `P1`, both ends included.
+  When `|x1 - x0| > |y1 - y0|` the line is horizontal-ish: the endpoints are swapped if
+  needed so that `x0 < x1`, `ys = Interpolate(x0, y0, x1, y1)`, and for every `x` in
+  `x0..x1` the pixel `(x, ys[x - x0])` is set. Otherwise the line is vertical-ish (exact
+  diagonals included) and the roles of x and y are exchanged: `y0 < y1` after the swap,
+  `xs = Interpolate(y0, x0, y1, x1)`, and `(xs[y - y0], y)` is set for every `y`. Every
+  column (row) of the line's span gets exactly one pixel, consecutive pixels are at most
+  one step apart in the other coordinate, and both endpoint orders give the same pixels.
+- The interpolated coordinate is a `double`. The pixel it selects is found by truncation
+  toward zero (`static_cast<int>`), the conversion the book's code performs and the same
+  rule as for colors in 3.1. Consequence: `-0.5` and `0.5` both select pixel 0, so the
+  staircase of a line mirrors at the axes (section 14, decision 8).
+- There is no clipping. Pixels outside the canvas are dropped by `PutPixel`, so a line
+  may run off the canvas; it costs time in proportion to its full length.
+
+### 3.7 Numeric conventions
 
 - All geometry and color math uses `double`. Switching to `float` would be a deliberate
   decision rather than a detail, because it changes the golden images.
@@ -169,6 +197,7 @@ README.md                 build instructions and project overview
 docs/SPEC.md              this document
 include/cgfs/             public headers, one per module
     vec3.h  color.h  canvas.h  image_io.h  viewport.h  scene.h  raytracer.h
+    rasterizer.h          the rasterizer: Point, Interpolate, DrawLine
     demo_scenes.h         the demo scenes shared by render_demo and the golden tests
 src/                      implementation files matching the headers
 apps/
@@ -177,7 +206,7 @@ tests/
     CMakeLists.txt
     test_helpers.h        Catch2 printers for Vec3/Color/Rgb8, a temp-file helper
     vec3_test.cpp  color_test.cpp  canvas_test.cpp  image_io_test.cpp
-    viewport_test.cpp  raytracer_test.cpp  golden_test.cpp
+    viewport_test.cpp  raytracer_test.cpp  rasterizer_test.cpp  golden_test.cpp
     golden/               reference renders of the demo scenes (PPM)
 third_party/
     CMakeLists.txt
@@ -194,9 +223,11 @@ Everything lives in namespace `cgfs`. Dependencies point only to the left:
 
 ```
 vec3, color  <-  canvas  <-  viewport  <-  raytracer
-                  ^                          ^
-              image_io                     scene
+                 ^    ^                      ^
+          image_io    rasterizer           scene
 ```
+
+`demo_scenes` sits on top of `scene` and `rasterizer`.
 
 - `vec3`, `color`: value types and free functions, header-only, `constexpr` where possible.
 - `canvas`: the pixel buffer and centered coordinate system.
@@ -204,12 +235,16 @@ vec3, color  <-  canvas  <-  viewport  <-  raytracer
 - `viewport`: pixel to viewport-point mapping and field of view.
 - `scene`: plain data: spheres, lights, background color.
 - `raytracer`: intersection, lighting, the render loop.
+- `rasterizer`: 2D drawing into the canvas: `Point`, `Interpolate`, `DrawLine`. Lines so
+  far; triangles and the 3D pipeline follow (section 13).
 - `demo_scenes`: the demo scenes as functions, so the app and the golden tests render
-  exactly the same thing.
+  exactly the same thing. The ray-traced ones return a `Scene`; the rasterized ones draw
+  into a canvas.
 
 The canvas knows nothing about 3D. The viewport knows nothing about spheres. The tracer
-writes to the canvas only through `PutPixel`. A future rasterizer reuses `canvas`,
-`vec3`, `color` and `image_io` unchanged.
+and the rasterizer write to the canvas only through `PutPixel`, and neither knows the
+other exists: the rasterizer reuses `canvas`, `color` and `image_io` unchanged and will
+take `vec3` when it reaches 3D.
 
 ### 4.3 Targets
 
@@ -378,6 +413,20 @@ The scene and viewport must outlive the tracer. `Hit::sphere` points into the sc
 sphere vector and is valid as long as that vector is not modified. `ClosestIntersection`,
 `TraceRay` and `ComputeLighting` are public so the tests can exercise them directly.
 
+### 5.8 `rasterizer.h`
+
+```cpp
+struct Point { int x = 0, y = 0; bool operator==(const Point&) const = default; };  // canvas coordinates
+
+std::vector<double> Interpolate(int i0, double d0, int i1, double d1);
+// i1 - i0 + 1 values of d at i0..i1; {d0} when i0 == i1; precondition i0 <= i1 (section 3.6)
+void DrawLine(Canvas& canvas, Point p0, Point p1, Color color);
+```
+
+Free functions that take the canvas as their first parameter, the shape of the book's
+listings minus their global canvas. They are the primitives; a class with state (a depth
+buffer, a camera) comes when the pipeline needs one, and the primitives stay as they are.
+
 ## 6. Build system
 
 CMake is the only supported build system.
@@ -494,10 +543,24 @@ Unit tests:
     bounces), which also proves a bounce does not hit the sphere it leaves.
   - `Render`: the center pixel of the two-mirror scene carries the depth-3 color, so
     camera rays bounce `kReflectionDepth = 3` times.
+- `rasterizer`:
+  - `Interpolate`: a single point gives `{d0}`; one value per integer step with both
+    ends included; fractional slopes; a decreasing `d`; equal end values give a
+    constant; a negative independent variable; with a slope of 1/3 every value is within
+    `1e-12` of `d0 + k * a`.
+  - `DrawLine`: horizontal, vertical, diagonal and zero-length lines light exactly the
+    expected pixels; a horizontal-ish line of slope 1/2 and a vertical-ish one of
+    slope 2 light the pixels the truncation rule predicts, and their mirror images
+    through the origin pin truncation toward zero rather than flooring; both endpoint
+    orders give identical canvases for seven lines covering both branches and both swap
+    cases; a horizontal-ish line has exactly one pixel in every column and a vertical-ish
+    one in every row, with no gaps; lines that leave the canvas or lie entirely outside
+    it draw what fits and nothing else; pixels take the line's color after the canvas's
+    clamping.
 
 Golden-image tests:
 
-- `tests/golden/` holds 320 x 180 renders of the five demo scenes (flat ambient, the
+- `tests/golden/` holds 320 x 180 renders of the five ray-traced demo scenes (flat ambient, the
   diffuse scene with the yellow floor sphere, the specular scene with the same geometry
   and lights but shiny surfaces, the reflective scene with the same again plus a
   reflectivity per sphere, and the mirror ball scene: fourteen spheres of mixed finishes
@@ -506,7 +569,10 @@ Golden-image tests:
   renderer and are committed. The diffuse, specular, reflective and mirror ball
   references show the shadows the spheres cast on the floor and on each other; the flat
   reference has no shadows because ambient light is never blocked; only the reflective
-  and mirror ball references show reflections.
+  and mirror ball references show reflections. `lines_320x180.ppm` is the rasterizer's
+  line demo (section 9): every pixel of it comes from `DrawLine`, and because the scene
+  computes its endpoints with integer arithmetic and its colors without any `libm` call,
+  the picture is reproducible bit for bit on every platform.
 - `golden_test.cpp` renders the same scenes and compares every channel of every pixel
   with the reference image. The test passes when no channel differs by more than 1. The
   tolerance absorbs floating-point differences between compilers and standard
@@ -514,7 +580,7 @@ Golden-image tests:
 - The scenes are defined once, in `demo_scenes`, shared by `render_demo` and the
   golden test, so the app and the test cannot drift apart.
 - The references are regenerated only when rendering behaviour changes on purpose, with
-  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball> --width 320 --height 180 --output tests/golden/...`
+  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines> --width 320 --height 180 --output tests/golden/...`
   from a Release build, and the pictures are reviewed before they are committed. The
   `flat` reference doubles as a regression test: neither the specular nor the shadow code
   path may change the output of an ambient-only scene, `diffuse` pins the shadows of
@@ -526,16 +592,21 @@ Golden-image tests:
 `render_demo` renders one of the demo pictures to a file:
 
 ```
-render_demo [--scene reflective|specular|diffuse|flat|mirrorball|axes] [--width N] [--height N] [--distance D] [--output PATH]
+render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|axes] [--width N] [--height N] [--distance D] [--output PATH]
 ```
 
 Defaults: `reflective`, 1920 x 1080, distance 1, `render.png`. The `mirrorball` scene is
 the project's own composition, built from the same features as the book's scene: a
 chrome ball ringed by six colored spheres of different finishes on a dark polished floor,
 marbles in front, spheres floating above, two point lights for crossing shadows and a
-dusk-blue sky. The `axes` scene draws the coordinate axes and corner dots; it exercises
-the canvas without ray tracing. The
-viewport width always matches the canvas aspect ratio. The output format follows the
+dusk-blue sky. The `lines` scene is the rasterizer's: `DrawLinesScene` clears the canvas
+to a dark background and draws a dim pair of axes, string-art envelopes in the four
+corners (lines whose ends slide along the two edges and together outline a parabola) and
+a sunburst of lines from the center to a rectangle around it, colored once around the
+hue wheel; 110 lines in all, every slope and both endpoint orders among them. The `axes`
+scene draws the coordinate axes and corner dots; it exercises the canvas without ray
+tracing. For the ray-traced scenes the viewport width always matches the canvas aspect
+ratio; `--distance` has no effect on the others. The output format follows the
 extension. The program prints the render time in milliseconds and exits non-zero with a
 message on bad arguments or I/O failure. Argument parsing is hand-written; no library is
 added for it.
@@ -563,7 +634,9 @@ added for it.
 - Constructor preconditions (canvas size, viewport dimensions and distance must be
   positive) throw `std::invalid_argument`.
 - File I/O failures throw `std::runtime_error` with the path in the message.
-- The render loop, intersection and lighting code never throw and never allocate.
+- The ray tracer's render loop, intersection and lighting code never throw and never
+  allocate. The rasterizer's `Interpolate` returns a `std::vector`, one allocation per
+  line, as in the book; `DrawLine` can only throw if that allocation fails.
 - Programming errors inside the library (a non-unit normal, a dimension mismatch that
   slipped past the constructor check) are `assert`ed in Debug builds.
 
@@ -575,6 +648,7 @@ Targets apply to Release builds on a single core. Debug builds have no targets.
 |-------------------------------------|-------------|--------------------------------------------------|
 | reflective demo (4 spheres, 3 lights, 3 bounces) | 1920 x 1080 | under 1 second; around 250 ms is the expectation |
 | reflective demo                                  | 320 x 180   | under 50 ms, so the golden test stays cheap      |
+| lines demo (110 lines)                           | 1920 x 1080 | under 10 ms; about 2 ms measured                 |
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
@@ -593,9 +667,12 @@ section 4 is meant to absorb these steps as additions:
   next to `vec3.h`; `Camera` struct in `scene.h`; `Render` transforms `D` before tracing.
 - Row-parallel rendering with `std::thread` or a parallel algorithm, with golden tests
   proving the output is unchanged.
-- Rasterizer: new modules `rasterizer.h` (lines, triangles, shaded triangles),
-  `model.h` (vertices, triangles, instances), projection, clipping, depth buffer,
-  shading and textures. It reuses `canvas`, `vec3`, `color` and `image_io` as they are.
+- Rasterizer, started with `rasterizer.h` (`Point`, `Interpolate`, `DrawLine`). Next,
+  in the book's order: wireframe and filled triangles, shaded triangles (`Interpolate`
+  of an intensity along the edges), then perspective projection of `Vec3` vertices into
+  `Point`s, `model.h` (vertices, triangles, instances), camera transforms, clipping, the
+  depth buffer, shading and textures. `Point` will grow a shading value `h` with a
+  default, which keeps the line code compiling.
 - Optional interactive window behind a `CGFS_ENABLE_WINDOW` option (SDL2 or similar),
   off by default so the dependency policy in section 7 holds for everyone else.
 
@@ -620,11 +697,17 @@ The judgment calls behind this design, so they are not relitigated by accident.
 6. Google-based clang-format with 4-space indentation and 100 columns; `PascalCase`
    methods to match the book.
 7. No window or live preview. Save a file and open it.
+8. Pixel coordinates are truncated toward zero, like colors (decision 1), because that
+   is what the book's code does: an interpolated `-0.5` and `0.5` both select pixel 0,
+   so the staircase of a line mirrors at the axes. Rounding to nearest would sample at
+   pixel centers and flooring would make the staircase translation-invariant; either
+   would change every rasterized golden image, so switching is a deliberate decision,
+   not a tidy-up.
 
 ## 15. Implementation notes
 
-Measurements and known behaviours of the implementation, recorded 2026-11-02 and
-updated 2026-11-03 with shadows and reflections.
+Measurements and known behaviours of the implementation, recorded 2026-11-02, updated
+2026-11-03 with shadows and reflections and 2026-11-04 with the rasterizer's lines.
 
 - Catch2 is pinned to v3.16.1.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
@@ -651,6 +734,16 @@ updated 2026-11-03 with shadows and reflections.
 - Odd canvas sizes: `Render` leaves the last column and row untouched (the loops cover
   `-width/2 <= x < width/2`, `-height/2 <= y < height/2`), and the pixel mapping in 3.1
   puts y = 0 on the top row for odd heights. Both are tested so a change is deliberate.
+- `Interpolate` accumulates the slope by repeated addition, as the book's listing does,
+  so a value that should be an exact integer can come out a few ulps below it and
+  truncate one pixel short: `Interpolate(0, 0, 10, 1)` ends at `0.9999999999999999`,
+  and the line from `(0, 0)` to `(10, 1)` therefore ends at `(10, 0)`. The book's own
+  demos behave the same way. Computing `d0 + k * a` instead of the running sum would hit
+  integer endpoints exactly for integer inputs; it is not adopted, to keep the listing,
+  and nothing in the lines demo is visibly affected. IEEE arithmetic makes the result the
+  same on every compiler, so the golden image does not depend on it.
+- The lines demo draws its 110 lines in about 2 ms at 1920 x 1080 and in well under a
+  millisecond at 320 x 180. Each line allocates one vector.
 - The `.clang-format` file is in place and clang-format 18 is now installed on the
   development machine, but the sources were formatted by hand to its rules and
   `clang-format --dry-run` still reports a handful of differences in older files. A

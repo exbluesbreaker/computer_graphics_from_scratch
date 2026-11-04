@@ -59,6 +59,7 @@ add_library(cgfs STATIC
     src/canvas.cpp
     src/demo_scenes.cpp
     src/image_io.cpp
+    src/rasterizer.cpp
     src/raytracer.cpp
     src/viewport.cpp)
 add_library(cgfs::cgfs ALIAS cgfs)

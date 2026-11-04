@@ -17,6 +17,7 @@ add_executable(cgfs_tests
     image_io_test.cpp
     viewport_test.cpp
     raytracer_test.cpp
+    rasterizer_test.cpp
     golden_test.cpp)
 target_link_libraries(cgfs_tests PRIVATE cgfs::cgfs Catch2::Catch2WithMain)
 target_compile_definitions(cgfs_tests PRIVATE CGFS_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden")
