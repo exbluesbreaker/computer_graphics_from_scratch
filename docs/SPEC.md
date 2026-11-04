@@ -172,9 +172,9 @@ coordinates of 3.1.
   `xs = Interpolate(y0, x0, y1, x1)`, and `(xs[y - y0], y)` is set for every `y`. Every
   column (row) of the line's span gets exactly one pixel, consecutive pixels are at most
   one step apart in the other coordinate, and both endpoint orders give the same pixels.
-- The interpolated coordinate is a `double`. The pixel it selects is found by truncation
-  toward zero (`static_cast<int>`), the conversion the book's code performs and the same
-  rule as for colors in 3.1. Consequence: `-0.5` and `0.5` both select pixel 0, so the
+- The interpolated coordinate is a `double`. The pixel it selects is found by `ToPixel`,
+  truncation toward zero (`static_cast<int>`), the conversion the book's code performs
+  and the same rule as for colors in 3.1. Consequence: `-0.5` and `0.5` both select pixel 0, so the
   staircase of a line mirrors at the axes (section 14, decision 8).
 - `DrawWireframeTriangle(P0, P1, P2, color)` draws the three edges with `DrawLine`.
 - `DrawFilledTriangle(P0, P1, P2, color)` fills the triangle, edges included. The
@@ -206,24 +206,33 @@ coordinates of 3.1.
 ### 4.1 Repository layout
 
 ```
-CMakeLists.txt            top-level project: library, apps, tests
+CMakeLists.txt            top-level project: library, demo pictures, apps, tests
 CMakePresets.json         dev / release configure, build and test presets
 .clang-format
+CLAUDE.md                 design principles and the folder-structure rules
 README.md                 build instructions and project overview
 docs/SPEC.md              this document
-include/cgfs/             public headers, one per module
-    vec3.h  color.h  canvas.h  image_io.h  viewport.h  scene.h  raytracer.h
-    rasterizer.h          the rasterizer: Point, Interpolate, DrawLine
-    demo_scenes.h         the demo scenes shared by render_demo and the golden tests
-src/                      implementation files matching the headers
+include/cgfs/             public headers: one folder per layer, one file per concept
+    math/vec3.h
+    image/color.h  canvas.h  image_io.h
+    camera/viewport.h
+    raytracer/scene.h  raytracer.h
+    rasterizer/point.h  interpolate.h  line.h  triangle.h
+    demo/raytracer_scenes.h  rasterizer_scenes.h
+                          the demo pictures shared by render_demo and the golden tests
+src/<layer>/              implementation files, mirroring include/cgfs/<layer>/
 apps/
-    render_demo.cpp       command-line renderer for the demo scenes
+    render_demo.cpp       command-line renderer for the demo pictures
 tests/
     CMakeLists.txt
-    test_helpers.h        Catch2 printers for Vec3/Color/Rgb8, a temp-file helper
-    vec3_test.cpp  color_test.cpp  canvas_test.cpp  image_io_test.cpp
-    viewport_test.cpp  raytracer_test.cpp  rasterizer_test.cpp  golden_test.cpp
-    golden/               reference renders of the demo scenes (PPM)
+    support/test_helpers.h      Catch2 printers for Vec3/Color/Rgb8/Point, a temp-file helper
+    math/vec3_test.cpp
+    image/color_test.cpp  canvas_test.cpp  image_io_test.cpp
+    camera/viewport_test.cpp
+    raytracer/raytracer_test.cpp
+    rasterizer/interpolate_test.cpp  line_test.cpp  triangle_test.cpp  pixel_helpers.h
+    demo/golden_test.cpp
+    demo/golden/          reference renders of the demo pictures (PPM)
 third_party/
     CMakeLists.txt
     stb/stb_image_write.h single-header PNG writer (public domain), vendored
@@ -233,44 +242,55 @@ third_party/
 `build/` is the out-of-source build directory and is git-ignored. In-source builds are
 rejected by the top-level `CMakeLists.txt`.
 
-### 4.2 Modules and dependency order
+### 4.2 Layers and dependency order
 
-Everything lives in namespace `cgfs`. Dependencies point only to the left:
+Everything lives in namespace `cgfs` (the demo pictures in `cgfs::demo`); the folders,
+not the namespaces, carry the structure. The layers, bottom to top, each depending only
+on the ones below it:
 
 ```
-vec3, color  <-  canvas  <-  viewport  <-  raytracer
-                 ^    ^                      ^
-          image_io    rasterizer           scene
+math         vec3                                  vector algebra
+image        color, canvas, image_io               colors, the pixel buffer, file formats
+camera       viewport                              how canvas pixels map into the world
+raytracer    scene, raytracer                      the ray tracing renderer
+rasterizer   point, interpolate, line, triangle    the rasterizing renderer
+demo         raytracer_scenes, rasterizer_scenes   the demo pictures
 ```
 
-`demo_scenes` sits on top of `scene` and `rasterizer`.
-
-- `vec3`, `color`: value types and free functions, header-only, `constexpr` where possible.
-- `canvas`: the pixel buffer and centered coordinate system.
-- `image_io`: PPM writer and reader, PNG writer. Used by `Canvas::Save` and the tests.
-- `viewport`: pixel to viewport-point mapping and field of view.
-- `scene`: plain data: spheres, lights, background color.
-- `raytracer`: intersection, lighting, the render loop.
-- `rasterizer`: 2D drawing into the canvas: `Point`, `Interpolate`, `DrawLine`. Lines so
-  far; triangles and the 3D pipeline follow (section 13).
-- `demo_scenes`: the demo scenes as functions, so the app and the golden tests render
-  exactly the same thing. The ray-traced ones return a `Scene`; the rasterized ones draw
-  into a canvas.
+- `math/vec3`: `Vec3` and its free functions, header-only, `constexpr` where possible.
+- `image/color`: `Color`, `Rgb8`, `ToRgb8`, header-only. `image/canvas`: the pixel buffer
+  and the centered coordinate system. `image/image_io`: PPM writer and reader, PNG
+  writer; used by `Canvas::Save` and the tests.
+- `camera/viewport`: pixel to viewport-point mapping and field of view. Used by the ray
+  tracer now and by the rasterizer's projection step later.
+- `raytracer/scene`: plain data: spheres, lights, background color.
+  `raytracer/raytracer`: intersection, lighting, the render loop.
+- `rasterizer/point`: `Point` and `ToPixel`, the one conversion from interpolated
+  coordinates to pixels. `rasterizer/interpolate`: `Interpolate`, the building block.
+  `rasterizer/line`: `DrawLine`. `rasterizer/triangle`: `DrawWireframeTriangle` and
+  `DrawFilledTriangle`; the shaded triangle joins it next (section 13).
+- `demo/raytracer_scenes`: the ray-traced demo scenes, each a function returning a
+  `Scene`. `demo/rasterizer_scenes`: the rasterized demo pictures, each a function that
+  draws into a canvas. Either way the app and the golden tests render exactly the same
+  thing.
 
 The canvas knows nothing about 3D. The viewport knows nothing about spheres. The tracer
 and the rasterizer write to the canvas only through `PutPixel`, and neither knows the
-other exists: the rasterizer reuses `canvas`, `color` and `image_io` unchanged and will
-take `vec3` when it reaches 3D.
+other exists. `CLAUDE.md` states the design principles and the rules that keep the tree
+in this shape: a new layer is a new folder under `include/cgfs/`, `src/` and `tests/`
+and a line in the table above.
 
 ### 4.3 Targets
 
 | Target            | Kind               | Contents                                                                          |
 |-------------------|--------------------|-----------------------------------------------------------------------------------|
-| `cgfs`            | static library     | everything under `src/` and `include/`                                            |
-| `cgfs::cgfs`      | alias              | the name apps and tests link against                                              |
+| `cgfs`            | static library     | the renderer: every layer under `src/` and `include/cgfs/` except `demo`          |
+| `cgfs::cgfs`      | alias              | the name the demo library links against                                           |
+| `cgfs_demo`       | static library     | `src/demo/`, the demo pictures; links `cgfs::cgfs` publicly                       |
+| `cgfs::demo`      | alias              | the name the app and the tests link against                                       |
 | `stb_image_write` | static library     | the stb implementation, built without the project's warning flags; system include |
 | `render_demo`     | executable         | `apps/render_demo.cpp`                                                            |
-| `cgfs_tests`      | executable (CTest) | all `tests/*_test.cpp`                                                            |
+| `cgfs_tests`      | executable (CTest) | all `tests/<layer>/*_test.cpp`                                                    |
 
 `BUILD_SHARED_LIBS` is respected but not used by default.
 
@@ -279,7 +299,7 @@ take `vec3` when it reaches 3D.
 Signatures below are the intended shape. Names, parameter order and semantics are
 normative; exact qualifiers and overload sets may be adjusted during implementation.
 
-### 5.1 `vec3.h`
+### 5.1 `math/vec3.h`
 
 ```cpp
 struct Vec3 {
@@ -296,7 +316,7 @@ constexpr Vec3   Reflect(Vec3 v, Vec3 normal);   // 2 N <N, v> - v; precondition
 
 No matrices yet. A `Mat4` arrives with the camera-transform step (section 13).
 
-### 5.2 `color.h`
+### 5.2 `image/color.h`
 
 ```cpp
 struct Color {
@@ -312,7 +332,7 @@ namespace colors { inline constexpr Color kWhite{255, 255, 255}, kBlack{0, 0, 0}
                                          kRed{255, 0, 0}, kGreen{0, 255, 0}, kBlue{0, 0, 255}; }
 ```
 
-### 5.3 `canvas.h`
+### 5.3 `image/canvas.h`
 
 ```cpp
 class Canvas {
@@ -336,7 +356,7 @@ public:
 };
 ```
 
-### 5.4 `image_io.h`
+### 5.4 `image/image_io.h`
 
 ```cpp
 struct Image { int width = 0, height = 0; std::vector<std::uint8_t> rgb; };
@@ -345,7 +365,7 @@ void  WritePng(const std::filesystem::path&, int width, int height, std::span<co
 Image ReadPpm(const std::filesystem::path&);   // binary P6 with maxval 255; used by golden tests
 ```
 
-### 5.5 `viewport.h`
+### 5.5 `camera/viewport.h`
 
 ```cpp
 class Viewport {
@@ -371,7 +391,7 @@ public:
 The viewport stores the canvas dimensions by value. It never holds a reference to a
 canvas, so there is no lifetime coupling between the two.
 
-### 5.6 `scene.h`
+### 5.6 `raytracer/scene.h`
 
 ```cpp
 inline constexpr double kMatte = -1.0;    // the specular value of a surface with no highlight
@@ -399,7 +419,7 @@ the light type. `Sphere` grew its `specular` and `reflective` fields one chapter
 time; aggregate initialization with designated initializers and default member values
 kept the existing scene code compiling each time.
 
-### 5.7 `raytracer.h`
+### 5.7 `raytracer/raytracer.h`
 
 ```cpp
 inline constexpr double kInfinity = std::numeric_limits<double>::infinity();
@@ -429,21 +449,29 @@ The scene and viewport must outlive the tracer. `Hit::sphere` points into the sc
 sphere vector and is valid as long as that vector is not modified. `ClosestIntersection`,
 `TraceRay` and `ComputeLighting` are public so the tests can exercise them directly.
 
-### 5.8 `rasterizer.h`
+### 5.8 `rasterizer/point.h`, `interpolate.h`, `line.h`, `triangle.h`
 
 ```cpp
+// point.h
 struct Point { int x = 0, y = 0; bool operator==(const Point&) const = default; };  // canvas coordinates
+constexpr int ToPixel(double coordinate);    // truncation toward zero (section 3.6)
 
+// interpolate.h
 std::vector<double> Interpolate(int i0, double d0, int i1, double d1);
 // i1 - i0 + 1 values of d at i0..i1; {d0} when i0 == i1; precondition i0 <= i1 (section 3.6)
+
+// line.h
 void DrawLine(Canvas& canvas, Point p0, Point p1, Color color);
+
+// triangle.h
 void DrawWireframeTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
 void DrawFilledTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
 ```
 
-Free functions that take the canvas as their first parameter, the shape of the book's
-listings minus their global canvas. They are the primitives; a class with state (a depth
-buffer, a camera) comes when the pipeline needs one, and the primitives stay as they are.
+One header per primitive. Free functions that take the canvas as their first parameter,
+the shape of the book's listings minus their global canvas. They are the primitives; a
+class with state (a depth buffer, a camera) comes when the pipeline needs one, and the
+primitives stay as they are.
 
 ## 6. Build system
 
@@ -508,7 +536,8 @@ all, so the renderer stays usable even if `stb` is dropped.
 
 ## 8. Testing
 
-All tests live in `tests/` and run through CTest. They must pass in both presets.
+All tests live in `tests/`, in a tree that mirrors `include/cgfs/` layer by layer, and
+run through CTest. They must pass in both presets.
 
 Unit tests:
 
@@ -587,7 +616,7 @@ Unit tests:
 
 Golden-image tests:
 
-- `tests/golden/` holds 320 x 180 renders of the five ray-traced demo scenes (flat ambient, the
+- `tests/demo/golden/` holds 320 x 180 renders of the five ray-traced demo scenes (flat ambient, the
   diffuse scene with the yellow floor sphere, the specular scene with the same geometry
   and lights but shiny surfaces, the reflective scene with the same again plus a
   reflectivity per sphere, and the mirror ball scene: fourteen spheres of mixed finishes
@@ -605,10 +634,10 @@ Golden-image tests:
   with the reference image. The test passes when no channel differs by more than 1. The
   tolerance absorbs floating-point differences between compilers and standard
   libraries; everything else is exact.
-- The scenes are defined once, in `demo_scenes`, shared by `render_demo` and the
+- The scenes are defined once, in the `demo` layer, shared by `render_demo` and the
   golden test, so the app and the test cannot drift apart.
 - The references are regenerated only when rendering behaviour changes on purpose, with
-  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles> --width 320 --height 180 --output tests/golden/...`
+  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles> --width 320 --height 180 --output tests/demo/golden/...`
   from a Release build, and the pictures are reviewed before they are committed. The
   `flat` reference doubles as a regression test: neither the specular nor the shadow code
   path may change the output of an ambient-only scene, `diffuse` pins the shadows of
@@ -641,7 +670,9 @@ the coordinate axes and corner dots; it exercises the canvas without ray tracing
 ratio; `--distance` has no effect on the others. The output format follows the
 extension. The program prints the render time in milliseconds and exits non-zero with a
 message on bad arguments or I/O failure. Argument parsing is hand-written; no library is
-added for it.
+added for it. The scene table in `render_demo.cpp` is the single list of pictures: the
+usage text, the default and the dispatch are derived from it, so a new picture is a new
+row.
 
 ## 10. Code style and conventions
 
@@ -651,8 +682,9 @@ added for it.
   `width()`-style lowercase.
 - Formatting is enforced by `.clang-format`: `BasedOnStyle: Google`, `ColumnLimit: 100`,
   `IndentWidth: 4`. No formatting debates in review; run the tool.
-- Headers use `#pragma once` and live under `include/cgfs/`; one module per header.
-  Headers include what they use and nothing more.
+- Headers use `#pragma once` and live under `include/cgfs/<layer>/`; one concept per
+  header. Headers include what they use and nothing more. The design principles and the
+  folder rules are in `CLAUDE.md`.
 - `[[nodiscard]]` on every function whose only effect is its return value.
 - `constexpr` for `Vec3` and `Color` operations.
 - Pass `Vec3` and `Color` by value; pass `Scene`, `Canvas` and `Viewport` by reference.
@@ -700,7 +732,7 @@ section 4 is meant to absorb these steps as additions:
   next to `vec3.h`; `Camera` struct in `scene.h`; `Render` transforms `D` before tracing.
 - Row-parallel rendering with `std::thread` or a parallel algorithm, with golden tests
   proving the output is unchanged.
-- Rasterizer, so far `rasterizer.h` with `Point`, `Interpolate`, `DrawLine`,
+- Rasterizer, so far `rasterizer/` with `Point`, `Interpolate`, `DrawLine`,
   `DrawWireframeTriangle` and `DrawFilledTriangle`. Next, in the book's order: shaded
   triangles (`Interpolate` of an intensity along the sides and then along every row),
   then perspective projection of `Vec3` vertices into `Point`s, `model.h` (vertices,
@@ -742,7 +774,7 @@ The judgment calls behind this design, so they are not relitigated by accident.
 
 Measurements and known behaviours of the implementation, recorded 2026-11-02, updated
 2026-11-03 with shadows and reflections and 2026-11-04 with the rasterizer's lines and
-filled triangles.
+filled triangles and the reorganisation into layers.
 
 - Catch2 is pinned to v3.16.1.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
@@ -796,6 +828,13 @@ filled triangles.
 - The triangles demo (28 filled triangles, four of them outlined, covering most of the
   canvas) draws in about 7 ms at 1920 x 1080. Each triangle allocates three vectors and
   one more for the concatenation; the fill itself goes through `PutPixel` pixel by pixel.
+- On 2026-11-04 the tree was reorganised into the layers of 4.2 (`CLAUDE.md` has the
+  rules): the rasterizer was split into one file per primitive, the demo pictures moved
+  into their own library target with the `axes` picture joining them from the app, the
+  rasterizer tests were split to match, and `render_demo` became table-driven. The
+  refactor changed no output: all eight pictures at 320 x 180 and four of them at
+  321 x 181, a zoomed render, the usage text and two error messages were compared byte
+  for byte before and after.
 - The `.clang-format` file is in place and clang-format 18 is now installed on the
   development machine, but the sources were formatted by hand to its rules and
   `clang-format --dry-run` still reports a handful of differences in older files. A

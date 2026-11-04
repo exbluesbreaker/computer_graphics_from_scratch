@@ -1,47 +1,132 @@
 // Command-line renderer: draws one of the demo pictures into a canvas and saves it to
-// a file.
+// a file. The scene table is the one place that knows the pictures by name; the usage
+// text, the default and the dispatch are derived from it, so adding a picture is adding
+// a row.
 
-#include <cgfs/canvas.h>
-#include <cgfs/demo_scenes.h>
-#include <cgfs/raytracer.h>
-#include <cgfs/viewport.h>
+#include <cgfs/camera/viewport.h>
+#include <cgfs/demo/rasterizer_scenes.h>
+#include <cgfs/demo/raytracer_scenes.h>
+#include <cgfs/image/canvas.h>
+#include <cgfs/raytracer/raytracer.h>
+#include <cgfs/raytracer/scene.h>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <exception>
+#include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <optional>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
 namespace {
 
+// --- The pictures ---------------------------------------------------------------------
+
+/// Ray-traces `scene` into the canvas. The viewport width follows the canvas aspect
+/// ratio so the spheres stay round; a larger `distance` narrows the field of view.
+void RenderScene(const cgfs::Scene& scene, double distance, cgfs::Canvas& canvas) {
+    const cgfs::Viewport viewport = cgfs::Viewport::MatchingCanvasAspect(canvas, 1.0, distance);
+    cgfs::RayTracer(scene, viewport).Render(canvas);
+}
+
+/// A ray-traced demo scene in the shape the table wants.
+template <cgfs::Scene (*Build)()>
+void RayTraced(cgfs::Canvas& canvas, double distance) {
+    RenderScene(Build(), distance, canvas);
+}
+
+/// A rasterized demo picture in the shape the table wants; it has no use for the distance.
+template <void (*Draw)(cgfs::Canvas&)>
+void Rasterized(cgfs::Canvas& canvas, double /*distance*/) {
+    Draw(canvas);
+}
+
+/// One picture: its name on the command line, its line in the usage text, how to draw it.
+struct DemoScene {
+    std::string_view name;
+    std::string_view description;
+    void (*draw)(cgfs::Canvas& canvas, double distance);
+};
+
+/// The first row is the default.
+constexpr DemoScene kScenes[] = {
+    {"reflective", "shiny spheres on a floor that mirror each other and the floor",
+     RayTraced<cgfs::demo::ReflectiveScene>},
+    {"specular", "the same spheres and lights without reflections",
+     RayTraced<cgfs::demo::SpecularScene>},
+    {"diffuse", "the same scene with every surface matte", RayTraced<cgfs::demo::DiffuseScene>},
+    {"flat", "the spheres under full ambient light only", RayTraced<cgfs::demo::FlatScene>},
+    {"mirrorball", "a chrome ball ringed by colored spheres under a night sky",
+     RayTraced<cgfs::demo::MirrorBallScene>},
+    {"lines", "colored lines drawn by the rasterizer (no ray tracing)",
+     Rasterized<cgfs::demo::DrawLinesScene>},
+    {"triangles", "filled and outlined triangles drawn by the rasterizer",
+     Rasterized<cgfs::demo::DrawTrianglesScene>},
+    {"axes", "the coordinate axes and corner dots (no ray tracing)",
+     Rasterized<cgfs::demo::DrawAxesScene>},
+};
+
+const DemoScene* FindScene(std::string_view name) {
+    for (const DemoScene& scene : kScenes) {
+        if (scene.name == name) {
+            return &scene;
+        }
+    }
+    return nullptr;
+}
+
+/// "a, b, c or d": the scene names, for the error message.
+std::string SceneNames() {
+    std::string names;
+    const std::size_t count = std::size(kScenes);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (i > 0) {
+            names += (i + 1 == count) ? " or " : ", ";
+        }
+        names += kScenes[i].name;
+    }
+    return names;
+}
+
+// --- The command line -----------------------------------------------------------------
+
 struct Options {
-    std::string scene = "reflective";
+    std::string scene = std::string(kScenes[0].name);
     int width = 1920;
     int height = 1080;
     double distance = 1.0;
     std::string output = "render.png";
 };
 
-constexpr std::string_view kUsage =
-    "usage: render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|"
-    "triangles|axes]\n"
-    "                   [--width N] [--height N] [--distance D] [--output PATH]\n"
-    "\n"
-    "  --scene     reflective: shiny spheres on a floor that mirror each other and the floor\n"
-    "              specular:   the same spheres and lights without reflections\n"
-    "              diffuse:    the same scene with every surface matte\n"
-    "              flat:       the spheres under full ambient light only\n"
-    "              mirrorball: a chrome ball ringed by colored spheres under a night sky\n"
-    "              lines:      colored lines drawn by the rasterizer (no ray tracing)\n"
-    "              triangles:  filled and outlined triangles drawn by the rasterizer\n"
-    "              axes:       the coordinate axes and corner dots (no ray tracing)\n"
-    "              (default: reflective)\n"
-    "  --width     canvas width in pixels (default: 1920)\n"
-    "  --height    canvas height in pixels (default: 1080)\n"
-    "  --distance  viewport distance; larger zooms in (default: 1)\n"
-    "  --output    output file, .png or .ppm (default: render.png)\n";
+std::string Usage() {
+    const Options defaults;
+    std::ostringstream out;
+    out << "usage: render_demo [--scene ";
+    for (std::size_t i = 0; i < std::size(kScenes); ++i) {
+        out << (i > 0 ? "|" : "") << kScenes[i].name;
+    }
+    out << "]\n"
+           "                   [--width N] [--height N] [--distance D] [--output PATH]\n"
+           "\n";
+    std::string_view label = "  --scene     ";
+    for (const DemoScene& scene : kScenes) {
+        out << label << std::left << std::setw(12) << (std::string(scene.name) + ":")
+            << scene.description << "\n";
+        label = "              ";
+    }
+    out << "              (default: " << defaults.scene << ")\n"
+        << "  --width     canvas width in pixels (default: " << defaults.width << ")\n"
+        << "  --height    canvas height in pixels (default: " << defaults.height << ")\n"
+        << "  --distance  viewport distance; larger zooms in (default: " << defaults.distance
+        << ")\n"
+        << "  --output    output file, .png or .ppm (default: " << defaults.output << ")\n";
+    return out.str();
+}
 
 double ParsePositiveDouble(std::string_view name, const std::string& text) {
     std::size_t consumed = 0;
@@ -102,89 +187,34 @@ std::optional<Options> ParseArgs(int argc, char** argv) {
     return options;
 }
 
-void DrawDot(cgfs::Canvas& canvas, int cx, int cy, cgfs::Color color, int radius = 6) {
-    for (int dx = -radius; dx <= radius; ++dx) {
-        for (int dy = -radius; dy <= radius; ++dy) {
-            canvas.PutPixel(cx + dx, cy + dy, color);
-        }
-    }
-}
-
-// The axes through the origin, a dot at the origin and a colored dot in each corner:
-// a quick visual check of the coordinate system.
-void DrawAxes(cgfs::Canvas& canvas) {
-    using namespace cgfs::colors;
-    constexpr cgfs::Color kGray{160.0, 160.0, 160.0};
-    constexpr cgfs::Color kDarkGreen{0.0, 160.0, 0.0};
-
-    const int half_w = canvas.width() / 2;
-    const int half_h = canvas.height() / 2;
-    for (int x = -half_w; x < half_w; ++x) {
-        canvas.PutPixel(x, 0, kGray);
-    }
-    for (int y = -half_h; y < half_h; ++y) {
-        canvas.PutPixel(0, y, kGray);
-    }
-    DrawDot(canvas, 0, 0, kBlack);
-    DrawDot(canvas, -half_w + 8, half_h - 9, kRed);        // top-left
-    DrawDot(canvas, half_w - 9, half_h - 9, kDarkGreen);   // top-right
-    DrawDot(canvas, -half_w + 8, -half_h + 8, kBlue);      // bottom-left
-    DrawDot(canvas, half_w - 9, -half_h + 8, kBlack);      // bottom-right
-}
-
-void RenderScene(const cgfs::Scene& scene, double distance, cgfs::Canvas& canvas) {
-    // The viewport width follows the canvas aspect ratio so the spheres stay round.
-    const cgfs::Viewport viewport = cgfs::Viewport::MatchingCanvasAspect(canvas, 1.0, distance);
-    cgfs::RayTracer(scene, viewport).Render(canvas);
-}
-
-void Draw(const Options& options, cgfs::Canvas& canvas) {
-    if (options.scene == "reflective") {
-        RenderScene(cgfs::demo::ReflectiveScene(), options.distance, canvas);
-    } else if (options.scene == "specular") {
-        RenderScene(cgfs::demo::SpecularScene(), options.distance, canvas);
-    } else if (options.scene == "diffuse") {
-        RenderScene(cgfs::demo::DiffuseScene(), options.distance, canvas);
-    } else if (options.scene == "flat") {
-        RenderScene(cgfs::demo::FlatScene(), options.distance, canvas);
-    } else if (options.scene == "mirrorball") {
-        RenderScene(cgfs::demo::MirrorBallScene(), options.distance, canvas);
-    } else if (options.scene == "lines") {
-        cgfs::demo::DrawLinesScene(canvas);
-    } else if (options.scene == "triangles") {
-        cgfs::demo::DrawTrianglesScene(canvas);
-    } else if (options.scene == "axes") {
-        DrawAxes(canvas);
-    } else {
-        throw std::runtime_error("unknown scene '" + options.scene +
-                                 "' (expected reflective, specular, diffuse, flat, mirrorball, "
-                                 "lines, triangles or axes)");
-    }
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
     try {
         const std::optional<Options> options = ParseArgs(argc, argv);
         if (!options) {
-            std::cout << kUsage;
+            std::cout << Usage();
             return EXIT_SUCCESS;
+        }
+        const DemoScene* scene = FindScene(options->scene);
+        if (scene == nullptr) {
+            throw std::runtime_error("unknown scene '" + options->scene + "' (expected " +
+                                     SceneNames() + ")");
         }
 
         cgfs::Canvas canvas(options->width, options->height);
         const auto start = std::chrono::steady_clock::now();
-        Draw(*options, canvas);
+        scene->draw(canvas, options->distance);
         const auto elapsed = std::chrono::steady_clock::now() - start;
         canvas.Save(options->output);
 
-        std::cout << "rendered '" << options->scene << "' at " << canvas.width() << "x"
+        std::cout << "rendered '" << scene->name << "' at " << canvas.width() << "x"
                   << canvas.height() << " in "
                   << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
                   << " ms -> " << options->output << "\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
-        std::cerr << "render_demo: " << error.what() << "\n" << kUsage;
+        std::cerr << "render_demo: " << error.what() << "\n" << Usage();
         return EXIT_FAILURE;
     }
 }

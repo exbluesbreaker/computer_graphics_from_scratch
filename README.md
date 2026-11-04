@@ -56,25 +56,29 @@ corner dots, no ray tracing). A larger `--distance` narrows the field of view of
 ## Layout
 
 ```
-include/cgfs/   public headers, one per module
-    vec3.h        Vec3 and Dot, Cross, Length, Normalized, Reflect
-    color.h       Color (double channels, nominal 0..255), Rgb8, ToRgb8
-    canvas.h      Canvas: pixel buffer with a centered coordinate system, Save()
-    image_io.h    PPM writer and reader, PNG writer
-    viewport.h    Viewport: CanvasToViewport(x, y), field of view
-    scene.h       Sphere (with its specular exponent and reflectivity), the lights (a
-                  std::variant) and Scene
-    raytracer.h   IntersectRaySphere and RayTracer: Render, ClosestIntersection, TraceRay
-                  (recursive, for reflections), ComputeLighting (with shadows)
-    rasterizer.h  the rasterizer: Point, Interpolate, DrawLine, DrawWireframeTriangle,
-                  DrawFilledTriangle
-    demo_scenes.h the scenes shared by render_demo and the golden tests
-src/            implementations
-apps/           render_demo
-tests/          Catch2 unit tests and the golden-image tests; tests/golden/ holds the
+include/cgfs/   public headers: one folder per layer, one file per concept
+  math/         vec3.h          Vec3 and Dot, Cross, Length, Normalized, Reflect
+  image/        color.h         Color (double channels, nominal 0..255), Rgb8, ToRgb8
+                canvas.h        Canvas: pixel buffer with a centered coordinate system, Save()
+                image_io.h      PPM writer and reader, PNG writer
+  camera/       viewport.h      Viewport: CanvasToViewport(x, y), field of view
+  raytracer/    scene.h         Sphere (with its specular exponent and reflectivity), the
+                                lights (a std::variant) and Scene
+                raytracer.h     IntersectRaySphere and RayTracer: Render, ClosestIntersection,
+                                TraceRay (recursive, for reflections), ComputeLighting (shadows)
+  rasterizer/   point.h         Point, and ToPixel (the one coordinate-to-pixel conversion)
+                interpolate.h   Interpolate
+                line.h          DrawLine
+                triangle.h      DrawWireframeTriangle, DrawFilledTriangle
+  demo/         raytracer_scenes.h, rasterizer_scenes.h
+                                the pictures shared by render_demo and the golden tests
+src/<layer>/    implementations, mirroring include/cgfs/<layer>/
+apps/           render_demo; its scene table is the one list of pictures
+tests/<layer>/  Catch2 unit tests, mirroring the layers; tests/demo/golden/ holds the
                 reference renders
 third_party/    stb_image_write.h (PNG output)
 docs/SPEC.md    design specification
+CLAUDE.md       the design principles and the rules that keep this tree in shape
 ```
 
 CMake options (all default on except the sanitizers): `CGFS_BUILD_TESTS`,
@@ -82,17 +86,18 @@ CMake options (all default on except the sanitizers): `CGFS_BUILD_TESTS`,
 
 ## Golden images
 
-`tests/golden_test.cpp` renders the demo scenes (ray-traced and rasterized) at 320x180
-and compares them pixel for pixel with the reference images in `tests/golden/`. If the rendering behaviour changes on
+`tests/demo/golden_test.cpp` renders the demo scenes (ray-traced and rasterized) at
+320x180 and compares them pixel for pixel with the reference images in
+`tests/demo/golden/`. If the rendering behaviour changes on
 purpose, regenerate the references with a Release build and review the pictures before
 committing:
 
 ```bash
-./build/release/apps/render_demo --scene flat --width 320 --height 180 --output tests/golden/flat_320x180.ppm
-./build/release/apps/render_demo --scene diffuse --width 320 --height 180 --output tests/golden/diffuse_320x180.ppm
-./build/release/apps/render_demo --scene specular --width 320 --height 180 --output tests/golden/specular_320x180.ppm
-./build/release/apps/render_demo --scene reflective --width 320 --height 180 --output tests/golden/reflective_320x180.ppm
-./build/release/apps/render_demo --scene mirrorball --width 320 --height 180 --output tests/golden/mirrorball_320x180.ppm
-./build/release/apps/render_demo --scene lines --width 320 --height 180 --output tests/golden/lines_320x180.ppm
-./build/release/apps/render_demo --scene triangles --width 320 --height 180 --output tests/golden/triangles_320x180.ppm
+./build/release/apps/render_demo --scene flat --width 320 --height 180 --output tests/demo/golden/flat_320x180.ppm
+./build/release/apps/render_demo --scene diffuse --width 320 --height 180 --output tests/demo/golden/diffuse_320x180.ppm
+./build/release/apps/render_demo --scene specular --width 320 --height 180 --output tests/demo/golden/specular_320x180.ppm
+./build/release/apps/render_demo --scene reflective --width 320 --height 180 --output tests/demo/golden/reflective_320x180.ppm
+./build/release/apps/render_demo --scene mirrorball --width 320 --height 180 --output tests/demo/golden/mirrorball_320x180.ppm
+./build/release/apps/render_demo --scene lines --width 320 --height 180 --output tests/demo/golden/lines_320x180.ppm
+./build/release/apps/render_demo --scene triangles --width 320 --height 180 --output tests/demo/golden/triangles_320x180.ppm
 ```
