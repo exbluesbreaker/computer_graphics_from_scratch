@@ -14,8 +14,8 @@ This document is the design reference for the renderer: what it renders and with
 formulas, how the code is structured, how it is built and tested, and how it is expected
 to grow. The current feature set is a ray tracer for spheres with ambient, point and
 directional lights, diffuse shading, specular highlights, shadows and reflections, and
-the first steps of the rasterizer, lines and filled and shaded triangles; section 13
-lists what comes next.
+the first steps of the rasterizer, lines, filled and shaded triangles and the perspective
+projection of vertices; section 13 lists what comes next.
 
 ## 2. Goals and non-goals
 
@@ -215,7 +215,29 @@ the shaded triangle reads; it defaults to 1, the full color.
 - There is no clipping. Pixels outside the canvas are dropped by `PutPixel`, so a line
   or a triangle may run off the canvas; it costs time in proportion to its full size.
 
-### 3.7 Numeric conventions
+### 3.7 Rasterizer: perspective projection
+
+The rasterizer's 3D pipeline starts with the viewport of 3.2, the same one the ray
+tracer looks through: the camera at the origin looking along +Z and the viewport
+`width` x `height` at `distance` `d`.
+
+- `ViewportToCanvas(viewport, x, y)` returns the canvas point of the viewport point
+  `(x, y)`: `Cx = x * canvas_width / width`, `Cy = y * canvas_height / height`, each
+  truncated to a pixel with `ToPixel`, as in the book's code. It is the inverse of
+  `CanvasToViewport` up to that truncation: a viewport point lands on the pixel that
+  looks through it.
+- `ProjectVertex(viewport, v)` returns the canvas point where the vertex `v` appears.
+  The ray from the origin through `v` crosses the viewport plane `z = d` at
+  `Px = v.x * d / v.z`, `Py = v.y * d / v.z` (similar triangles), and that point goes
+  through `ViewportToCanvas`. Vertices on one ray from the camera project to one pixel;
+  a vertex twice as far from the camera lands at half the distance from the center;
+  moving the viewport away (a larger `d`) zooms in. Precondition: `v.z > 0`, asserted.
+- There is no clipping. A vertex outside the field of view projects beyond the canvas
+  and the primitives draw what fits; a vertex very near the camera plane projects very
+  far away, and a canvas coordinate beyond the range of `int` is undefined behaviour in
+  `ToPixel`. The clipping step of the roadmap removes both.
+
+### 3.8 Numeric conventions
 
 - All geometry and color math uses `double`. Switching to `float` would be a deliberate
   decision rather than a detail, because it changes the golden images.
@@ -238,7 +260,7 @@ include/cgfs/             public headers: one folder per layer, one file per con
     image/color.h  canvas.h  image_io.h
     camera/viewport.h
     raytracer/scene.h  raytracer.h
-    rasterizer/point.h  interpolate.h  line.h  triangle.h
+    rasterizer/point.h  interpolate.h  line.h  triangle.h  projection.h
     demo/raytracer_scenes.h  rasterizer_scenes.h
                           the demo pictures shared by render_demo and the golden tests
 src/<layer>/              implementation files, mirroring include/cgfs/<layer>/
@@ -251,7 +273,8 @@ tests/
     image/color_test.cpp  canvas_test.cpp  image_io_test.cpp
     camera/viewport_test.cpp
     raytracer/raytracer_test.cpp
-    rasterizer/interpolate_test.cpp  line_test.cpp  triangle_test.cpp  pixel_helpers.h
+    rasterizer/interpolate_test.cpp  line_test.cpp  triangle_test.cpp  projection_test.cpp
+    rasterizer/pixel_helpers.h
     demo/golden_test.cpp
     demo/golden/          reference renders of the demo pictures (PPM)
 third_party/
@@ -270,12 +293,12 @@ not the namespaces, carry the structure. The layers, bottom to top, each dependi
 on the ones below it:
 
 ```
-math         vec3                                  vector algebra
-image        color, canvas, image_io               colors, the pixel buffer, file formats
-camera       viewport                              how canvas pixels map into the world
-raytracer    scene, raytracer                      the ray tracing renderer
-rasterizer   point, interpolate, line, triangle    the rasterizing renderer
-demo         raytracer_scenes, rasterizer_scenes   the demo pictures
+math         vec3                                           vector algebra
+image        color, canvas, image_io                        colors, the pixel buffer, file formats
+camera       viewport                                       how canvas pixels map into the world
+raytracer    scene, raytracer                               the ray tracing renderer
+rasterizer   point, interpolate, line, triangle, projection the rasterizing renderer
+demo         raytracer_scenes, rasterizer_scenes            the demo pictures
 ```
 
 - `math/vec3`: `Vec3` and its free functions, header-only, `constexpr` where possible.
@@ -283,13 +306,15 @@ demo         raytracer_scenes, rasterizer_scenes   the demo pictures
   and the centered coordinate system. `image/image_io`: PPM writer and reader, PNG
   writer; used by `Canvas::Save` and the tests.
 - `camera/viewport`: pixel to viewport-point mapping and field of view. Used by the ray
-  tracer now and by the rasterizer's projection step later.
+  tracer and by the rasterizer's projection.
 - `raytracer/scene`: plain data: spheres, lights, background color.
   `raytracer/raytracer`: intersection, lighting, the render loop.
 - `rasterizer/point`: `Point`, with its intensity `h`, and `ToPixel`, the one conversion
   from interpolated coordinates to pixels. `rasterizer/interpolate`: `Interpolate`, the
   building block. `rasterizer/line`: `DrawLine`. `rasterizer/triangle`:
   `DrawWireframeTriangle`, `DrawFilledTriangle` and `DrawShadedTriangle`.
+  `rasterizer/projection`: `ViewportToCanvas` and `ProjectVertex`, from a `Vec3` seen
+  through a `Viewport` to the `Point` the primitives draw; the start of the 3D pipeline.
 - `demo/raytracer_scenes`: the ray-traced demo scenes, each a function returning a
   `Scene`. `demo/rasterizer_scenes`: the rasterized demo pictures, each a function that
   draws into a canvas. Either way the app and the golden tests render exactly the same
@@ -470,7 +495,7 @@ The scene and viewport must outlive the tracer. `Hit::sphere` points into the sc
 sphere vector and is valid as long as that vector is not modified. `ClosestIntersection`,
 `TraceRay` and `ComputeLighting` are public so the tests can exercise them directly.
 
-### 5.8 `rasterizer/point.h`, `interpolate.h`, `line.h`, `triangle.h`
+### 5.8 `rasterizer/point.h`, `interpolate.h`, `line.h`, `triangle.h`, `projection.h`
 
 ```cpp
 // point.h
@@ -493,12 +518,17 @@ void DrawLine(Canvas& canvas, Point p0, Point p1, Color color);
 void DrawWireframeTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
 void DrawFilledTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
 void DrawShadedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);  // color * h
+
+// projection.h
+Point ViewportToCanvas(const Viewport& viewport, double x, double y);  // truncated (section 3.7)
+Point ProjectVertex(const Viewport& viewport, Vec3 v);                 // precondition v.z > 0
 ```
 
 One header per primitive. Free functions that take the canvas as their first parameter,
-the shape of the book's listings minus their global canvas. They are the primitives; a
-class with state (a depth buffer, a camera) comes when the pipeline needs one, and the
-primitives stay as they are.
+the shape of the book's listings minus their global canvas; the projection takes the
+viewport the same way, in place of the book's global viewport size and plane distance.
+They are the primitives; a class with state (a depth buffer, a camera) comes when the
+pipeline needs one, and the primitives stay as they are.
 
 ## 6. Build system
 
@@ -650,6 +680,16 @@ Unit tests:
     triangles of a rectangle cut along its diagonal give identical bytes on the
     diagonal's three pixels; `h = 2` is clamped to 255 by the canvas and a negative `h`
     to 0.
+  - `ViewportToCanvas`: the viewport test's table the other way round (the default
+    viewport on 1920 x 1080); a 2 x 1 viewport scales each axis by its own ratio;
+    truncation toward zero (`33.7 -> 33`, `-33.7 -> -33`, `0.5` and `-0.5` to 0).
+  - `ProjectVertex`: a vertex on the viewport plane keeps its x and y; a vertex twice
+    and four times as far lands at a half and a quarter of the distance from the
+    center, and one nearer than the viewport beyond the canvas; four vertices on one
+    ray project to one pixel; the viewport at distance 2 sees `(0.5, 0.5, 4)` where
+    the one at distance 1 sees `(0.5, 0.5, 2)`; on a 64 x 32 canvas with a 2 x 1
+    viewport at distance 2 (powers of two, so every step is exact) `ProjectVertex`
+    inverts `CanvasToViewport` on every pixel.
 
 Golden-image tests:
 
@@ -663,11 +703,12 @@ Golden-image tests:
   references show the shadows the spheres cast on the floor and on each other; the flat
   reference has no shadows because ambient light is never blocked; only the reflective
   and mirror ball references show reflections. `lines_320x180.ppm`,
-  `triangles_320x180.ppm` and `shaded_320x180.ppm` are the rasterizer's demos (section
-  9): every pixel of them comes from `DrawLine`, `DrawFilledTriangle` or
-  `DrawShadedTriangle`, and because the scenes compute their vertices with integer
-  arithmetic and their colors and intensities without any `libm` call, the pictures are
-  reproducible bit for bit on every platform.
+  `triangles_320x180.ppm`, `shaded_320x180.ppm` and `cube_320x180.ppm` are the
+  rasterizer's demos (section 9): every pixel of them comes from `DrawLine`,
+  `DrawFilledTriangle` or `DrawShadedTriangle`. The 2D scenes compute their vertices
+  with integer arithmetic and their colors and intensities without any `libm` call, and
+  the cube's projection is a few IEEE multiplications and divisions, which every
+  platform rounds the same way, so the pictures are reproducible bit for bit.
 - `golden_test.cpp` renders the same scenes and compares every channel of every pixel
   with the reference image. The test passes when no channel differs by more than 1. The
   tolerance absorbs floating-point differences between compilers and standard
@@ -675,7 +716,7 @@ Golden-image tests:
 - The scenes are defined once, in the `demo` layer, shared by `render_demo` and the
   golden test, so the app and the test cannot drift apart.
 - The references are regenerated only when rendering behaviour changes on purpose, with
-  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles|shaded> --width 320 --height 180 --output tests/demo/golden/...`
+  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles|shaded|cube> --width 320 --height 180 --output tests/demo/golden/...`
   from a Release build, and the pictures are reviewed before they are committed. The
   `flat` reference doubles as a regression test: neither the specular nor the shadow code
   path may change the output of an ambient-only scene, `diffuse` pins the shadows of
@@ -687,34 +728,38 @@ Golden-image tests:
 `render_demo` renders one of the demo pictures to a file:
 
 ```
-render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|axes] [--width N] [--height N] [--distance D] [--output PATH]
+render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|axes] [--width N] [--height N] [--distance D] [--output PATH]
 ```
 
 Defaults: `reflective`, 1920 x 1080, distance 1, `render.png`. The `mirrorball` scene is
-the project's own composition, built from the same features as the book's scene: a
-chrome ball ringed by six colored spheres of different finishes on a dark polished floor,
+the project's own composition, built from the same features as the book's scene: a chrome
+ball ringed by six colored spheres of different finishes on a dark polished floor,
 marbles in front, spheres floating above, two point lights for crossing shadows and a
 dusk-blue sky. The `lines` scene is the rasterizer's: `DrawLinesScene` clears the canvas
 to a dark background and draws a dim pair of axes, string-art envelopes in the four
 corners (lines whose ends slide along the two edges and together outline a parabola) and
-a sunburst of lines from the center to a rectangle around it, colored once around the
-hue wheel; 110 lines in all, every slope and both endpoint orders among them. The
-`triangles` scene is the rasterizer's second: `DrawTrianglesScene` draws a big triangle
-in every corner, each filled and then outlined in a brighter shade the way the book's
-demo does it (a flat top, a vertical edge, a flat bottom and a vertex beyond the canvas
-among them), and over them a color wheel of 24 filled wedges from the origin to the rim
-of a rectangle, which share their edges and tile without gaps. The `shaded` scene is the
+a sunburst of lines from the center to a rectangle around it, colored once around the hue
+wheel; 110 lines in all, every slope and both endpoint orders among them. The `triangles`
+scene is the rasterizer's second: `DrawTrianglesScene` draws a big triangle in every
+corner, each filled and then outlined in a brighter shade the way the book's demo does it
+(a flat top, a vertical edge, a flat bottom and a vertex beyond the canvas among them),
+and over them a color wheel of 24 filled wedges from the origin to the rim of a
+rectangle, which share their edges and tile without gaps. The `shaded` scene is the
 rasterizer's third: `DrawShadedTrianglesScene` draws on the left a green triangle in the
 proportions of the book's demo (its vertices scaled from the book's 600 x 600 canvas to
 the canvas height) with the intensities 0.3, 0.1 and 1 at its vertices, and on the right
 a glowing color wheel of 24 shaded wedges from a bright center (`h = 1`) to the dim rim
 (`h = 0.2`) of a rectangle, which share their edges and shade continuously across them.
-The `axes` scene draws
-the coordinate axes and corner dots; it exercises the canvas without ray tracing. For the ray-traced scenes the viewport width always matches the canvas aspect
-ratio; `--distance` has no effect on the others. The output format follows the
-extension. The program prints the render time in milliseconds and exits non-zero with a
-message on bad arguments or I/O failure. Argument parsing is hand-written; no library is
-added for it. The scene table in `render_demo.cpp` is the single list of pictures: the
+The `cube` scene is the rasterizer's first 3D picture and the book's: `DrawCubeScene`
+projects the eight corners of the cube at x = -2..-1, y = -0.5..0.5, z = 5..6 with
+`ProjectVertex` and draws its twelve edges with `DrawLine`, the front face blue, the back
+face red and the edges from front to back green. The `axes` scene draws the coordinate
+axes and corner dots; it exercises the canvas without ray tracing. For the ray-traced
+scenes and the cube the viewport width always matches the canvas aspect ratio, and
+`--distance` zooms them; it has no effect on the 2D pictures. The output format follows
+the extension. The program prints the render time in milliseconds and exits non-zero with
+a message on bad arguments or I/O failure. Argument parsing is hand-written; no library
+is added for it. The scene table in `render_demo.cpp` is the single list of pictures: the
 usage text, the default and the dispatch are derived from it, so a new picture is a new
 row.
 
@@ -760,6 +805,7 @@ Targets apply to Release builds on a single core. Debug builds have no targets.
 | lines demo (110 lines)                           | 1920 x 1080 | under 10 ms; about 2 ms measured                 |
 | triangles demo (28 filled, 4 outlined)           | 1920 x 1080 | under 20 ms; about 7 ms measured                 |
 | shaded demo (1 triangle, 24 shaded wedges)       | 1920 x 1080 | under 20 ms; about 7 ms measured                 |
+| cube demo (12 projected lines)                   | 1920 x 1080 | under 10 ms; under 1 ms measured                 |
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
@@ -779,10 +825,11 @@ section 4 is meant to absorb these steps as additions:
 - Row-parallel rendering with `std::thread` or a parallel algorithm, with golden tests
   proving the output is unchanged.
 - Rasterizer, so far `rasterizer/` with `Point`, `Interpolate`, `DrawLine`,
-  `DrawWireframeTriangle`, `DrawFilledTriangle` and `DrawShadedTriangle`. Next, in the
-  book's order: perspective projection of `Vec3` vertices into `Point`s, `model.h`
-  (vertices, triangles, instances), camera transforms, clipping, the depth buffer,
-  shading (which feeds each vertex's lighting into `Point::h`) and textures.
+  `DrawWireframeTriangle`, `DrawFilledTriangle`, `DrawShadedTriangle` and the
+  perspective projection `ProjectVertex`. Next, in the book's order: `model.h`
+  (vertices, triangles, instances) and a scene of them, camera transforms, clipping, the
+  depth buffer, shading (which feeds each vertex's lighting into `Point::h`) and
+  textures.
 - Optional interactive window behind a `CGFS_ENABLE_WINDOW` option (SDL2 or similar),
   off by default so the dependency policy in section 7 holds for everyone else.
 
@@ -818,13 +865,18 @@ The judgment calls behind this design, so they are not relitigated by accident.
    the vertices by y then carries each intensity with its point, every `Point{x, y}`
    written so far keeps meaning "the full color", and the later chapters attach more
    per-vertex data the same way. `DrawLine` and `DrawFilledTriangle` ignore it.
+10. The projection lives in the rasterizer layer, as free functions that take the
+    `Viewport`, rather than as methods of `Viewport`: its result is a `Point`, a
+    rasterizer type, truncated with the rasterizer's `ToPixel`, and the camera layer
+    stays below the rasterizer. `Viewport` keeps the exact mapping in one direction,
+    `CanvasToViewport`; the lossy one lives next to its user.
 
 ## 15. Implementation notes
 
 Measurements and known behaviours of the implementation, recorded 2026-11-02, updated
 2026-11-03 with shadows and reflections, 2026-11-04 with the rasterizer's lines and
 filled triangles and the reorganisation into layers, and 2026-11-05 with shaded
-triangles.
+triangles and the perspective projection.
 
 - Catch2 is pinned to v3.16.1.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
@@ -895,6 +947,15 @@ triangles.
   canvas) draws in about 7 ms at 1920 x 1080. Each shaded triangle allocates six vectors
   for its sides, two for the concatenations and one per row for `h_segment`, the book's
   shape; at this size the per-row allocation costs nothing measurable.
+- `ViewportToCanvas` truncates, so `ProjectVertex(CanvasToViewport(x, y))` is `(x, y)`
+  only when the arithmetic is exact. On the demo sizes with the aspect-matched viewport
+  it is not: `y = -63` on a 320 x 180 canvas comes back as `-62.99999999999999`, which
+  truncates toward zero to `-62`, and about one pixel in seven moves one pixel toward
+  the center this way (one in three at distance 3). The book's demo truncates the same
+  way (`| 0`). The unit test of the round trip therefore uses power-of-two sizes, where
+  every product and quotient is exact, and the cube demo pins its own picture.
+- The cube demo (twelve projected lines) draws in well under a millisecond at
+  1920 x 1080.
 - On 2026-11-04 the tree was reorganised into the layers of 4.2 (`CLAUDE.md` has the
   rules): the rasterizer was split into one file per primitive, the demo pictures moved
   into their own library target with the `axes` picture joining them from the app, the

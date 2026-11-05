@@ -46,6 +46,13 @@ void Rasterized(cgfs::Canvas& canvas, double /*distance*/) {
     Draw(canvas);
 }
 
+/// A rasterized 3D picture in the shape the table wants: it is drawn through the
+/// aspect-matched viewport, so `distance` zooms it like the ray-traced scenes.
+template <void (*Draw)(cgfs::Canvas&, const cgfs::Viewport&)>
+void Projected(cgfs::Canvas& canvas, double distance) {
+    Draw(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas, 1.0, distance));
+}
+
 /// One picture: its name on the command line, its line in the usage text, how to draw it.
 struct DemoScene {
     std::string_view name;
@@ -69,6 +76,8 @@ constexpr DemoScene kScenes[] = {
      Rasterized<cgfs::demo::DrawTrianglesScene>},
     {"shaded", "shaded triangles drawn by the rasterizer: an intensity per vertex",
      Rasterized<cgfs::demo::DrawShadedTrianglesScene>},
+    {"cube", "the wireframe of a cube in perspective, the rasterizer's first 3D picture",
+     Projected<cgfs::demo::DrawCubeScene>},
     {"axes", "the coordinate axes and corner dots (no ray tracing)",
      Rasterized<cgfs::demo::DrawAxesScene>},
 };

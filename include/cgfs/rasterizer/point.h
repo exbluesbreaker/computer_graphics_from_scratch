@@ -6,7 +6,7 @@ namespace cgfs {
 /// with an intensity for the shaded primitives.
 ///
 /// The rasterizer works in 2D: everything it draws is made of these, and the 3D part
-/// of the pipeline (projection, which comes later) ends by producing them.
+/// of the pipeline ends by producing them (see ProjectVertex in projection.h).
 ///
 /// `h` is the book's shading value: a multiplier for the color at this vertex, 0 for
 /// black and 1 for the color itself. DrawShadedTriangle interpolates it across the

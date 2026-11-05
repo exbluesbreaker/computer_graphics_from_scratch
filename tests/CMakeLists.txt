@@ -21,6 +21,7 @@ add_executable(cgfs_tests
     rasterizer/interpolate_test.cpp
     rasterizer/line_test.cpp
     rasterizer/triangle_test.cpp
+    rasterizer/projection_test.cpp
     demo/golden_test.cpp)
 # So that helpers are included by their path in the tree: "support/test_helpers.h".
 target_include_directories(cgfs_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

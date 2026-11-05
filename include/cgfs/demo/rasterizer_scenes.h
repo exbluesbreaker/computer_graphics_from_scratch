@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 
 namespace cgfs::demo {
@@ -30,6 +31,15 @@ void DrawTrianglesScene(Canvas& canvas);
 /// and shade continuously across them. Clears the canvas to a dark background first;
 /// integer geometry only, like DrawLinesScene.
 void DrawShadedTrianglesScene(Canvas& canvas);
+
+/// The rasterizer's first 3D picture, the book's: the twelve edges of a cube with
+/// corners at x = -2 and -1, y = -0.5 and 0.5, z = 5 and 6, each vertex projected onto
+/// the canvas with ProjectVertex through `viewport` and each edge drawn with DrawLine;
+/// the front face blue, the back face red and the four edges from front to back green.
+/// The back face comes out smaller than the front one, which is perspective. Clears the
+/// canvas to a dark background first. The one rasterized picture that depends on the
+/// viewport, so render_demo's --distance zooms it.
+void DrawCubeScene(Canvas& canvas, const Viewport& viewport);
 
 /// The coordinate axes through the origin, a dot at the origin and a colored dot in
 /// each corner (red top-left, green top-right, blue bottom-left, black bottom-right): a

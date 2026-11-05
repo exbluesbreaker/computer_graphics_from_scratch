@@ -1,8 +1,10 @@
 #include <cgfs/demo/rasterizer_scenes.h>
 
 #include <cgfs/image/color.h>
+#include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/line.h>
 #include <cgfs/rasterizer/point.h>
+#include <cgfs/rasterizer/projection.h>
 #include <cgfs/rasterizer/triangle.h>
 
 #include <cstddef>
@@ -240,6 +242,45 @@ void DrawShadedTrianglesScene(Canvas& canvas) {
         DrawShadedTriangle(canvas, center, rim(k), rim((k + 1) % wedges),
                            Wheel(static_cast<double>(k) / wedges));
     }
+}
+
+void DrawCubeScene(Canvas& canvas, const Viewport& viewport) {
+    constexpr Color kBackground{18.0, 20.0, 28.0};
+
+    canvas.Clear(kBackground);
+
+    // The four "front" vertices and the four "back" vertices of the book's cube.
+    const Vec3 front_a{-2.0, -0.5, 5.0};
+    const Vec3 front_b{-2.0, 0.5, 5.0};
+    const Vec3 front_c{-1.0, 0.5, 5.0};
+    const Vec3 front_d{-1.0, -0.5, 5.0};
+    const Vec3 back_a{-2.0, -0.5, 6.0};
+    const Vec3 back_b{-2.0, 0.5, 6.0};
+    const Vec3 back_c{-1.0, 0.5, 6.0};
+    const Vec3 back_d{-1.0, -0.5, 6.0};
+
+    // An edge of the cube: both ends projected, then a line between the pixels.
+    const auto edge = [&](Vec3 from, Vec3 to, Color color) {
+        DrawLine(canvas, ProjectVertex(viewport, from), ProjectVertex(viewport, to), color);
+    };
+
+    // The front face.
+    edge(front_a, front_b, colors::kBlue);
+    edge(front_b, front_c, colors::kBlue);
+    edge(front_c, front_d, colors::kBlue);
+    edge(front_d, front_a, colors::kBlue);
+
+    // The back face.
+    edge(back_a, back_b, colors::kRed);
+    edge(back_b, back_c, colors::kRed);
+    edge(back_c, back_d, colors::kRed);
+    edge(back_d, back_a, colors::kRed);
+
+    // The front-to-back edges.
+    edge(front_a, back_a, colors::kGreen);
+    edge(front_b, back_b, colors::kGreen);
+    edge(front_c, back_c, colors::kGreen);
+    edge(front_d, back_d, colors::kGreen);
 }
 
 void DrawAxesScene(Canvas& canvas) {

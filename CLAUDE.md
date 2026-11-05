@@ -90,12 +90,13 @@ The source tree is organised by layer, and the same layer names appear under
 reading the architecture:
 
 ```
-math/         vec3                                vector algebra; nothing above the numbers
-image/        color, canvas, image_io             the picture: colors, the pixel buffer, file formats
-camera/       viewport                            how canvas pixels map into the world; shared by both renderers
-raytracer/    scene, raytracer                    the ray tracing renderer: spheres, lights, tracing
-rasterizer/   point, interpolate, line, triangle  the rasterizing renderer: 2D primitives, one per file
-demo/         raytracer_scenes, rasterizer_scenes the demo pictures, built on everything above
+math/         vec3                                            vector algebra; nothing above the numbers
+image/        color, canvas, image_io                         the picture: colors, the pixel buffer, file formats
+camera/       viewport                                        how canvas pixels map into the world; shared by both renderers
+raytracer/    scene, raytracer                                the ray tracing renderer: spheres, lights, tracing
+rasterizer/   point, interpolate, line, triangle, projection  the rasterizing renderer: 2D primitives and the
+                                                              projection that feeds them, one per file
+demo/         raytracer_scenes, rasterizer_scenes             the demo pictures, built on everything above
 ```
 
 Rules that keep it that way:
