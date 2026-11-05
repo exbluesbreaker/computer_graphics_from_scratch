@@ -26,4 +26,24 @@ void DrawWireframeTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color c
 /// come out as (part of) a line. No clipping, as for DrawLine.
 void DrawFilledTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
 
+/// Fill the triangle p0 p1 p2 with `color` scaled by an intensity that varies smoothly
+/// over it: each vertex has its own intensity `h` (see Point), and every pixel gets
+/// `color * h` with `h` interpolated linearly from the vertices.
+///
+/// The fill proceeds exactly as in DrawFilledTriangle, and h travels along with x:
+/// where the sides give an x per row they give an h per row too, from the same
+/// Interpolate call pattern over the same rows, and the short sides' h lists are
+/// concatenated like their x lists. Each row then runs a second interpolation, of h
+/// over the row's pixels from the left side's h to the right side's, and multiplies the
+/// color by it pixel by pixel. Interpolating the vertex values along the sides and
+/// then along every row is the same thing as interpolating them over the triangle's
+/// plane, which is what "shading" will mean once the vertices carry lighting.
+///
+/// The pixels covered are exactly those DrawFilledTriangle covers for the same three
+/// points, so a shaded triangle with h = 1 at every vertex is the filled triangle. Two
+/// shaded triangles that share an edge agree on its pixels' intensities, because both
+/// interpolate the edge from the same two vertices. The product `color * h` is clamped
+/// only when it reaches the canvas. The vertex order does not matter; no clipping.
+void DrawShadedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
+
 }  // namespace cgfs

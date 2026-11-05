@@ -23,6 +23,14 @@ void DrawLinesScene(Canvas& canvas);
 /// first; integer geometry only, like DrawLinesScene.
 void DrawTrianglesScene(Canvas& canvas);
 
+/// The rasterizer's third picture, made of shaded triangles: on the left a green
+/// triangle in the proportions of the book's demo, with the intensities 0.3, 0.1 and 1
+/// at its vertices, scaled to the canvas height; on the right a glowing color wheel of
+/// 24 wedges from a bright center to the dim rim of a rectangle, which share their edges
+/// and shade continuously across them. Clears the canvas to a dark background first;
+/// integer geometry only, like DrawLinesScene.
+void DrawShadedTrianglesScene(Canvas& canvas);
+
 /// The coordinate axes through the origin, a dot at the origin and a colored dot in
 /// each corner (red top-left, green top-right, blue bottom-left, black bottom-right): a
 /// quick visual check of the canvas's coordinate system. Drawn with PutPixel alone, on

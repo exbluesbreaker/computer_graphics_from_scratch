@@ -9,8 +9,9 @@ vector math, the pixel canvas and the image writers are all part of the project.
 
 It currently ray-traces spheres with ambient, point and directional lights, diffuse
 shading, specular highlights, shadows and reflections, and writes the result to a PNG or
-PPM file. The rasterizer, the book's second half, has started: it draws lines and
-filled triangles with nothing but `PutPixel`.
+PPM file. The rasterizer, the book's second half, has started: it draws lines, filled
+triangles and shaded triangles (an intensity per vertex, interpolated across the
+triangle) with nothing but `PutPixel`.
 `docs/SPEC.md` describes the design, the architecture and the roadmap.
 
 ## Requirements
@@ -37,6 +38,7 @@ Use `--preset release` for an optimized build in `build/release`. Then:
 ./build/release/apps/render_demo --distance 2 --output zoomed.ppm
 ./build/release/apps/render_demo --scene lines --output lines.png   # the rasterizer
 ./build/release/apps/render_demo --scene triangles --output triangles.png
+./build/release/apps/render_demo --scene shaded --output shaded.png
 ./build/release/apps/render_demo --help
 ```
 
@@ -50,8 +52,9 @@ spheres floating above; two point lights throw crossing shadows), `lines` (the
 rasterizer's first picture: a sunburst of colored lines and string-art envelopes in the
 corners, drawn with `DrawLine`), `triangles` (the rasterizer's second: outlined
 triangles in the corners and a color wheel of filled wedges, drawn with
-`DrawFilledTriangle` and `DrawWireframeTriangle`), `axes` (the coordinate axes and
-corner dots, no ray tracing). A larger `--distance` narrows the field of view of the ray-traced scenes.
+`DrawFilledTriangle` and `DrawWireframeTriangle`), `shaded` (the rasterizer's third: a
+green triangle shaded like the book's demo and a glowing color wheel, drawn with
+`DrawShadedTriangle`), `axes` (the coordinate axes and corner dots, no ray tracing). A larger `--distance` narrows the field of view of the ray-traced scenes.
 
 ## Layout
 
@@ -66,10 +69,11 @@ include/cgfs/   public headers: one folder per layer, one file per concept
                                 lights (a std::variant) and Scene
                 raytracer.h     IntersectRaySphere and RayTracer: Render, ClosestIntersection,
                                 TraceRay (recursive, for reflections), ComputeLighting (shadows)
-  rasterizer/   point.h         Point, and ToPixel (the one coordinate-to-pixel conversion)
+  rasterizer/   point.h         Point (x, y and the intensity h), and ToPixel (the one
+                                coordinate-to-pixel conversion)
                 interpolate.h   Interpolate
                 line.h          DrawLine
-                triangle.h      DrawWireframeTriangle, DrawFilledTriangle
+                triangle.h      DrawWireframeTriangle, DrawFilledTriangle, DrawShadedTriangle
   demo/         raytracer_scenes.h, rasterizer_scenes.h
                                 the pictures shared by render_demo and the golden tests
 src/<layer>/    implementations, mirroring include/cgfs/<layer>/
@@ -100,4 +104,5 @@ committing:
 ./build/release/apps/render_demo --scene mirrorball --width 320 --height 180 --output tests/demo/golden/mirrorball_320x180.ppm
 ./build/release/apps/render_demo --scene lines --width 320 --height 180 --output tests/demo/golden/lines_320x180.ppm
 ./build/release/apps/render_demo --scene triangles --width 320 --height 180 --output tests/demo/golden/triangles_320x180.ppm
+./build/release/apps/render_demo --scene shaded --width 320 --height 180 --output tests/demo/golden/shaded_320x180.ppm
 ```

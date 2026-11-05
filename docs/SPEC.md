@@ -14,8 +14,8 @@ This document is the design reference for the renderer: what it renders and with
 formulas, how the code is structured, how it is built and tested, and how it is expected
 to grow. The current feature set is a ray tracer for spheres with ambient, point and
 directional lights, diffuse shading, specular highlights, shadows and reflections, and
-the first steps of the rasterizer, lines and filled triangles; section 13 lists what
-comes next.
+the first steps of the rasterizer, lines and filled and shaded triangles; section 13
+lists what comes next.
 
 ## 2. Goals and non-goals
 
@@ -155,7 +155,8 @@ the formula.
 
 The rasterizer draws 2D primitives straight into the canvas with `PutPixel`; nothing of
 the ray tracer is involved. A `Point` is a canvas position in the centered integer
-coordinates of 3.1.
+coordinates of 3.1 together with an intensity `h`, a multiplier for the color that only
+the shaded triangle reads; it defaults to 1, the full color.
 
 - `Interpolate(i0, d0, i1, d1)` returns the values of a dependent variable `d` at the
   integers `i0, i0 + 1, ..., i1`, given `d = d0` at `i0` and `d = d1` at `i1`: that is
@@ -191,6 +192,26 @@ coordinates of 3.1.
   neighbouring triangles tile without gaps and overlap on the edge's pixels. Collinear
   vertices give (part of) a line. Section 15 records what the middle-row rule does to
   triangles two rows tall.
+- `DrawShadedTriangle(P0, P1, P2, color)` fills the triangle like `DrawFilledTriangle`
+  and scales the color at every pixel by an intensity interpolated from the vertices'
+  `h`. The vertices are sorted as above, each `h` moving with its vertex. Alongside each
+  x list the sides get an h list from the same calls over the same rows:
+  `h01 = Interpolate(y0, h0, y1, h1)`, `h12 = Interpolate(y1, h1, y2, h2)`,
+  `h02 = Interpolate(y0, h0, y2, h2)` and `h012 = h01 without its last value + h12`.
+  The left and right sides are chosen on the x lists as above and the h lists follow
+  them. Then for every row `y`, with `x_l = trunc(x_left[y - y0])` and
+  `x_r = trunc(x_right[y - y0])`,
+  `h_segment = Interpolate(x_l, h_left[y - y0], x_r, h_right[y - y0])` and the pixel
+  `(x, y)` is set to `color * h_segment[x - x_l]` for every `x` from `x_l` to `x_r`.
+  A row with `x_r < x_l` is skipped before that call: it is a row the filled triangle
+  leaves empty (section 15), and it would violate `Interpolate`'s precondition. So a
+  shaded triangle covers exactly the pixels of the filled triangle with the same
+  vertices, and with `h = 1` at every vertex it is that filled triangle. Interpolating
+  along the sides and then along every row is interpolating over the triangle's plane,
+  what the book's Shading chapter does once the vertices carry lighting. The product is
+  clamped only at the canvas (3.1); `h` is nominally in `[0, 1]` and is not checked. Two
+  triangles that share an edge compute the same `h` on the edge's pixels, since both
+  interpolate it from the same two vertices in the same order.
 - There is no clipping. Pixels outside the canvas are dropped by `PutPixel`, so a line
   or a triangle may run off the canvas; it costs time in proportion to its full size.
 
@@ -265,10 +286,10 @@ demo         raytracer_scenes, rasterizer_scenes   the demo pictures
   tracer now and by the rasterizer's projection step later.
 - `raytracer/scene`: plain data: spheres, lights, background color.
   `raytracer/raytracer`: intersection, lighting, the render loop.
-- `rasterizer/point`: `Point` and `ToPixel`, the one conversion from interpolated
-  coordinates to pixels. `rasterizer/interpolate`: `Interpolate`, the building block.
-  `rasterizer/line`: `DrawLine`. `rasterizer/triangle`: `DrawWireframeTriangle` and
-  `DrawFilledTriangle`; the shaded triangle joins it next (section 13).
+- `rasterizer/point`: `Point`, with its intensity `h`, and `ToPixel`, the one conversion
+  from interpolated coordinates to pixels. `rasterizer/interpolate`: `Interpolate`, the
+  building block. `rasterizer/line`: `DrawLine`. `rasterizer/triangle`:
+  `DrawWireframeTriangle`, `DrawFilledTriangle` and `DrawShadedTriangle`.
 - `demo/raytracer_scenes`: the ray-traced demo scenes, each a function returning a
   `Scene`. `demo/rasterizer_scenes`: the rasterized demo pictures, each a function that
   draws into a canvas. Either way the app and the golden tests render exactly the same
@@ -453,7 +474,12 @@ sphere vector and is valid as long as that vector is not modified. `ClosestInter
 
 ```cpp
 // point.h
-struct Point { int x = 0, y = 0; bool operator==(const Point&) const = default; };  // canvas coordinates
+struct Point {                 // canvas coordinates and the vertex's intensity (section 3.6)
+    int x = 0;
+    int y = 0;
+    double h = 1.0;            // multiplier for the color; read by DrawShadedTriangle only
+    bool operator==(const Point&) const = default;
+};
 constexpr int ToPixel(double coordinate);    // truncation toward zero (section 3.6)
 
 // interpolate.h
@@ -466,6 +492,7 @@ void DrawLine(Canvas& canvas, Point p0, Point p1, Color color);
 // triangle.h
 void DrawWireframeTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
 void DrawFilledTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
+void DrawShadedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);  // color * h
 ```
 
 One header per primitive. Free functions that take the canvas as their first parameter,
@@ -613,6 +640,16 @@ Unit tests:
     owns; a triangle larger than the canvas fills it and one outside it draws nothing;
     the color is clamped. `DrawWireframeTriangle` draws the same pixels as the three
     `DrawLine` calls.
+  - `DrawShadedTriangle`: with `h = 1` at every vertex it gives the filled triangle's
+    canvas for eleven shapes, among them the two whose rows the filled triangle skips
+    (the two-row case and the straddled apex row of section 15); a constant `h` of 0.5
+    gives 127 everywhere; on the right triangle with the vertical side x = 0, `h = 0, 1,
+    0` at its vertices gives `255 * x / 4` at every pixel and `h = 0, 0, 1` gives
+    `255 * y / 4` (every value a multiple of 1/4, so exact to the byte); all six vertex
+    orders give the same canvas and each intensity stays with its vertex; the two
+    triangles of a rectangle cut along its diagonal give identical bytes on the
+    diagonal's three pixels; `h = 2` is clamped to 255 by the canvas and a negative `h`
+    to 0.
 
 Golden-image tests:
 
@@ -625,11 +662,12 @@ Golden-image tests:
   renderer and are committed. The diffuse, specular, reflective and mirror ball
   references show the shadows the spheres cast on the floor and on each other; the flat
   reference has no shadows because ambient light is never blocked; only the reflective
-  and mirror ball references show reflections. `lines_320x180.ppm` and
-  `triangles_320x180.ppm` are the rasterizer's demos (section 9): every pixel of them
-  comes from `DrawLine` or `DrawFilledTriangle`, and because the scenes compute their
-  vertices with integer arithmetic and their colors without any `libm` call, the
-  pictures are reproducible bit for bit on every platform.
+  and mirror ball references show reflections. `lines_320x180.ppm`,
+  `triangles_320x180.ppm` and `shaded_320x180.ppm` are the rasterizer's demos (section
+  9): every pixel of them comes from `DrawLine`, `DrawFilledTriangle` or
+  `DrawShadedTriangle`, and because the scenes compute their vertices with integer
+  arithmetic and their colors and intensities without any `libm` call, the pictures are
+  reproducible bit for bit on every platform.
 - `golden_test.cpp` renders the same scenes and compares every channel of every pixel
   with the reference image. The test passes when no channel differs by more than 1. The
   tolerance absorbs floating-point differences between compilers and standard
@@ -637,7 +675,7 @@ Golden-image tests:
 - The scenes are defined once, in the `demo` layer, shared by `render_demo` and the
   golden test, so the app and the test cannot drift apart.
 - The references are regenerated only when rendering behaviour changes on purpose, with
-  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles> --width 320 --height 180 --output tests/demo/golden/...`
+  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles|shaded> --width 320 --height 180 --output tests/demo/golden/...`
   from a Release build, and the pictures are reviewed before they are committed. The
   `flat` reference doubles as a regression test: neither the specular nor the shadow code
   path may change the output of an ambient-only scene, `diffuse` pins the shadows of
@@ -649,7 +687,7 @@ Golden-image tests:
 `render_demo` renders one of the demo pictures to a file:
 
 ```
-render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|axes] [--width N] [--height N] [--distance D] [--output PATH]
+render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|axes] [--width N] [--height N] [--distance D] [--output PATH]
 ```
 
 Defaults: `reflective`, 1920 x 1080, distance 1, `render.png`. The `mirrorball` scene is
@@ -665,7 +703,13 @@ hue wheel; 110 lines in all, every slope and both endpoint orders among them. Th
 in every corner, each filled and then outlined in a brighter shade the way the book's
 demo does it (a flat top, a vertical edge, a flat bottom and a vertex beyond the canvas
 among them), and over them a color wheel of 24 filled wedges from the origin to the rim
-of a rectangle, which share their edges and tile without gaps. The `axes` scene draws
+of a rectangle, which share their edges and tile without gaps. The `shaded` scene is the
+rasterizer's third: `DrawShadedTrianglesScene` draws on the left a green triangle in the
+proportions of the book's demo (its vertices scaled from the book's 600 x 600 canvas to
+the canvas height) with the intensities 0.3, 0.1 and 1 at its vertices, and on the right
+a glowing color wheel of 24 shaded wedges from a bright center (`h = 1`) to the dim rim
+(`h = 0.2`) of a rectangle, which share their edges and shade continuously across them.
+The `axes` scene draws
 the coordinate axes and corner dots; it exercises the canvas without ray tracing. For the ray-traced scenes the viewport width always matches the canvas aspect
 ratio; `--distance` has no effect on the others. The output format follows the
 extension. The program prints the render time in milliseconds and exits non-zero with a
@@ -699,8 +743,9 @@ row.
   positive) throw `std::invalid_argument`.
 - File I/O failures throw `std::runtime_error` with the path in the message.
 - The ray tracer's render loop, intersection and lighting code never throw and never
-  allocate. The rasterizer's `Interpolate` returns a `std::vector`, one allocation per
-  line, as in the book; `DrawLine` can only throw if that allocation fails.
+  allocate. The rasterizer's `Interpolate` returns a `std::vector`, as in the book: one
+  allocation per line, a few per triangle and one per row of a shaded triangle; the
+  primitives can only throw if an allocation fails.
 - Programming errors inside the library (a non-unit normal, a dimension mismatch that
   slipped past the constructor check) are `assert`ed in Debug builds.
 
@@ -714,6 +759,7 @@ Targets apply to Release builds on a single core. Debug builds have no targets.
 | reflective demo                                  | 320 x 180   | under 50 ms, so the golden test stays cheap      |
 | lines demo (110 lines)                           | 1920 x 1080 | under 10 ms; about 2 ms measured                 |
 | triangles demo (28 filled, 4 outlined)           | 1920 x 1080 | under 20 ms; about 7 ms measured                 |
+| shaded demo (1 triangle, 24 shaded wedges)       | 1920 x 1080 | under 20 ms; about 7 ms measured                 |
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
@@ -733,12 +779,10 @@ section 4 is meant to absorb these steps as additions:
 - Row-parallel rendering with `std::thread` or a parallel algorithm, with golden tests
   proving the output is unchanged.
 - Rasterizer, so far `rasterizer/` with `Point`, `Interpolate`, `DrawLine`,
-  `DrawWireframeTriangle` and `DrawFilledTriangle`. Next, in the book's order: shaded
-  triangles (`Interpolate` of an intensity along the sides and then along every row),
-  then perspective projection of `Vec3` vertices into `Point`s, `model.h` (vertices,
-  triangles, instances), camera transforms, clipping, the depth buffer, shading and
-  textures. `Point` will grow a shading value `h` with a default, which keeps the
-  existing code compiling.
+  `DrawWireframeTriangle`, `DrawFilledTriangle` and `DrawShadedTriangle`. Next, in the
+  book's order: perspective projection of `Vec3` vertices into `Point`s, `model.h`
+  (vertices, triangles, instances), camera transforms, clipping, the depth buffer,
+  shading (which feeds each vertex's lighting into `Point::h`) and textures.
 - Optional interactive window behind a `CGFS_ENABLE_WINDOW` option (SDL2 or similar),
   off by default so the dependency policy in section 7 holds for everyone else.
 
@@ -769,12 +813,18 @@ The judgment calls behind this design, so they are not relitigated by accident.
    pixel centers and flooring would make the staircase translation-invariant; either
    would change every rasterized golden image, so switching is a deliberate decision,
    not a tidy-up.
+9. The vertex intensity `h` is a field of `Point`, with the default 1, as in the book's
+   listings, rather than extra parameters of `DrawShadedTriangle`. The sort that orders
+   the vertices by y then carries each intensity with its point, every `Point{x, y}`
+   written so far keeps meaning "the full color", and the later chapters attach more
+   per-vertex data the same way. `DrawLine` and `DrawFilledTriangle` ignore it.
 
 ## 15. Implementation notes
 
 Measurements and known behaviours of the implementation, recorded 2026-11-02, updated
-2026-11-03 with shadows and reflections and 2026-11-04 with the rasterizer's lines and
-filled triangles and the reorganisation into layers.
+2026-11-03 with shadows and reflections, 2026-11-04 with the rasterizer's lines and
+filled triangles and the reorganisation into layers, and 2026-11-05 with shaded
+triangles.
 
 - Catch2 is pinned to v3.16.1.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
@@ -821,6 +871,19 @@ filled triangles and the reorganisation into layers.
   third being ignored. An exact rule is the sign of the integer cross product
   `(x2 - x0) * (y1 - y0) - (y2 - y0) * (x1 - x0)`; it is not adopted, so the code keeps
   the book's shape. Neither case occurs in the demo.
+- The running sums can also leave the apex row of a triangle empty. Both x lists end at
+  `x2` in exact arithmetic, but as running sums they can land on either side of it, and
+  when the left one truncates above the right one (`-4.999999999999997` against `-5.0`,
+  say) the row has no pixels and the apex pixel is not drawn. A simulation over every
+  triangle with vertices in `[-6, 6]^2` finds such a row in about one triangle in eight:
+  always the apex row for a proper triangle, the apex or the middle vertex's row when
+  the vertices are collinear. The book's code behaves the same. `DrawFilledTriangle`'s
+  inner loop then runs zero times; `DrawShadedTriangle` skips such a row explicitly,
+  because `Interpolate(x_l, ..., x_r, ...)` with `x_l > x_r` would violate the
+  precondition, an assertion failure in Debug builds. The unit tests draw both skipping
+  cases through both functions. Ending every list on the exact `d1` would remove the
+  apex case; it is not adopted, to keep the book's listing, and no demo is visibly
+  affected.
 - An outline drawn over a filled triangle (the corner triangles of the demo) can stick
   out of the fill by one pixel along horizontal-ish edges, where `DrawLine` interpolates
   y over x while the fill interpolates x over y; along vertical-ish edges the two
@@ -828,6 +891,10 @@ filled triangles and the reorganisation into layers.
 - The triangles demo (28 filled triangles, four of them outlined, covering most of the
   canvas) draws in about 7 ms at 1920 x 1080. Each triangle allocates three vectors and
   one more for the concatenation; the fill itself goes through `PutPixel` pixel by pixel.
+- The shaded demo (one shaded triangle and 24 shaded wedges, covering about half of the
+  canvas) draws in about 7 ms at 1920 x 1080. Each shaded triangle allocates six vectors
+  for its sides, two for the concatenations and one per row for `h_segment`, the book's
+  shape; at this size the per-row allocation costs nothing measurable.
 - On 2026-11-04 the tree was reorganised into the layers of 4.2 (`CLAUDE.md` has the
   rules): the rasterizer was split into one file per primitive, the demo pictures moved
   into their own library target with the `axes` picture joining them from the app, the

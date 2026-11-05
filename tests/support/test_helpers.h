@@ -38,7 +38,8 @@ struct StringMaker<cgfs::Rgb8> {
 template <>
 struct StringMaker<cgfs::Point> {
     static std::string convert(const cgfs::Point& p) {
-        return "(" + std::to_string(p.x) + ", " + std::to_string(p.y) + ")";
+        return "(" + std::to_string(p.x) + ", " + std::to_string(p.y) +
+               ", h=" + std::to_string(p.h) + ")";
     }
 };
 

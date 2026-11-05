@@ -16,6 +16,7 @@ using cgfs::Canvas;
 using cgfs::Color;
 using cgfs::DrawFilledTriangle;
 using cgfs::DrawLine;
+using cgfs::DrawShadedTriangle;
 using cgfs::DrawWireframeTriangle;
 using cgfs::Point;
 using cgfs::Rgb8;
@@ -157,4 +158,135 @@ TEST_CASE("DrawWireframeTriangle: draws the three edges", "[rasterizer]") {
     CHECK(wireframe.GetPixel(a.x, a.y) == Rgb8{0, 255, 0});
     CHECK(wireframe.GetPixel(b.x, b.y) == Rgb8{0, 255, 0});
     CHECK(wireframe.GetPixel(c.x, c.y) == Rgb8{0, 255, 0});
+}
+
+TEST_CASE("DrawShadedTriangle: with h = 1 at every vertex it is the filled triangle",
+          "[rasterizer]") {
+    static_assert(Point{3, 4}.h == 1.0, "a Point without an intensity has the full color");
+
+    // Every shape the filled-triangle tests cover, plus the two in which a row has its
+    // left pixel beyond its right one and nothing may be drawn or interpolated for it.
+    const Point triangles[][3] = {
+        {{0, 0}, {4, 0}, {0, 4}},               // a right triangle
+        {{-3, -2}, {4, 1}, {0, 5}},             // a general one
+        {{0, 0}, {4, 4}, {0, 4}},               // the long side on the left
+        {{0, 0}, {-4, 4}, {0, 4}},              // the long side on the right
+        {{0, 6}, {0, 0}, {2, 2}},               // fractional x on the short sides
+        {{-2, 0}, {2, 0}, {0, 2}},              // flat bottom
+        {{-2, 2}, {2, 2}, {0, 0}},              // flat top
+        {{0, 0}, {0, 3}, {0, 6}},               // collinear
+        {{-100, -100}, {100, -100}, {0, 100}},  // beyond the canvas
+        // Two rows with the middle vertex on the lower one: the middle-row rule misjudges
+        // the sides and the lower row is skipped.
+        {{0, 0}, {3, 0}, {1, 1}},
+        // The two running sums for x end on either side of the apex, which is skipped.
+        {{-6, -6}, {-6, -5}, {-5, 2}},
+    };
+    for (const auto& [a, b, c] : triangles) {
+        INFO("triangle (" << a.x << ", " << a.y << ") (" << b.x << ", " << b.y << ") (" << c.x
+                          << ", " << c.y << ")");
+        Canvas filled(32, 32, kBlack);
+        DrawFilledTriangle(filled, a, b, c, kYellow);
+        Canvas shaded(32, 32, kBlack);
+        DrawShadedTriangle(shaded, a, b, c, kYellow);
+        CHECK(Bytes(shaded) == Bytes(filled));
+    }
+}
+
+TEST_CASE("DrawShadedTriangle: a constant h scales the color everywhere", "[rasterizer]") {
+    Canvas canvas(32, 32, kBlack);
+    DrawShadedTriangle(canvas, {-3, -2, 0.5}, {4, 1, 0.5}, {0, 5, 0.5}, kWhite);
+    const std::vector<Point> lit = LitPixels(canvas);
+    REQUIRE(lit.size() > 10);
+    for (const Point p : lit) {
+        INFO("pixel (" << p.x << ", " << p.y << ")");
+        CHECK(canvas.GetPixel(p.x, p.y) == Rgb8{127, 127, 127});  // 127.5 truncated
+    }
+}
+
+TEST_CASE("DrawShadedTriangle: h is interpolated along the sides and then along every row",
+          "[rasterizer]") {
+    // The right triangle with the vertical side x = 0 and the hypotenuse from (4, 0) to
+    // (0, 4). Every value below is a multiple of 1/4, so the interpolation is exact and
+    // the pixels are predictable to the byte: 255 * x / 4, truncated.
+
+    // h = 0 along the vertical side and 1 at (4, 0): along the hypotenuse h falls by 1/4
+    // per row and so does the row's width, so every row rises by 1/4 per pixel and
+    // h(x, y) = x / 4 over the whole triangle.
+    Canvas across(32, 32, kBlack);
+    DrawShadedTriangle(across, {0, 0, 0.0}, {4, 0, 1.0}, {0, 4, 0.0}, kWhite);
+    for (int y = 0; y <= 4; ++y) {
+        for (int x = 0; x + y <= 4; ++x) {
+            const auto value = static_cast<std::uint8_t>(255 * x / 4);
+            INFO("pixel (" << x << ", " << y << ")");
+            CHECK(across.GetPixel(x, y) == Rgb8{value, value, value});
+        }
+    }
+    CHECK(LitPixels(across).size() == 10);  // the x = 0 column is as black as the background
+
+    // h = 0 along the bottom and 1 at (0, 4): both sides rise by 1/4 per row, every row is
+    // constant and h(x, y) = y / 4.
+    Canvas upward(32, 32, kBlack);
+    DrawShadedTriangle(upward, {0, 0, 0.0}, {4, 0, 0.0}, {0, 4, 1.0}, kWhite);
+    for (int y = 0; y <= 4; ++y) {
+        for (int x = 0; x + y <= 4; ++x) {
+            const auto value = static_cast<std::uint8_t>(255 * y / 4);
+            INFO("pixel (" << x << ", " << y << ")");
+            CHECK(upward.GetPixel(x, y) == Rgb8{value, value, value});
+        }
+    }
+}
+
+TEST_CASE("DrawShadedTriangle: the vertex order does not matter and h stays with its vertex",
+          "[rasterizer]") {
+    const Point a{-3, -2, 0.1};
+    const Point b{4, 1, 0.6};
+    const Point c{0, 5, 1.0};
+    const auto draw = [](Point p0, Point p1, Point p2) {
+        Canvas canvas(32, 32, kBlack);
+        DrawShadedTriangle(canvas, p0, p1, p2, kWhite);
+        return Bytes(canvas);
+    };
+    const std::vector<std::uint8_t> reference = draw(a, b, c);
+    CHECK(draw(a, c, b) == reference);
+    CHECK(draw(b, a, c) == reference);
+    CHECK(draw(b, c, a) == reference);
+    CHECK(draw(c, a, b) == reference);
+    CHECK(draw(c, b, a) == reference);
+    // The intensities did travel with their vertices: c is the bright one, a the dim one.
+    Canvas canvas(32, 32, kBlack);
+    DrawShadedTriangle(canvas, a, b, c, kWhite);
+    CHECK(canvas.GetPixel(c.x, c.y) == Rgb8{255, 255, 255});
+    CHECK(canvas.GetPixel(a.x, a.y) == Rgb8{25, 25, 25});
+}
+
+TEST_CASE("DrawShadedTriangle: two triangles sharing an edge agree on its intensities",
+          "[rasterizer]") {
+    // The rectangle of the filled-triangle test, cut along its diagonal from (0, 0) to
+    // (4, 2). Both triangles interpolate the diagonal from the same two vertices, so the
+    // pixels they share, (0, 0), (2, 1) and (4, 2), get the same intensity from either
+    // one. The intensities are multiples of 1/4 so that every interpolated value is
+    // exact and the comparison needs no tolerance.
+    const Point corner{0, 0, 0.25};
+    const Point far_corner{4, 2, 0.75};
+    Canvas lower(16, 16, kBlack);
+    DrawShadedTriangle(lower, corner, {4, 0, 0.5}, far_corner, kWhite);
+    Canvas upper(16, 16, kBlack);
+    DrawShadedTriangle(upper, corner, far_corner, {0, 2, 0.5}, kWhite);
+
+    CHECK(lower.GetPixel(0, 0) == Rgb8{63, 63, 63});
+    CHECK(lower.GetPixel(2, 1) == Rgb8{127, 127, 127});
+    CHECK(lower.GetPixel(4, 2) == Rgb8{191, 191, 191});
+    CHECK(upper.GetPixel(0, 0) == lower.GetPixel(0, 0));
+    CHECK(upper.GetPixel(2, 1) == lower.GetPixel(2, 1));
+    CHECK(upper.GetPixel(4, 2) == lower.GetPixel(4, 2));
+}
+
+TEST_CASE("DrawShadedTriangle: the shaded color is clamped by the canvas only", "[rasterizer]") {
+    Canvas canvas(16, 16, kBlack);
+    DrawShadedTriangle(canvas, {-2, -2, 2.0}, {2, -2, 2.0}, {0, 2, 2.0}, Color{100.0, 200.0, 10.0});
+    CHECK(canvas.GetPixel(0, 0) == Rgb8{200, 255, 20});
+
+    DrawShadedTriangle(canvas, {-2, -2, -1.0}, {2, -2, -1.0}, {0, 2, -1.0}, kWhite);
+    CHECK(canvas.GetPixel(0, 0) == Rgb8{0, 0, 0});
 }

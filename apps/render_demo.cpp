@@ -67,6 +67,8 @@ constexpr DemoScene kScenes[] = {
      Rasterized<cgfs::demo::DrawLinesScene>},
     {"triangles", "filled and outlined triangles drawn by the rasterizer",
      Rasterized<cgfs::demo::DrawTrianglesScene>},
+    {"shaded", "shaded triangles drawn by the rasterizer: an intensity per vertex",
+     Rasterized<cgfs::demo::DrawShadedTrianglesScene>},
     {"axes", "the coordinate axes and corner dots (no ray tracing)",
      Rasterized<cgfs::demo::DrawAxesScene>},
 };

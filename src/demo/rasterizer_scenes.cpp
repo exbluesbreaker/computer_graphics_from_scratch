@@ -205,6 +205,43 @@ void DrawTrianglesScene(Canvas& canvas) {
     }
 }
 
+void DrawShadedTrianglesScene(Canvas& canvas) {
+    constexpr Color kBackground{18.0, 20.0, 28.0};
+
+    canvas.Clear(kBackground);
+
+    // The book's shaded triangle: its demos draw on a 600 x 600 canvas a green triangle
+    // with the intensities 0.3, 0.1 and 1.0 at its vertices. The book's canvas height
+    // becomes this canvas's height, and the triangle moves to the left part.
+    constexpr int kBookCanvas = 600;
+    const int unit = canvas.height();
+    const int triangle_center_x = -canvas.width() * 9 / 32;
+    const auto from_book = [&](int x, int y, double h) {
+        return Point{triangle_center_x + x * unit / kBookCanvas, y * unit / kBookCanvas, h};
+    };
+    DrawShadedTriangle(canvas, from_book(-200, -250, 0.3), from_book(200, 50, 0.1),
+                       from_book(20, 250, 1.0), colors::kGreen);
+
+    // A glowing color wheel: wedges from a bright center to the dim rim of a rectangle,
+    // once around the hue wheel. Neighbouring wedges share an edge and interpolate its x
+    // and h from the same two vertices, so the shading is continuous across it; only the
+    // hue changes from wedge to wedge.
+    constexpr double kRimIntensity = 0.2;
+    constexpr int kWedgesPerSide = 6;
+    const Point center{canvas.width() * 3 / 16, 0, 1.0};
+    const std::vector<Point> around =
+        AroundRectangle(canvas.width() / 4, canvas.height() * 2 / 5, kWedgesPerSide);
+    const auto rim = [&](int k) {
+        const Point p = around[static_cast<std::size_t>(k)];
+        return Point{center.x + p.x, center.y + p.y, kRimIntensity};
+    };
+    const int wedges = static_cast<int>(around.size());
+    for (int k = 0; k < wedges; ++k) {
+        DrawShadedTriangle(canvas, center, rim(k), rim((k + 1) % wedges),
+                           Wheel(static_cast<double>(k) / wedges));
+    }
+}
+
 void DrawAxesScene(Canvas& canvas) {
     constexpr Color kGray{160.0, 160.0, 160.0};
     constexpr Color kDarkGreen{0.0, 160.0, 0.0};
