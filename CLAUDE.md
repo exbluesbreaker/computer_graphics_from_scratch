@@ -8,7 +8,8 @@ A change is finished when the code, the tests, the spec and the README agree.
 
 A software 3D renderer written from scratch in C++20, following Gabriel Gambetta's
 *Computer Graphics from Scratch* chapter by chapter: a ray tracer (complete through
-reflections) and a rasterizer (lines and filled triangles so far). It exists for
+reflections) and a rasterizer (lines, filled and shaded triangles, perspective
+projection and the wireframes of objects made of triangles so far). It exists for
 learning: every algorithm is written by hand, reads like the book's listing and is
 pinned by unit tests and golden images. No graphics libraries, no GPU.
 
@@ -94,8 +95,10 @@ math/         vec3                                            vector algebra; no
 image/        color, canvas, image_io                         the picture: colors, the pixel buffer, file formats
 camera/       viewport                                        how canvas pixels map into the world; shared by both renderers
 raytracer/    scene, raytracer                                the ray tracing renderer: spheres, lights, tracing
-rasterizer/   point, interpolate, line, triangle, projection  the rasterizing renderer: 2D primitives and the
-                                                              projection that feeds them, one per file
+rasterizer/   point, interpolate, line, triangle, projection, object
+                                                              the rasterizing renderer: 2D primitives, the
+                                                              projection that feeds them and objects made of
+                                                              triangles, one per file
 demo/         raytracer_scenes, rasterizer_scenes             the demo pictures, built on everything above
 ```
 

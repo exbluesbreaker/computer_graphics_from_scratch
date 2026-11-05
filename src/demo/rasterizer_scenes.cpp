@@ -3,6 +3,7 @@
 #include <cgfs/image/color.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/line.h>
+#include <cgfs/rasterizer/object.h>
 #include <cgfs/rasterizer/point.h>
 #include <cgfs/rasterizer/projection.h>
 #include <cgfs/rasterizer/triangle.h>
@@ -281,6 +282,66 @@ void DrawCubeScene(Canvas& canvas, const Viewport& viewport) {
     edge(front_b, back_b, colors::kGreen);
     edge(front_c, back_c, colors::kGreen);
     edge(front_d, back_d, colors::kGreen);
+}
+
+void DrawObjectsScene(Canvas& canvas, const Viewport& viewport) {
+    constexpr Color kBackground{18.0, 20.0, 28.0};
+    constexpr Color kPurple{255.0, 0.0, 255.0};
+    constexpr Color kCyan{0.0, 255.0, 255.0};
+    constexpr Color kOrange{255.0, 128.0, 0.0};
+    constexpr Color kLime{128.0, 255.0, 0.0};
+    constexpr Color kSky{0.0, 128.0, 255.0};
+    constexpr Color kPink{255.0, 0.0, 128.0};
+
+    canvas.Clear(kBackground);
+
+    // The book's cube: its eight corners at x, y, z = ±1, in the book's order, and its
+    // six faces as two triangles each. The cube is then moved left and away from the
+    // camera, as the book does by hand, since there are no transforms yet.
+    const std::vector<Vec3> cube_corners = {
+        {1.0, 1.0, 1.0},    {-1.0, 1.0, 1.0},   // 0, 1: the top edge of the back face
+        {-1.0, -1.0, 1.0},  {1.0, -1.0, 1.0},   // 2, 3: the bottom edge of the back face
+        {1.0, 1.0, -1.0},   {-1.0, 1.0, -1.0},  // 4, 5: the top edge of the front face
+        {-1.0, -1.0, -1.0}, {1.0, -1.0, -1.0},  // 6, 7: the bottom edge of the front face
+    };
+    const std::vector<Triangle> cube_faces = {
+        {{0, 1, 2}, colors::kRed},    {{0, 2, 3}, colors::kRed},     // back, z = 1
+        {{4, 0, 3}, colors::kGreen},  {{4, 3, 7}, colors::kGreen},   // right, x = 1
+        {{5, 4, 7}, colors::kBlue},   {{5, 7, 6}, colors::kBlue},    // front, z = -1
+        {{1, 5, 6}, colors::kYellow}, {{1, 6, 2}, colors::kYellow},  // left, x = -1
+        {{4, 5, 1}, kPurple},         {{4, 1, 0}, kPurple},          // top, y = 1
+        {{2, 6, 7}, kCyan},           {{2, 7, 3}, kCyan},            // bottom, y = -1
+    };
+    const auto moved = [](const std::vector<Vec3>& points, Vec3 offset) {
+        std::vector<Vec3> result;
+        result.reserve(points.size());
+        for (const Vec3 p : points) {
+            result.push_back(p + offset);
+        }
+        return result;
+    };
+    RenderObject(canvas, viewport, moved(cube_corners, {-1.5, 0.0, 7.0}), cube_faces);
+
+    // A square pyramid of the same height: the apex above the center of a base that is
+    // the bottom face of the same cube, the base first so that every side owns its base
+    // edge; moved to the right the same distance. Every edge of a closed surface belongs
+    // to two triangles and shows the color of the one drawn later, which is why the base
+    // and the cube's faces are left with their diagonals in their own color.
+    const std::vector<Vec3> pyramid_corners = {
+        {0.0, 1.0, 0.0},     // 0: the apex
+        {-1.0, -1.0, -1.0},  // 1: front left
+        {1.0, -1.0, -1.0},   // 2: front right
+        {1.0, -1.0, 1.0},    // 3: back right
+        {-1.0, -1.0, 1.0},   // 4: back left
+    };
+    const std::vector<Triangle> pyramid_faces = {
+        {{1, 2, 3}, colors::kWhite}, {{1, 3, 4}, colors::kWhite},  // the base, y = -1
+        {{0, 1, 2}, kOrange},                                      // front, z = -1
+        {{0, 2, 3}, kLime},                                        // right, x = 1
+        {{0, 3, 4}, kSky},                                         // back, z = 1
+        {{0, 4, 1}, kPink},                                        // left, x = -1
+    };
+    RenderObject(canvas, viewport, moved(pyramid_corners, {1.5, 0.0, 7.0}), pyramid_faces);
 }
 
 void DrawAxesScene(Canvas& canvas) {

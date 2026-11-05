@@ -69,7 +69,8 @@ add_library(cgfs STATIC
     src/rasterizer/interpolate.cpp
     src/rasterizer/line.cpp
     src/rasterizer/triangle.cpp
-    src/rasterizer/projection.cpp)
+    src/rasterizer/projection.cpp
+    src/rasterizer/object.cpp)
 add_library(cgfs::cgfs ALIAS cgfs)
 target_include_directories(cgfs PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_compile_features(cgfs PUBLIC cxx_std_20)

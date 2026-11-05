@@ -41,6 +41,19 @@ void DrawShadedTrianglesScene(Canvas& canvas);
 /// viewport, so render_demo's --distance zooms it.
 void DrawCubeScene(Canvas& canvas, const Viewport& viewport);
 
+/// The rasterizer's first picture of objects made of triangles, each a vertex list and a
+/// triangle list drawn with RenderObject: on the left the book's cube, eight corners at
+/// x, y, z = ±1 moved to x -= 1.5, z += 7 and twelve triangles in six colors, two per
+/// face (red at the back, green on the right, blue in front, yellow on the left, purple
+/// on top, cyan underneath); on the right a square pyramid of the same height moved the
+/// other way (x += 1.5), five vertices and six triangles: a white base of two triangles
+/// and four sides in four more colors. Every vertex is projected once with ProjectVertex
+/// through `viewport` and every triangle outlined with DrawWireframeTriangle, so the
+/// faces show their diagonals and nothing is hidden; an edge shared by two triangles
+/// shows the color of the one drawn later. Clears the canvas to a dark background first;
+/// depends on the viewport like the cube, so render_demo's --distance zooms it.
+void DrawObjectsScene(Canvas& canvas, const Viewport& viewport);
+
 /// The coordinate axes through the origin, a dot at the origin and a colored dot in
 /// each corner (red top-left, green top-right, blue bottom-left, black bottom-right): a
 /// quick visual check of the canvas's coordinate system. Drawn with PutPixel alone, on

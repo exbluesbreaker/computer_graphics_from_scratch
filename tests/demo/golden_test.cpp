@@ -119,3 +119,11 @@ TEST_CASE("cube scene matches the reference drawing", "[golden]") {
         },
         "cube_320x180.ppm");
 }
+
+TEST_CASE("objects scene matches the reference drawing", "[golden]") {
+    CheckDrawingMatchesGolden(
+        [](cgfs::Canvas& canvas) {
+            cgfs::demo::DrawObjectsScene(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas));
+        },
+        "objects_320x180.ppm");
+}
