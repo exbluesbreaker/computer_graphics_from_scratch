@@ -13,16 +13,19 @@ FetchContent_MakeAvailable(Catch2)
 # The test tree mirrors the source tree: tests/<layer>/<module>_test.cpp.
 add_executable(cgfs_tests
     math/vec3_test.cpp
+    math/mat4_test.cpp
     image/color_test.cpp
     image/canvas_test.cpp
     image/image_io_test.cpp
     camera/viewport_test.cpp
+    camera/camera_test.cpp
     raytracer/raytracer_test.cpp
     rasterizer/interpolate_test.cpp
     rasterizer/line_test.cpp
     rasterizer/triangle_test.cpp
     rasterizer/projection_test.cpp
     rasterizer/object_test.cpp
+    rasterizer/model_test.cpp
     rasterizer/instance_test.cpp
     rasterizer/scene_test.cpp
     demo/golden_test.cpp)

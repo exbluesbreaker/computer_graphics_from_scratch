@@ -1,6 +1,8 @@
+#include <cgfs/camera/camera.h>
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
+#include <cgfs/math/mat4.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/instance.h>
 #include <cgfs/rasterizer/model.h>
@@ -17,9 +19,11 @@
 #include "rasterizer/pixel_helpers.h"
 #include "support/test_helpers.h"
 
+using cgfs::Camera;
 using cgfs::Canvas;
 using cgfs::DrawWireframeTriangle;
 using cgfs::Instance;
+using cgfs::MakeOYRotationMatrix;
 using cgfs::Model;
 using cgfs::Point;
 using cgfs::RenderInstance;
@@ -39,10 +43,11 @@ constexpr int kSize = 32;
 
 Viewport TestViewport() { return Viewport(kSize, kSize); }
 
-// A fresh black canvas with the scene rendered on it.
-Canvas CanvasWithScene(const std::vector<Model>& models, const std::vector<Instance>& instances) {
+// A fresh black canvas with the scene rendered on it, as `camera` sees it.
+Canvas CanvasWithScene(const std::vector<Model>& models, const std::vector<Instance>& instances,
+                       const Camera& camera = Camera{}) {
     Canvas canvas(kSize, kSize, kBlack);
-    RenderScene(canvas, TestViewport(), models, instances);
+    RenderScene(canvas, TestViewport(), models, instances, camera);
     return canvas;
 }
 
@@ -66,6 +71,16 @@ Canvas CanvasWithOutlines(const std::vector<Outline>& outlines) {
 Model SmallTriangle(cgfs::Color color) {
     return {
         .vertices = {{0.125, 0.125, 0.0}, {-0.125, 0.125, 0.0}, {0.0, -0.125, 0.0}},
+        .triangles = {{{0, 1, 2}, color}},
+    };
+}
+
+// The same triangle with corners 0.14 from its center instead of 0.125: they land on the
+// same pixels (0.14 * 32 = 4.48 truncates to 4) but not on a pixel boundary, so a turned
+// camera's cos and sin, exact only to a few ulps, cannot move them by a pixel.
+Model OffGridTriangle(cgfs::Color color) {
+    return {
+        .vertices = {{0.14, 0.14, 0.0}, {-0.14, 0.14, 0.0}, {0.0, -0.14, 0.0}},
         .triangles = {{{0, 1, 2}, color}},
     };
 }
@@ -143,4 +158,60 @@ TEST_CASE("RenderScene: the model and instance lists may be any contiguous range
     Canvas canvas(kSize, kSize, kBlack);
     RenderScene(canvas, TestViewport(), models, instances);
     CHECK(Bytes(canvas) == Bytes(CanvasWithOutlines({SmallOutline(0, 0)})));
+}
+
+TEST_CASE("RenderScene: without a camera the scene is seen from the origin, the default camera",
+          "[rasterizer]") {
+    const std::vector<Model> models = {SmallTriangle(kWhite)};
+    const std::vector<Instance> instances = {{.model = 0, .position = {0.25, 0.0, 1.0}}};
+    CHECK(Bytes(CanvasWithScene(models, instances)) ==
+          Bytes(CanvasWithScene(models, instances, Camera{})));
+    CHECK(Bytes(CanvasWithScene(models, instances)) ==
+          Bytes(CanvasWithOutlines({SmallOutline(8, 0)})));
+}
+
+TEST_CASE("RenderScene: moving the camera moves the picture the opposite way", "[rasterizer]") {
+    const std::vector<Model> models = {SmallTriangle(kWhite)};
+    const std::vector<Instance> instances = {{.model = 0, .position = {0.0, 0.0, 1.0}}};
+    // The camera steps left: the triangle appears to the right.
+    CHECK(Bytes(CanvasWithScene(models, instances, Camera{.position = {-0.25, 0.0, 0.0}})) ==
+          Bytes(CanvasWithOutlines({SmallOutline(8, 0)})));
+    // The camera rises: the triangle appears lower.
+    CHECK(Bytes(CanvasWithScene(models, instances, Camera{.position = {0.0, 0.25, 0.0}})) ==
+          Bytes(CanvasWithOutlines({SmallOutline(0, -8)})));
+    // The camera steps back: the triangle is twice as far, half the size.
+    CHECK(Bytes(CanvasWithScene(models, instances, Camera{.position = {0.0, 0.0, -1.0}})) ==
+          Bytes(CanvasWithOutlines({{{2, 2}, {-2, 2}, {0, -2}}})));
+}
+
+TEST_CASE("RenderScene: a turned camera sees what stands in its new line of sight",
+          "[rasterizer]") {
+    // The triangle stands at (-1, 0, 0), beside the default camera rather than in front
+    // of it (its vertices have z <= 0, which ProjectVertex rejects), turned to face a
+    // camera that looks along -X. A camera turned 90 degrees to its left looks along -X
+    // and sees it straight ahead, 1 away, as the default camera sees the same triangle
+    // at (0, 0, 1).
+    const std::vector<Model> models = {OffGridTriangle(kWhite)};
+    const std::vector<Instance> instances = {
+        {.model = 0, .position = {-1.0, 0.0, 0.0}, .orientation = MakeOYRotationMatrix(90.0)}};
+    const Camera turned{.orientation = MakeOYRotationMatrix(90.0)};
+    CHECK(Bytes(CanvasWithScene(models, instances, turned)) ==
+          Bytes(CanvasWithOutlines({SmallOutline(0, 0)})));
+}
+
+TEST_CASE("RenderScene: the camera and the model transform combine into one matrix",
+          "[rasterizer]") {
+    // The book's demo camera, moved and turned. An instance turned the same way and
+    // placed 1 ahead along the camera's line of sight looks exactly as the untransformed
+    // instance at (0, 0, 1) looks to the default camera.
+    const Camera camera{.position = {-3.0, 1.0, 2.0}, .orientation = MakeOYRotationMatrix(-30.0)};
+    const std::vector<Model> models = {OffGridTriangle(kWhite)};
+    const std::vector<Instance> ahead = {
+        {.model = 0,
+         .position = camera.position + camera.orientation * Vec3{0.0, 0.0, 1.0},
+         .orientation = camera.orientation}};
+    const std::vector<Instance> plain = {{.model = 0, .position = {0.0, 0.0, 1.0}}};
+    CHECK(Bytes(CanvasWithScene(models, ahead, camera)) == Bytes(CanvasWithScene(models, plain)));
+    CHECK(Bytes(CanvasWithScene(models, ahead, camera)) ==
+          Bytes(CanvasWithOutlines({SmallOutline(0, 0)})));
 }

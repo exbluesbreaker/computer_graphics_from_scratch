@@ -1,6 +1,8 @@
 #include <cgfs/demo/rasterizer_scenes.h>
 
+#include <cgfs/camera/camera.h>
 #include <cgfs/image/color.h>
+#include <cgfs/math/mat4.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/instance.h>
 #include <cgfs/rasterizer/line.h>
@@ -406,6 +408,28 @@ void DrawInstancesScene(Canvas& canvas, const Viewport& viewport) {
     }
 
     RenderScene(canvas, viewport, models, instances);
+}
+
+void DrawCameraScene(Canvas& canvas, const Viewport& viewport) {
+    constexpr Color kBackground{18.0, 20.0, 28.0};
+
+    canvas.Clear(kBackground);
+
+    // The book's closing scene: one cube model, two instances with a model transform
+    // each, and a camera that has left the origin.
+    const std::vector<Model> models = {Cube()};
+    constexpr std::size_t kCube = 0;
+    const std::vector<Instance> instances = {
+        {.model = kCube, .position = {-1.5, 0.0, 7.0}, .scale = 0.75},
+        {.model = kCube, .position = {1.25, 2.5, 7.5}, .orientation = MakeOYRotationMatrix(195.0)},
+    };
+
+    // The camera stands to the left of the cubes, a little above the first, and turns 30
+    // degrees to its right, toward them. Everything stays well in front of it, which
+    // nothing enforces until the clipping step.
+    const Camera camera{.position = {-3.0, 1.0, 2.0}, .orientation = MakeOYRotationMatrix(-30.0)};
+
+    RenderScene(canvas, viewport, models, instances, camera);
 }
 
 void DrawAxesScene(Canvas& canvas) {

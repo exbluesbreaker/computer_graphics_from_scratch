@@ -63,6 +63,7 @@ add_library(cgfs STATIC
     src/image/image_io.cpp
     # camera: how canvas pixels map into the world
     src/camera/viewport.cpp
+    src/camera/camera.cpp
     # raytracer: the ray tracing renderer
     src/raytracer/raytracer.cpp
     # rasterizer: the rasterizing renderer, one concept per file
@@ -71,6 +72,7 @@ add_library(cgfs STATIC
     src/rasterizer/triangle.cpp
     src/rasterizer/projection.cpp
     src/rasterizer/object.cpp
+    src/rasterizer/model.cpp
     src/rasterizer/instance.cpp
     src/rasterizer/scene.cpp)
 add_library(cgfs::cgfs ALIAS cgfs)

@@ -67,6 +67,18 @@ void DrawObjectsScene(Canvas& canvas, const Viewport& viewport);
 /// render_demo's --distance zooms it.
 void DrawInstancesScene(Canvas& canvas, const Viewport& viewport);
 
+/// The chapter's closing picture, two cubes seen through a camera that has moved and
+/// turned, drawn with RenderScene: the cube model stored once and two instances with a
+/// model transform each, the first scaled to 0.75 at (-1.5, 0, 7), the second turned 195
+/// degrees about Y at (1.25, 2.5, 7.5), the instances and the camera of the book's demo.
+/// The camera stands at (-3, 1, 2), to the left of the cubes and a little above the
+/// first, and is turned -30 degrees about Y, that is 30 degrees to its right, toward
+/// them. Every vertex goes through one matrix, the camera matrix times the instance's
+/// model matrix, and then through ProjectVertex as before; the projection is not part of
+/// the matrix. Wireframes with nothing hidden; clears the canvas to a dark background
+/// first; depends on the viewport, so render_demo's --distance zooms it.
+void DrawCameraScene(Canvas& canvas, const Viewport& viewport);
+
 /// The coordinate axes through the origin, a dot at the origin and a colored dot in
 /// each corner (red top-left, green top-right, blue bottom-left, black bottom-right): a
 /// quick visual check of the canvas's coordinate system. Drawn with PutPixel alone, on

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cgfs/camera/viewport.h>
+#include <cgfs/image/canvas.h>
+#include <cgfs/math/mat4.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/object.h>
 
@@ -19,5 +22,17 @@ struct Model {
     std::vector<Vec3> vertices;
     std::vector<Triangle> triangles;
 };
+
+/// Draw the wireframe of a model under a transform: every vertex V becomes
+/// `transform * V`, and the transformed vertices are drawn with the model's triangles by
+/// RenderObject, which projects each of them with ProjectVertex and outlines each
+/// triangle; the book's RenderModel. `transform` is the whole chain from the model's
+/// coordinates to the camera's, usually the camera matrix times the instance's model
+/// matrix (see RenderScene). The projection is not part of it, on purpose (see Mat4).
+///
+/// Preconditions: every transformed vertex has z > 0, asserted by ProjectVertex; every
+/// triangle's indices are less than `model.vertices.size()`, asserted by RenderObject.
+void RenderModel(Canvas& canvas, const Viewport& viewport, const Model& model,
+                 const Mat4& transform);
 
 }  // namespace cgfs

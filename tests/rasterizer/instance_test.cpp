@@ -1,6 +1,7 @@
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
+#include <cgfs/math/mat4.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/instance.h>
 #include <cgfs/rasterizer/model.h>
@@ -9,6 +10,7 @@
 #include <cgfs/rasterizer/triangle.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -18,6 +20,11 @@
 using cgfs::Canvas;
 using cgfs::DrawWireframeTriangle;
 using cgfs::Instance;
+using cgfs::MakeModelMatrix;
+using cgfs::MakeOYRotationMatrix;
+using cgfs::MakeScalingMatrix;
+using cgfs::MakeTranslationMatrix;
+using cgfs::Mat4;
 using cgfs::Model;
 using cgfs::Point;
 using cgfs::RenderInstance;
@@ -65,6 +72,20 @@ const Model kTriangle{
     .vertices = {{0.25, 0.25, 0.0}, {-0.25, 0.25, 0.0}, {0.0, -0.25, 0.0}},
     .triangles = {{{0, 1, 2}, kWhite}},
 };
+
+// A lopsided triangle, so that its mirror image is a different picture: placed at
+// (0, 0, 1) its corners land on (8, 8), (-8, 0) and (4, -8).
+const Model kLopsided{
+    .vertices = {{0.25, 0.25, 0.0}, {-0.25, 0.0, 0.0}, {0.125, -0.25, 0.0}},
+    .triangles = {{{0, 1, 2}, kWhite}},
+};
+
+constexpr double kEpsilon = 1e-12;
+
+bool Near(Vec3 a, Vec3 b) {
+    return std::abs(a.x - b.x) < kEpsilon && std::abs(a.y - b.y) < kEpsilon &&
+           std::abs(a.z - b.z) < kEpsilon;
+}
 
 }  // namespace
 
@@ -134,4 +155,49 @@ TEST_CASE("RenderInstance: a model without triangles, or without vertices, draws
                                        Model{}};
     CHECK(LitPixels(CanvasWithInstance({.model = 0, .position = {0.0, 0.0, 1.0}}, models)).empty());
     CHECK(LitPixels(CanvasWithInstance({.model = 1, .position = {0.0, 0.0, 1.0}}, models)).empty());
+}
+
+TEST_CASE("MakeModelMatrix: with the default orientation and scale it is the translation",
+          "[rasterizer]") {
+    const Instance instance{.model = 0, .position = {1.0, 2.0, 3.0}};
+    CHECK(MakeModelMatrix(instance) == MakeTranslationMatrix({1.0, 2.0, 3.0}));
+    CHECK(MakeModelMatrix(instance) * Vec3{0.25, -0.25, 0.0} == Vec3{1.25, 1.75, 3.0});
+}
+
+TEST_CASE("MakeModelMatrix: scales first, then rotates, then translates", "[rasterizer]") {
+    const Instance instance{.model = 0,
+                            .position = {1.0, 2.0, 3.0},
+                            .orientation = MakeOYRotationMatrix(90.0),
+                            .scale = 2.0};
+    const Mat4 model_matrix = MakeModelMatrix(instance);
+    // (1, 0, 0) is scaled to (2, 0, 0), turned to (0, 0, 2) and moved to (1, 2, 5).
+    CHECK(Near(model_matrix * Vec3{1.0, 0.0, 0.0}, {1.0, 2.0, 5.0}));
+    // The model's origin is only moved: the scaling and the rotation happen about it.
+    CHECK(Near(model_matrix * Vec3{}, {1.0, 2.0, 3.0}));
+    CHECK(model_matrix == MakeTranslationMatrix(instance.position) * instance.orientation *
+                              MakeScalingMatrix(instance.scale));
+}
+
+TEST_CASE("RenderInstance: the scale grows or shrinks the model about its own origin",
+          "[rasterizer]") {
+    const std::vector<Model> models = {kTriangle};
+    // Half the size, in place.
+    CHECK(Bytes(CanvasWithInstance({.model = 0, .position = {0.0, 0.0, 1.0}, .scale = 0.5},
+                                   models)) ==
+          Bytes(CanvasWithOutlines({{{4, 4}, {-4, 4}, {0, -4}}})));
+    // Twice the size twice as far: on the same rays, the same picture.
+    CHECK(Bytes(CanvasWithInstance({.model = 0, .position = {0.0, 0.0, 2.0}, .scale = 2.0},
+                                   models)) ==
+          Bytes(CanvasWithInstance({.model = 0, .position = {0.0, 0.0, 1.0}}, models)));
+}
+
+TEST_CASE("RenderInstance: the orientation turns the model about its own origin", "[rasterizer]") {
+    const std::vector<Model> models = {kLopsided};
+    const Canvas upright = CanvasWithInstance({.model = 0, .position = {0.0, 0.0, 1.0}}, models);
+    CHECK(Bytes(upright) == Bytes(CanvasWithOutlines({{{8, 8}, {-8, 0}, {4, -8}}})));
+    // A half turn about Y mirrors it in x; its origin, and so its place, does not move.
+    const Canvas turned = CanvasWithInstance(
+        {.model = 0, .position = {0.0, 0.0, 1.0}, .orientation = MakeOYRotationMatrix(180.0)},
+        models);
+    CHECK(Bytes(turned) == Bytes(CanvasWithOutlines({{{-8, 8}, {8, 0}, {-4, -8}}})));
 }

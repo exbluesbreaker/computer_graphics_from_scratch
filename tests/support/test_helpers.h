@@ -3,6 +3,7 @@
 // Teaches Catch2 how to print the project's value types in assertion messages.
 
 #include <cgfs/image/color.h>
+#include <cgfs/math/mat4.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/point.h>
 
@@ -16,6 +17,21 @@ struct StringMaker<cgfs::Vec3> {
     static std::string convert(const cgfs::Vec3& v) {
         return "(" + std::to_string(v.x) + ", " + std::to_string(v.y) + ", " +
                std::to_string(v.z) + ")";
+    }
+};
+
+template <>
+struct StringMaker<cgfs::Mat4> {
+    static std::string convert(const cgfs::Mat4& matrix) {
+        std::string text = "Mat4[";
+        for (int row = 0; row < 4; ++row) {
+            text += row == 0 ? "[" : " [";
+            for (int col = 0; col < 4; ++col) {
+                text += (col == 0 ? "" : ", ") + std::to_string(matrix.m[row][col]);
+            }
+            text += "]";
+        }
+        return text + "]";
     }
 };
 

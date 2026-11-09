@@ -16,7 +16,8 @@ to grow. The current feature set is a ray tracer for spheres with ambient, point
 directional lights, diffuse shading, specular highlights, shadows and reflections, and
 the first steps of the rasterizer, lines, filled and shaded triangles, the perspective
 projection of vertices, wireframe objects made of triangles and scenes of instances of
-models; section 13 lists what comes next.
+models, each with a model transform, seen from a movable camera; section 13 lists what
+comes next.
 
 ## 2. Goals and non-goals
 
@@ -275,19 +276,79 @@ rotation until the transforms step).
 - `RenderInstance(viewport, instance, models)` draws `models[instance.model]` with every
   vertex `V` moved to `V' = V + instance.position`, through `RenderObject` (3.8) with
   the model's triangles: the book's `RenderInstance`, whose projection loop and triangle
-  loop are `RenderObject`'s. The model is unchanged. Preconditions:
-  `instance.model < models.size()`, asserted; every moved vertex has `z > 0`, asserted
-  by `ProjectVertex`.
+  loop are `RenderObject`'s. Since 3.10 the move is the instance's model matrix, which
+  with the default orientation and scale adds exactly `position`. The model is
+  unchanged. Preconditions: `instance.model < models.size()`, asserted; every moved
+  vertex has `z > 0`, asserted by `ProjectVertex`.
 - A scene is a model list and an instance list, the same shape as an object (a vertex
   list and a triangle list that indexes it) one level up; there is no scene type until a
   scene holds more than those two lists (section 14, decision 11).
-  `RenderScene(viewport, models, instances)` draws every instance in list order with
-  `RenderInstance`: the book's `RenderScene`. Where two instances overlap, the later
-  one's edges show, as for the triangles within an object.
+  `RenderScene(viewport, models, instances, camera)` draws every instance in list order
+  as the camera sees it (3.10); with the default camera the result is `RenderInstance`'s
+  for each: the book's `RenderScene`. Where two instances overlap, the later one's edges
+  show, as for the triangles within an object.
 - Wireframes, no hidden-surface removal and no clipping, as in 3.8: every instance must
   stand entirely in front of the camera.
 
-### 3.10 Numeric conventions
+### 3.10 Rasterizer: model and camera transforms
+
+An instance is placed by a scaling, a rotation and a translation, applied in that order,
+and the camera stands anywhere, turned any way. Both are 4 x 4 matrices on homogeneous
+coordinates and are composed into one matrix per instance; the perspective projection
+stays outside the matrices (section 14, decision 12).
+
+- `Mat4` is a 4 x 4 matrix of doubles, `m[row][col]`, all zeros by default;
+  `Mat4::Identity()` changes nothing. `A * B` is the matrix product, the transform that
+  applies `B` first and then `A`. `M * p`, for a `Vec3` p, applies `M` to the homogeneous
+  point `(p.x, p.y, p.z, 1)` and returns `(x / w, y / w, z / w)`, the way back to
+  Cartesian coordinates; for the affine matrices built here, whose bottom row is
+  `(0, 0, 0, 1)`, `w` is exactly 1 and the division changes nothing. `Transposed(M)`
+  exchanges rows and columns; for a rotation matrix it is the inverse.
+- `MakeScalingMatrix(s)` is `diag(s, s, s, 1)`. `MakeTranslationMatrix(t)` is the
+  identity with `(tx, ty, tz)` as its last column, so that
+  `M (x, y, z, 1) = (x + tx, y + ty, z + tz, 1)`. `MakeOYRotationMatrix(degrees)` is the
+  book's demo matrix `[[cos, 0, -sin, 0], [0, 1, 0, 0], [sin, 0, cos, 0], [0, 0, 0, 1]]`
+  of the angle in radians: `x' = x cos - z sin`, `z' = x sin + z cos`, y unchanged, so a
+  positive angle turns +X toward +Z and +Z toward -X. It is the one rotation the chapter
+  needs; it calls `cos` and `sin`, the rasterizer's first `libm` calls (section 15).
+- `Instance` gains `orientation`, a rotation matrix, the identity by default, and
+  `scale`, 1 by default. `MakeModelMatrix(instance)` is
+  `MakeTranslationMatrix(position) * orientation * MakeScalingMatrix(scale)`, the book's
+  `M_model = I_T I_R I_S`: applied to a vertex it scales first, then rotates, then
+  translates, the book's `ApplyTransform`, so the instance grows and turns about its own
+  origin before it moves into the world. With the defaults it is the translation matrix
+  and adds exactly `position` to a vertex, so 3.9 holds bit for bit.
+- `Camera` is `{position, orientation}`, the identity orientation by default: the camera
+  at the origin looking along +Z that every earlier section assumed, so a picture drawn
+  without a camera is unchanged. `MakeCameraMatrix(position, orientation)` is
+  `Transposed(orientation) * MakeTranslationMatrix(-position)`, the book's: a vertex is
+  first moved by `-position`, which puts the camera at the origin, and then turned by
+  the inverse of the camera's rotation, its transpose, which puts the camera's line of
+  sight on +Z. Precondition: `orientation` is a rotation (orthonormal), not checked.
+- `RenderModel(viewport, model, transform)` replaces every vertex `V` by `transform * V`
+  and draws the result with the model's triangles through `RenderObject` (3.8), which
+  projects each vertex with `ProjectVertex` and outlines each triangle: the book's
+  `RenderModel`.
+- `RenderInstance(viewport, instance, models)` is
+  `RenderModel(models[instance.model], MakeModelMatrix(instance))`: the camera at the
+  origin. `RenderScene(viewport, models, instances, camera = Camera{})` is the book's
+  Listing 10-5: `M_camera = MakeCameraMatrix(camera.position, camera.orientation)` once,
+  then for every instance `I` in list order
+  `RenderModel(models[I.model], M_camera * MakeModelMatrix(I))`. One matrix per instance
+  takes a vertex from the model's coordinates through the world into the camera's, and
+  the projection follows vertex by vertex.
+- The projection is not a matrix, by the book's own choice: "for practical reasons we
+  won't be using the full projection matrix". The model and camera transforms are
+  applied as matrices, their result is converted back to Cartesian coordinates, and
+  `ProjectVertex` projects it as before, which leaves room for operations in 3D that are
+  not matrix transforms, clipping first of all, between the transforms and the
+  projection. The chapter's homogeneous projection matrix (a bottom row `(0, 0, 1, 0)`,
+  which divides by z) is exercised by one unit test of `Mat4` and built nowhere else.
+- No clipping yet: a camera that moves into the scene can leave vertices with `z <= 0`
+  in its coordinates, which `ProjectVertex` asserts against; the demo keeps everything in
+  front of the camera.
+
+### 3.11 Numeric conventions
 
 - All geometry and color math uses `double`. Switching to `float` would be a deliberate
   decision rather than a detail, because it changes the golden images.
@@ -306,9 +367,9 @@ CLAUDE.md                 design principles and the folder-structure rules
 README.md                 build instructions and project overview
 docs/SPEC.md              this document
 include/cgfs/             public headers: one folder per layer, one file per concept
-    math/vec3.h
+    math/vec3.h  mat4.h
     image/color.h  canvas.h  image_io.h
-    camera/viewport.h
+    camera/viewport.h  camera.h
     raytracer/scene.h  raytracer.h
     rasterizer/point.h  interpolate.h  line.h  triangle.h  projection.h  object.h
     rasterizer/model.h  instance.h  scene.h
@@ -319,13 +380,13 @@ apps/
     render_demo.cpp       command-line renderer for the demo pictures
 tests/
     CMakeLists.txt
-    support/test_helpers.h      Catch2 printers for Vec3/Color/Rgb8/Point, a temp-file helper
-    math/vec3_test.cpp
+    support/test_helpers.h      Catch2 printers for Vec3/Mat4/Color/Rgb8/Point, a temp-file helper
+    math/vec3_test.cpp  mat4_test.cpp
     image/color_test.cpp  canvas_test.cpp  image_io_test.cpp
-    camera/viewport_test.cpp
+    camera/viewport_test.cpp  camera_test.cpp
     raytracer/raytracer_test.cpp
     rasterizer/interpolate_test.cpp  line_test.cpp  triangle_test.cpp  projection_test.cpp
-    rasterizer/object_test.cpp  instance_test.cpp  scene_test.cpp
+    rasterizer/object_test.cpp  model_test.cpp  instance_test.cpp  scene_test.cpp
     rasterizer/pixel_helpers.h
     demo/golden_test.cpp
     demo/golden/          reference renders of the demo pictures (PPM)
@@ -345,9 +406,9 @@ not the namespaces, carry the structure. The layers, bottom to top, each dependi
 on the ones below it:
 
 ```
-math         vec3                                                   vector algebra
+math         vec3, mat4                                             vector algebra
 image        color, canvas, image_io                                colors, the pixel buffer, file formats
-camera       viewport                                               how canvas pixels map into the world
+camera       viewport, camera                                       how canvas pixels map into the world
 raytracer    scene, raytracer                                       the ray tracing renderer
 rasterizer   point, interpolate, line, triangle, projection,        the rasterizing renderer
              object, model, instance, scene
@@ -355,11 +416,15 @@ demo         raytracer_scenes, rasterizer_scenes                    the demo pic
 ```
 
 - `math/vec3`: `Vec3` and its free functions, header-only, `constexpr` where possible.
+  `math/mat4`: `Mat4`, the 4 x 4 matrix of the transforms, its product, its application
+  to a point and the scaling, translation and rotation constructors; header-only.
 - `image/color`: `Color`, `Rgb8`, `ToRgb8`, header-only. `image/canvas`: the pixel buffer
   and the centered coordinate system. `image/image_io`: PPM writer and reader, PNG
   writer; used by `Canvas::Save` and the tests.
 - `camera/viewport`: pixel to viewport-point mapping and field of view. Used by the ray
-  tracer and by the rasterizer's projection.
+  tracer and by the rasterizer's projection. `camera/camera`: `Camera`, a position and
+  an orientation, and `MakeCameraMatrix`; plain data for whichever renderer moves its
+  camera, the rasterizer today.
 - `raytracer/scene`: plain data: spheres, lights, background color.
   `raytracer/raytracer`: intersection, lighting, the render loop.
 - `rasterizer/point`: `Point`, with its intensity `h`, and `ToPixel`, the one conversion
@@ -371,10 +436,11 @@ demo         raytracer_scenes, rasterizer_scenes                    the demo pic
   `rasterizer/object`: `Triangle`, three vertex indices and a color, and `RenderObject`,
   which projects an object's vertex list and outlines its triangles; the first use of
   the projection. `rasterizer/model`: `Model`, the vertex list and the triangle list of
-  an object, stored once. `rasterizer/instance`: `Instance`, a model index and a
-  position, and `RenderInstance`, which moves a model's vertices and hands them to
-  `RenderObject`. `rasterizer/scene`: `RenderScene`, every instance of a model list and
-  an instance list, in order.
+  an object, stored once, and `RenderModel`, which draws a model under a transform
+  through `RenderObject`. `rasterizer/instance`: `Instance`, a model index with a
+  position, an orientation and a scale, `MakeModelMatrix`, its model matrix, and
+  `RenderInstance`. `rasterizer/scene`: `RenderScene`, every instance of a model list
+  and an instance list, in order, as a camera sees them.
 - `demo/raytracer_scenes`: the ray-traced demo scenes, each a function returning a
   `Scene`. `demo/rasterizer_scenes`: the rasterized demo pictures, each a function that
   draws into a canvas. Either way the app and the golden tests render exactly the same
@@ -405,7 +471,7 @@ and a line in the table above.
 Signatures below are the intended shape. Names, parameter order and semantics are
 normative; exact qualifiers and overload sets may be adjusted during implementation.
 
-### 5.1 `math/vec3.h`
+### 5.1 `math/vec3.h`, `math/mat4.h`
 
 ```cpp
 struct Vec3 {
@@ -420,7 +486,23 @@ Vec3             Normalized(Vec3 v);      // v / Length(v); precondition: Length
 constexpr Vec3   Reflect(Vec3 v, Vec3 normal);   // 2 N <N, v> - v; precondition: |normal| = 1
 ```
 
-No matrices yet. A `Mat4` arrives with the camera-transform step (section 13).
+```cpp
+// mat4.h
+struct Mat4 {                         // 4 x 4, homogeneous coordinates (section 3.10)
+    double m[4][4]{};                 // m[row][col]; all zeros by default
+    static constexpr Mat4 Identity();
+    bool operator==(const Mat4&) const = default;
+};
+constexpr Mat4 operator*(const Mat4& a, const Mat4& b);   // applies b first, then a
+constexpr Vec3 operator*(const Mat4& m, Vec3 p);          // m (p, 1), divided by w
+constexpr Mat4 Transposed(const Mat4& m);                 // the inverse of a rotation
+constexpr Mat4 MakeScalingMatrix(double scale);
+constexpr Mat4 MakeTranslationMatrix(Vec3 translation);
+Mat4           MakeOYRotationMatrix(double degrees);      // about Y; cos and sin
+```
+
+`Mat4` is plain data with free functions, like `Vec3`; the constructors carry the book's
+demo names. There is no projection matrix (section 14, decision 12).
 
 ### 5.2 `image/color.h`
 
@@ -471,7 +553,7 @@ void  WritePng(const std::filesystem::path&, int width, int height, std::span<co
 Image ReadPpm(const std::filesystem::path&);   // binary P6 with maxval 255; used by golden tests
 ```
 
-### 5.5 `camera/viewport.h`
+### 5.5 `camera/viewport.h`, `camera/camera.h`
 
 ```cpp
 class Viewport {
@@ -496,6 +578,19 @@ public:
 
 The viewport stores the canvas dimensions by value. It never holds a reference to a
 canvas, so there is no lifetime coupling between the two.
+
+```cpp
+// camera.h
+struct Camera {                               // where the eye is and which way it looks (section 3.10)
+    Vec3 position;
+    Mat4 orientation = Mat4::Identity();      // a rotation: the camera's axes in the world's
+};
+Mat4 MakeCameraMatrix(Vec3 position, const Mat4& orientation);  // Transposed(orientation) * T(-position)
+```
+
+The default camera is the origin looking along +Z, the camera of every earlier chapter.
+The viewport is not part of it: the camera says where the eye is, the viewport what
+window it looks through.
 
 ### 5.6 `raytracer/scene.h`
 
@@ -596,18 +691,24 @@ struct Model {                        // an object's shape, described once (sect
     std::vector<Vec3> vertices;       // in the model's own coordinates
     std::vector<Triangle> triangles;
 };
+void RenderModel(Canvas& canvas, const Viewport& viewport, const Model& model,
+                 const Mat4& transform);  // RenderObject on transform * every vertex (section 3.10)
 
 // instance.h
 struct Instance {                     // one appearance of a model in the scene (section 3.9)
     std::size_t model = 0;            // index into the scene's model list
     Vec3 position;                    // where the model's origin lands
+    Mat4 orientation = Mat4::Identity();  // a rotation about that origin (section 3.10)
+    double scale = 1.0;               // a factor about that origin
 };
+Mat4 MakeModelMatrix(const Instance& instance);  // T(position) * orientation * S(scale)
 void RenderInstance(Canvas& canvas, const Viewport& viewport, const Instance& instance,
-                    std::span<const Model> models);  // RenderObject on the moved vertices
+                    std::span<const Model> models);  // RenderModel with the model matrix
 
 // scene.h
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
-                 std::span<const Instance> instances);  // every instance, in list order
+                 std::span<const Instance> instances,
+                 const Camera& camera = Camera{});  // every instance, in list order, as camera sees it
 ```
 
 One header per primitive. Free functions that take the canvas as their first parameter,
@@ -616,7 +717,10 @@ viewport the same way, in place of the book's global viewport size and plane dis
 `RenderObject` takes the vertex and triangle lists as spans, the book's two parameters,
 so a `std::vector`, a `std::array` or a plain array serves; `RenderScene` takes the model
 and instance lists the same way, and `RenderInstance` takes the model list to resolve the
-instance's index, as `RenderTriangle` takes the projected list inside `RenderObject`.
+instance's index, as `RenderTriangle` takes the projected list inside `RenderObject`. The
+camera and the new `Instance` fields arrived as a defaulted parameter and defaulted
+fields, so every call and every aggregate initializer written before them still compiles
+and draws the same picture.
 They are the primitives; a class with state (a depth buffer, a camera) comes when the
 pipeline needs one, and the primitives stay as they are.
 
@@ -690,6 +794,17 @@ Unit tests:
 
 - `vec3`: arithmetic, `Dot`, `Cross`, `Length`, `Normalized`, `Reflect` (a 45-degree
   vector mirrors to the other side, the normal maps to itself, a grazing vector reverses).
+- `mat4`: all zeros by default, and `Identity` changes neither matrices nor points; the
+  product against a hand-computed 4 x 4 example, and `A * B != B * A`; `A * B` applies
+  `B` first (a translation after a scaling against a scaling after a translation); a
+  point comes back from homogeneous coordinates divided by `w` (a bottom row
+  `(0, 0, 0, 2)` halves it, `(0, 0, 1, 0)` divides by z); `Transposed` exchanges rows
+  and columns and undoes itself; `MakeScalingMatrix` scales about the origin and
+  `MakeScalingMatrix(1)` is the identity; `MakeTranslationMatrix` moves every point by
+  the vector in its last column and `MakeTranslationMatrix(0)` is the identity;
+  `MakeOYRotationMatrix` turns +X to +Z and +Z to -X at 90 degrees within `1e-12`,
+  leaves y exactly, is exactly the identity at 0 degrees, matches cos and sin by hand at
+  30 degrees, composes (30 + 60 = 90), keeps lengths and inverts by transposition.
 - `color`: scaling, addition, `ToRgb8` clamping and truncation (e.g. `254.9 -> 254`,
   `300 -> 255`, `-5 -> 0`).
 - `canvas`: default dimensions; `Clear` with and without a color; `PutPixel` at the
@@ -702,6 +817,13 @@ Unit tests:
   (center, top-right `(0.5, 0.5, 1)`, bottom-left, quarter); the aspect-matched
   viewport maps the top-right corner to `(16/18, 0.5, 1)`; `Fov()` of the default
   viewport is 53.13 degrees on both axes within 0.01.
+- `camera`: the default camera is at the origin with the identity orientation and its
+  matrix is exactly the identity; a moved camera maps its own position to the origin and
+  a point 5 ahead to `(0, 0, 5)`; a camera turned 90 degrees looks along -X and maps
+  `(-5, 0, 0)` to `(0, 0, 5)`, what was ahead to its right and up to up; for the book's
+  demo camera, `(-3, 1, 2)` turned -30 degrees, the points `position + orientation * v`
+  for `v` on the camera's axes map to `v`, and the matrix equals the transpose times the
+  translation.
 - `raytracer`:
   - `IntersectRaySphere`: miss gives two infinite roots; hit gives two finite roots in
     the right order; tangent gives equal roots; origin inside the sphere gives one
@@ -790,6 +912,14 @@ Unit tests:
     twice as far and twice as large gives the same picture, and twice as far without the
     scaling half the size; the lists may be a `std::array` and a plain array; an object
     without triangles, or without vertices, draws nothing.
+  - `RenderModel` (same canvas and viewport; a lopsided triangle in its own plane
+    z = 0): a translation to z = 1 gives the wireframe of its corners and the canvas of
+    `RenderObject` on the vertices moved by hand; the transform is applied before the
+    projection (twice as far is half the size; scaled by 2 and twice as far is the same
+    picture); a half turn about Y mirrors the model in x, exactly, since cos 180 is -1
+    and the model has z = 0; a quarter turn shows it edge-on, 14 pixels on the column
+    x = 0 from y = -7 to 6; a product of two translations draws as their sum; an empty
+    model draws nothing.
   - `RenderInstance` (same canvas and viewport; the model's triangle lies in its own
     plane z = 0 and is placed at z = 1): at `(0, 0, 1)` it gives the wireframe of its
     corners and the canvas of `RenderObject` on the vertices moved by hand; a position
@@ -798,13 +928,27 @@ Unit tests:
     index, so the second of two models is drawn in its own color and the first leaves no
     pixel; the model is unchanged by drawing it and the same model drawn again at
     another position adds the second outline; a model without triangles, or without
-    vertices, draws nothing.
+    vertices, draws nothing. `MakeModelMatrix` with the defaults is exactly the
+    translation matrix; with scale 2, a quarter turn and a translation it maps
+    `(1, 0, 0)` to `(1, 2, 5)` (scaled, turned, then moved) and the origin to the
+    translation, and equals `T * R * S`; the scale shrinks the model about its own
+    origin (half the size in place; twice the size twice as far is the same picture)
+    and the orientation turns it there (a half turn mirrors a lopsided model in x).
   - `RenderScene`: three instances of one model, placed apart, give the three outlines,
     the canvas of three `RenderInstance` calls and as many pixels as the three drawn
     alone; two models of one shape in two colors at the same position show the color of
     the instance listed later, in both orders; instances may use any model in any order;
     a scene without instances, with or without models, draws nothing; the lists may be a
-    `std::array` and a plain array.
+    `std::array` and a plain array. Without a camera the scene is drawn as with
+    `Camera{}`; moving the camera moves the picture the opposite way, exactly (left by
+    0.25 on the viewport plane puts the instance 8 pixels right, rising puts it lower,
+    stepping back halves it); a camera turned 90 degrees to its left sees an instance at
+    `(-1, 0, 0)`, turned to face it, as the default camera sees it at `(0, 0, 1)`; the
+    book's demo camera, moved and turned, sees an instance turned the same way and
+    placed 1 ahead along its line of sight exactly as the default camera sees the
+    untransformed instance at `(0, 0, 1)`. The turned-camera tests use a triangle whose
+    corners are 0.14 from its center, off the pixel boundary that 0.125 sits on, so that
+    cos and sin, exact only to a few ulps, cannot move a pixel (section 15).
 
 Golden-image tests:
 
@@ -819,14 +963,17 @@ Golden-image tests:
   reference has no shadows because ambient light is never blocked; only the reflective
   and mirror ball references show reflections. `lines_320x180.ppm`,
   `triangles_320x180.ppm`, `shaded_320x180.ppm`, `cube_320x180.ppm`,
-  `objects_320x180.ppm` and `instances_320x180.ppm` are the rasterizer's demos
-  (section 9): every pixel of them comes from `DrawLine`, `DrawFilledTriangle` or
-  `DrawShadedTriangle`, the objects' through `RenderObject` and the instances' through
-  `RenderScene`. The 2D scenes compute their vertices with integer arithmetic and their
-  colors and intensities without any `libm` call, and the projections of the cube, the
-  objects and the instances are a few IEEE additions, multiplications and divisions,
-  which every platform rounds the same way, so the pictures are reproducible bit for
-  bit.
+  `objects_320x180.ppm`, `instances_320x180.ppm` and `camera_320x180.ppm` are the
+  rasterizer's demos (section 9): every pixel of them comes from `DrawLine`,
+  `DrawFilledTriangle` or `DrawShadedTriangle`, the objects' through `RenderObject`, the
+  instances' and the camera scene's through `RenderScene`. The 2D scenes compute their
+  vertices with integer arithmetic and their colors and intensities without any `libm`
+  call, and the projections of the cube, the objects and the instances are a few IEEE
+  additions, multiplications and divisions, which every platform rounds the same way,
+  so those pictures are reproducible bit for bit. The camera scene is the first whose
+  vertices pass through `cos` and `sin`; section 15 records the margin by which its
+  projected vertices clear the pixel boundaries, so that a `libm` off by a few ulps
+  still draws the same pixels.
 - `golden_test.cpp` renders the same scenes and compares every channel of every pixel
   with the reference image. The test passes when no channel differs by more than 1. The
   tolerance absorbs floating-point differences between compilers and standard
@@ -834,7 +981,7 @@ Golden-image tests:
 - The scenes are defined once, in the `demo` layer, shared by `render_demo` and the
   golden test, so the app and the test cannot drift apart.
 - The references are regenerated only when rendering behaviour changes on purpose, with
-  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles|shaded|cube|objects|instances> --width 320 --height 180 --output tests/demo/golden/...`
+  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles|shaded|cube|objects|instances|camera> --width 320 --height 180 --output tests/demo/golden/...`
   from a Release build, and the pictures are reviewed before they are committed. The
   `flat` reference doubles as a regression test: neither the specular nor the shadow code
   path may change the output of an ambient-only scene, `diffuse` pins the shadows of
@@ -846,7 +993,7 @@ Golden-image tests:
 `render_demo` renders one of the demo pictures to a file:
 
 ```
-render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|axes] [--width N] [--height N] [--distance D] [--output PATH]
+render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|axes] [--width N] [--height N] [--distance D] [--output PATH]
 ```
 
 Defaults: `reflective`, 1920 x 1080, distance 1, `render.png`. The `mirrorball` scene is
@@ -885,10 +1032,17 @@ below the camera: a tower of three floors at x = 0, z = 20, and a house of one f
 each side of the street, at x = -3.5 and 3.5 and z = 14, 10 and 6, listed far to near so
 that the near edges show where buildings overlap. The houses shrink toward the tower,
 which is perspective, and the roofs' white base edges outline every eave, since the roof
-is drawn after the cube under it. The `axes` scene draws the coordinate axes and corner
-dots; it exercises the canvas without ray tracing. For the ray-traced scenes, the cube,
-the objects and the instances the viewport width always matches the canvas aspect ratio,
-and `--distance` zooms them; it has no effect on the 2D pictures. The output format follows
+is drawn after the cube under it. The `camera` scene is the chapter's closing picture:
+`DrawCameraScene` stores the cube once and places two instances with a model transform
+each, the first scaled to 0.75 at (-1.5, 0, 7) and the second turned 195 degrees about Y
+at (1.25, 2.5, 7.5), the instances and the camera of the book's demo, and draws them with
+`RenderScene` as seen from a camera at (-3, 1, 2) turned -30 degrees about Y, that is 30
+degrees to its right, toward the cubes; every vertex goes through one matrix, the camera
+matrix times the instance's model matrix, and then through `ProjectVertex` as before. The
+`axes` scene draws the coordinate axes and corner dots; it exercises the canvas without
+ray tracing. For the ray-traced scenes, the cube, the objects, the instances and the
+camera scene the viewport width always matches the canvas aspect ratio, and `--distance`
+zooms them; it has no effect on the 2D pictures. The output format follows
 the extension. The program prints the render time in milliseconds and exits non-zero with
 a message on bad arguments or I/O failure. Argument parsing is hand-written; no library
 is added for it. The scene table in `render_demo.cpp` is the single list of pictures: the
@@ -939,6 +1093,7 @@ Targets apply to Release builds on a single core. Debug builds have no targets.
 | shaded demo (1 triangle, 24 shaded wedges)       | 1920 x 1080 | under 20 ms; about 7 ms measured                 |
 | cube demo (12 projected lines)                   | 1920 x 1080 | under 10 ms; under 1 ms measured                 |
 | instances demo (16 instances, 150 triangles)     | 1920 x 1080 | under 10 ms; about 2 ms measured                 |
+| camera demo (2 transformed instances, 24 triangles)| 1920 x 1080 | under 10 ms; 1 to 2 ms measured                  |
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
@@ -953,19 +1108,23 @@ The project follows the chapters of *Computer Graphics from Scratch*
 (https://gabrielgambetta.com/computer-graphics-from-scratch/). The architecture in
 section 4 is meant to absorb these steps as additions:
 
-- Arbitrary camera: `Mat4` (or a rotation matrix plus position) in a `mat.h` header
-  next to `vec3.h`; `Camera` struct in `scene.h`; `Render` transforms `D` before tracing.
+- Arbitrary camera for the ray tracer: `Mat4` and `Camera` exist now (`math/mat4.h`,
+  `camera/camera.h`, built for the rasterizer); `Render` would start its rays at
+  `camera.position` and turn `D` by `camera.orientation`.
 - Row-parallel rendering with `std::thread` or a parallel algorithm, with golden tests
   proving the output is unchanged.
 - Rasterizer, so far `rasterizer/` with `Point`, `Interpolate`, `DrawLine`,
   `DrawWireframeTriangle`, `DrawFilledTriangle`, `DrawShadedTriangle`, the perspective
   projection `ProjectVertex`, `RenderObject`, the wireframe of an object given as a
-  vertex list and an indexed triangle list, and `Model`, `Instance`, `RenderInstance`
-  and `RenderScene`, a scene of models placed by position. Next, in the book's order:
-  model transforms (scale and rotation join the position in `Instance`, as a transform
-  that `RenderInstance` applies), the camera transform (a scene gains a camera, and
-  with it a scene type), clipping, the depth buffer, shading (which feeds each vertex's
-  lighting into `Point::h`) and textures.
+  vertex list and an indexed triangle list, `Model`, `Instance`, `RenderInstance` and
+  `RenderScene`, a scene of models placed by position, and the transforms of the
+  chapter's second half: `Mat4`, the model matrix of an instance (scale, rotation about
+  Y, translation), `Camera` and the camera matrix, composed into one matrix per
+  instance by `RenderScene` and applied by `RenderModel`. Next, in the book's order:
+  clipping (in 3D, between the transforms and the projection, which is why the
+  projection is not a matrix), the depth buffer, shading (which feeds each vertex's
+  lighting into `Point::h`) and textures. Rotations about X and Z are added the way
+  `MakeOYRotationMatrix` is, when a scene needs them.
 - Optional interactive window behind a `CGFS_ENABLE_WINDOW` option (SDL2 or similar),
   off by default so the dependency policy in section 7 holds for everyone else.
 
@@ -1013,8 +1172,22 @@ The judgment calls behind this design, so they are not relitigated by accident.
     take the model list to resolve the index, as `RenderTriangle` takes the projected
     list. There is no rasterizer scene type yet: the ray tracer's `Scene` owns that name
     in the flat namespace, and a scene that is only a model list and an instance list is
-    passed as the two lists, exactly as an object is passed to `RenderObject`. A type
-    arrives with the camera, when a scene is more than lists.
+    passed as the two lists, exactly as an object is passed to `RenderObject`. The
+    camera (3.10) joined as a defaulted parameter of `RenderScene`, which keeps every
+    earlier call compiling; a scene type is still a step away, for when clipping planes
+    or lights make the bundle worth naming.
+12. The projection is not a matrix. The chapter derives the homogeneous projection and
+    viewport matrices and then sets them aside "for practical reasons", and the project
+    does the same: `Mat4` carries only the affine model and camera transforms, and
+    `ProjectVertex` stays the one place where a vertex becomes a pixel. Clipping, which
+    must happen in 3D between the transforms and the projection, is the practical
+    reason. `M * p` still divides by w, so the arithmetic of a projective matrix is
+    there and tested; it is only not used by the pipeline. Three smaller calls go with
+    it: `Mat4` is a plain `double m[4][4]` with free functions, like `Vec3`, so a matrix
+    in the code reads like the book's listing; an `Instance` keeps its scale,
+    orientation and position as data and `MakeModelMatrix` rebuilds the matrix on every
+    render, two products per instance, rather than caching it, so the struct has one
+    source of truth; and rotation exists only about Y, the one the book's demos use.
 
 ## 15. Implementation notes
 
@@ -1022,7 +1195,7 @@ Measurements and known behaviours of the implementation, recorded 2026-11-02, up
 2026-11-03 with shadows and reflections, 2026-11-04 with the rasterizer's lines and
 filled triangles and the reorganisation into layers, 2026-11-05 with shaded triangles,
 the perspective projection and objects made of triangles, and 2026-11-09 with models,
-instances and scenes.
+instances and scenes and, the same day, with model and camera transforms.
 
 - Catch2 is pinned to v3.16.1.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
@@ -1121,6 +1294,25 @@ instances and scenes.
   edges and cross their diagonals: the pyramid's base is cut from front-left to
   back-right, the cube's top from front-right to back-left, so every roof shows a white
   X over a purple one. Nothing hides in a wireframe; the depth buffer will settle it.
+- The camera demo (2 instances, 24 triangles, 72 lines) draws in 1 to 2 ms at
+  1920 x 1080; the matrices cost nothing measurable next to the lines. The instances
+  demo, now drawn through the same matrices with the default camera, is byte for byte
+  the picture it was: with the identity orientation and scale 1 the model matrix is
+  exactly the translation matrix, the default camera's matrix is exactly the identity,
+  and `M * p` then evaluates `1 * x + 0 * y + 0 * z + tx`, which IEEE arithmetic makes
+  exactly `x + tx`, before dividing by a `w` of exactly 1.
+- `MakeOYRotationMatrix` is the rasterizer's first use of `cos` and `sin`, so the camera
+  reference image depends on `libm`. A replica of the pipeline in Python shows that at
+  320 x 180 no projected coordinate of the scene's sixteen vertices comes closer than
+  0.066 pixels to a pixel boundary, and the nearest vertex is 4.06 in front of the
+  camera: a `cos` or `sin` off by a few ulps moves a coordinate by about 1e-14 pixels
+  and cannot change the picture. A new camera scene should be checked the same way, or
+  simply rendered on the other platform, before its reference is trusted there.
+- Tests of turned cameras use a triangle whose corners are 0.14 from its center rather
+  than 0.125: 0.14 * 32 = 4.48 truncates to the same pixel 4 but is not a pixel
+  boundary, which the rotation's rounding errors, a few ulps, would otherwise cross:
+  through a camera turned 90 degrees a corner at 0.125 comes out as `0.125 - 6e-17`,
+  which truncates to pixel 3.
 - On 2026-11-04 the tree was reorganised into the layers of 4.2 (`CLAUDE.md` has the
   rules): the rasterizer was split into one file per primitive, the demo pictures moved
   into their own library target with the `axes` picture joining them from the app, the
