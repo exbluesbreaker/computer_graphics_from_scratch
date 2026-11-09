@@ -80,6 +80,8 @@ constexpr DemoScene kScenes[] = {
      Projected<cgfs::demo::DrawCubeScene>},
     {"objects", "objects made of triangles, the book's cube and a pyramid, as wireframes",
      Projected<cgfs::demo::DrawObjectsScene>},
+    {"instances", "a wireframe street: two models, a cube and a pyramid, placed sixteen times",
+     Projected<cgfs::demo::DrawInstancesScene>},
     {"axes", "the coordinate axes and corner dots (no ray tracing)",
      Rasterized<cgfs::demo::DrawAxesScene>},
 };

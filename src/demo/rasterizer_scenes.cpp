@@ -2,13 +2,17 @@
 
 #include <cgfs/image/color.h>
 #include <cgfs/math/vec3.h>
+#include <cgfs/rasterizer/instance.h>
 #include <cgfs/rasterizer/line.h>
+#include <cgfs/rasterizer/model.h>
 #include <cgfs/rasterizer/object.h>
 #include <cgfs/rasterizer/point.h>
 #include <cgfs/rasterizer/projection.h>
+#include <cgfs/rasterizer/scene.h>
 #include <cgfs/rasterizer/triangle.h>
 
 #include <cstddef>
+#include <initializer_list>
 #include <vector>
 
 // These pictures are shared by render_demo and the golden-image tests. Changing them
@@ -72,6 +76,59 @@ void DrawDot(Canvas& canvas, int cx, int cy, Color color, int radius = 6) {
             canvas.PutPixel(cx + dx, cy + dy, color);
         }
     }
+}
+
+// The models of the 3D pictures, each in its own coordinates with its center at the origin
+// and 2 units tall, so that a picture places them by position alone.
+
+constexpr Color kPurple{255.0, 0.0, 255.0};
+constexpr Color kCyan{0.0, 255.0, 255.0};
+constexpr Color kOrange{255.0, 128.0, 0.0};
+constexpr Color kLime{128.0, 255.0, 0.0};
+constexpr Color kSky{0.0, 128.0, 255.0};
+constexpr Color kPink{255.0, 0.0, 128.0};
+
+/// The book's cube: its eight corners at x, y, z = ±1, in the book's order, and its six
+/// faces as two triangles each, one color per face.
+Model Cube() {
+    Model cube;
+    cube.vertices = {
+        {1.0, 1.0, 1.0},    {-1.0, 1.0, 1.0},   // 0, 1: the top edge of the back face
+        {-1.0, -1.0, 1.0},  {1.0, -1.0, 1.0},   // 2, 3: the bottom edge of the back face
+        {1.0, 1.0, -1.0},   {-1.0, 1.0, -1.0},  // 4, 5: the top edge of the front face
+        {-1.0, -1.0, -1.0}, {1.0, -1.0, -1.0},  // 6, 7: the bottom edge of the front face
+    };
+    cube.triangles = {
+        {{0, 1, 2}, colors::kRed},    {{0, 2, 3}, colors::kRed},     // back, z = 1
+        {{4, 0, 3}, colors::kGreen},  {{4, 3, 7}, colors::kGreen},   // right, x = 1
+        {{5, 4, 7}, colors::kBlue},   {{5, 7, 6}, colors::kBlue},    // front, z = -1
+        {{1, 5, 6}, colors::kYellow}, {{1, 6, 2}, colors::kYellow},  // left, x = -1
+        {{4, 5, 1}, kPurple},         {{4, 1, 0}, kPurple},          // top, y = 1
+        {{2, 6, 7}, kCyan},           {{2, 7, 3}, kCyan},            // bottom, y = -1
+    };
+    return cube;
+}
+
+/// A square pyramid of the cube's height: the apex above the center of a base that is the
+/// bottom face of the same cube. The base comes first so that every side owns its base
+/// edge: an edge shared by two triangles shows the color of the one drawn later.
+Model Pyramid() {
+    Model pyramid;
+    pyramid.vertices = {
+        {0.0, 1.0, 0.0},     // 0: the apex
+        {-1.0, -1.0, -1.0},  // 1: front left
+        {1.0, -1.0, -1.0},   // 2: front right
+        {1.0, -1.0, 1.0},    // 3: back right
+        {-1.0, -1.0, 1.0},   // 4: back left
+    };
+    pyramid.triangles = {
+        {{1, 2, 3}, colors::kWhite}, {{1, 3, 4}, colors::kWhite},  // the base, y = -1
+        {{0, 1, 2}, kOrange},                                      // front, z = -1
+        {{0, 2, 3}, kLime},                                        // right, x = 1
+        {{0, 3, 4}, kSky},                                         // back, z = 1
+        {{0, 4, 1}, kPink},                                        // left, x = -1
+    };
+    return pyramid;
 }
 
 }  // namespace
@@ -286,62 +343,69 @@ void DrawCubeScene(Canvas& canvas, const Viewport& viewport) {
 
 void DrawObjectsScene(Canvas& canvas, const Viewport& viewport) {
     constexpr Color kBackground{18.0, 20.0, 28.0};
-    constexpr Color kPurple{255.0, 0.0, 255.0};
-    constexpr Color kCyan{0.0, 255.0, 255.0};
-    constexpr Color kOrange{255.0, 128.0, 0.0};
-    constexpr Color kLime{128.0, 255.0, 0.0};
-    constexpr Color kSky{0.0, 128.0, 255.0};
-    constexpr Color kPink{255.0, 0.0, 128.0};
 
     canvas.Clear(kBackground);
 
-    // The book's cube: its eight corners at x, y, z = ±1, in the book's order, and its
-    // six faces as two triangles each. The cube is then moved left and away from the
-    // camera, as the book does by hand, since there are no transforms yet.
-    const std::vector<Vec3> cube_corners = {
-        {1.0, 1.0, 1.0},    {-1.0, 1.0, 1.0},   // 0, 1: the top edge of the back face
-        {-1.0, -1.0, 1.0},  {1.0, -1.0, 1.0},   // 2, 3: the bottom edge of the back face
-        {1.0, 1.0, -1.0},   {-1.0, 1.0, -1.0},  // 4, 5: the top edge of the front face
-        {-1.0, -1.0, -1.0}, {1.0, -1.0, -1.0},  // 6, 7: the bottom edge of the front face
-    };
-    const std::vector<Triangle> cube_faces = {
-        {{0, 1, 2}, colors::kRed},    {{0, 2, 3}, colors::kRed},     // back, z = 1
-        {{4, 0, 3}, colors::kGreen},  {{4, 3, 7}, colors::kGreen},   // right, x = 1
-        {{5, 4, 7}, colors::kBlue},   {{5, 7, 6}, colors::kBlue},    // front, z = -1
-        {{1, 5, 6}, colors::kYellow}, {{1, 6, 2}, colors::kYellow},  // left, x = -1
-        {{4, 5, 1}, kPurple},         {{4, 1, 0}, kPurple},          // top, y = 1
-        {{2, 6, 7}, kCyan},           {{2, 7, 3}, kCyan},            // bottom, y = -1
-    };
-    const auto moved = [](const std::vector<Vec3>& points, Vec3 offset) {
+    // The vertices of `model` moved by `offset`: at this point of the book an object is
+    // moved by hand, since there are no instances yet.
+    const auto moved = [](const Model& model, Vec3 offset) {
         std::vector<Vec3> result;
-        result.reserve(points.size());
-        for (const Vec3 p : points) {
+        result.reserve(model.vertices.size());
+        for (const Vec3 p : model.vertices) {
             result.push_back(p + offset);
         }
         return result;
     };
-    RenderObject(canvas, viewport, moved(cube_corners, {-1.5, 0.0, 7.0}), cube_faces);
 
-    // A square pyramid of the same height: the apex above the center of a base that is
-    // the bottom face of the same cube, the base first so that every side owns its base
-    // edge; moved to the right the same distance. Every edge of a closed surface belongs
-    // to two triangles and shows the color of the one drawn later, which is why the base
-    // and the cube's faces are left with their diagonals in their own color.
-    const std::vector<Vec3> pyramid_corners = {
-        {0.0, 1.0, 0.0},     // 0: the apex
-        {-1.0, -1.0, -1.0},  // 1: front left
-        {1.0, -1.0, -1.0},   // 2: front right
-        {1.0, -1.0, 1.0},    // 3: back right
-        {-1.0, -1.0, 1.0},   // 4: back left
+    // The book's cube, moved left and away from the camera, and the pyramid moved the
+    // other way. Every edge of a closed surface belongs to two triangles and shows the
+    // color of the one drawn later, which is why the cube's faces are left with their
+    // diagonals in their own color while every side of the pyramid keeps an edge of its
+    // own.
+    const Model cube = Cube();
+    RenderObject(canvas, viewport, moved(cube, {-1.5, 0.0, 7.0}), cube.triangles);
+    const Model pyramid = Pyramid();
+    RenderObject(canvas, viewport, moved(pyramid, {1.5, 0.0, 7.0}), pyramid.triangles);
+}
+
+void DrawInstancesScene(Canvas& canvas, const Viewport& viewport) {
+    constexpr Color kBackground{18.0, 20.0, 28.0};
+
+    canvas.Clear(kBackground);
+
+    // Two models and a list of instances that name them by index: the cube and the
+    // pyramid of the objects picture, stored once each and placed sixteen times.
+    const std::vector<Model> models = {Cube(), Pyramid()};
+    constexpr std::size_t kCube = 0;
+    constexpr std::size_t kPyramid = 1;
+    std::vector<Instance> instances;
+
+    // The camera stands 1.5 above the ground and looks down the middle of a street.
+    constexpr double kGround = -1.5;
+
+    // A building: `floors` cubes stacked on the ground and a pyramid for a roof. Both
+    // models are 2 units tall and centered on their origin, so the first cube's center is
+    // 1 above the ground, every further floor 2 higher, and the roof's base (y = -1 in
+    // its own coordinates) meets the top floor's top (y = +1) when the roof stands 2
+    // above it; the roof's white base edges then outline the eaves.
+    const auto building = [&](double x, double z, int floors) {
+        double y = kGround + 1.0;
+        for (int floor = 0; floor < floors; ++floor, y += 2.0) {
+            instances.push_back({.model = kCube, .position = {x, y, z}});
+        }
+        instances.push_back({.model = kPyramid, .position = {x, y, z}});
     };
-    const std::vector<Triangle> pyramid_faces = {
-        {{1, 2, 3}, colors::kWhite}, {{1, 3, 4}, colors::kWhite},  // the base, y = -1
-        {{0, 1, 2}, kOrange},                                      // front, z = -1
-        {{0, 2, 3}, kLime},                                        // right, x = 1
-        {{0, 3, 4}, kSky},                                         // back, z = 1
-        {{0, 4, 1}, kPink},                                        // left, x = -1
-    };
-    RenderObject(canvas, viewport, moved(pyramid_corners, {1.5, 0.0, 7.0}), pyramid_faces);
+
+    // A tower at the far end of the street, then a house on each side, far to near: in a
+    // wireframe the instance drawn later owns the shared pixels, so the near edges show
+    // where buildings overlap.
+    building(0.0, 20.0, 3);
+    for (const double z : {14.0, 10.0, 6.0}) {
+        building(-3.5, z, 1);
+        building(3.5, z, 1);
+    }
+
+    RenderScene(canvas, viewport, models, instances);
 }
 
 void DrawAxesScene(Canvas& canvas) {

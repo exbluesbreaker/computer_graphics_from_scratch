@@ -65,12 +65,14 @@ add_library(cgfs STATIC
     src/camera/viewport.cpp
     # raytracer: the ray tracing renderer
     src/raytracer/raytracer.cpp
-    # rasterizer: the rasterizing renderer, one primitive per file
+    # rasterizer: the rasterizing renderer, one concept per file
     src/rasterizer/interpolate.cpp
     src/rasterizer/line.cpp
     src/rasterizer/triangle.cpp
     src/rasterizer/projection.cpp
-    src/rasterizer/object.cpp)
+    src/rasterizer/object.cpp
+    src/rasterizer/instance.cpp
+    src/rasterizer/scene.cpp)
 add_library(cgfs::cgfs ALIAS cgfs)
 target_include_directories(cgfs PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_compile_features(cgfs PUBLIC cxx_std_20)

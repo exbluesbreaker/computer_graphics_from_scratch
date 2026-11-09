@@ -12,8 +12,9 @@ shading, specular highlights, shadows and reflections, and writes the result to 
 PPM file. The rasterizer, the book's second half, has started: it draws lines, filled
 triangles and shaded triangles (an intensity per vertex, interpolated across the
 triangle) with nothing but `PutPixel`, projects 3D vertices onto the canvas through the
-same viewport the ray tracer looks through, and draws objects given as a list of vertices
-and a list of colored triangles that index them, as wireframes.
+same viewport the ray tracer looks through, draws objects given as a list of vertices and
+a list of colored triangles that index them, as wireframes, and renders scenes in which
+such models are placed any number of times as instances with a position.
 `docs/SPEC.md` describes the design, the architecture and the roadmap.
 
 ## Requirements
@@ -43,6 +44,7 @@ Use `--preset release` for an optimized build in `build/release`. Then:
 ./build/release/apps/render_demo --scene shaded --output shaded.png
 ./build/release/apps/render_demo --scene cube --distance 2 --output cube.png   # perspective
 ./build/release/apps/render_demo --scene objects --output objects.png   # objects made of triangles
+./build/release/apps/render_demo --scene instances --output instances.png   # a scene of instances
 ./build/release/apps/render_demo --help
 ```
 
@@ -63,8 +65,11 @@ book's cube, its corners projected with `ProjectVertex` and its edges drawn with
 `DrawLine`, the front face blue and the back face red), `objects` (the first picture of
 objects made of triangles: the book's cube, eight vertices and twelve colored triangles,
 and a square pyramid, each a vertex list and a triangle list that `RenderObject` projects
-and outlines), `axes` (the coordinate axes and corner dots, no ray tracing). A larger
-`--distance` narrows the field of view of the ray-traced scenes, the cube and the objects.
+and outlines), `instances` (the first scene of instances: the same cube and pyramid stored
+once each as models and placed sixteen times by position, a street of houses leading to a
+tower, drawn with `RenderScene`), `axes` (the coordinate axes and corner dots, no ray
+tracing). A larger `--distance` narrows the field of view of the ray-traced scenes, the
+cube, the objects and the instances.
 
 ## Layout
 
@@ -88,6 +93,11 @@ include/cgfs/   public headers: one folder per layer, one file per concept
                                 Viewport becomes the Point the primitives draw
                 object.h        Triangle (three vertex indices and a color) and RenderObject:
                                 project an object's vertices, outline its triangles
+                model.h         Model: an object's vertex list and triangle list, stored once
+                instance.h      Instance (a model index and a position) and RenderInstance:
+                                move the model's vertices, then RenderObject
+                scene.h         RenderScene: every instance of a model list and an instance
+                                list, in order
   demo/         raytracer_scenes.h, rasterizer_scenes.h
                                 the pictures shared by render_demo and the golden tests
 src/<layer>/    implementations, mirroring include/cgfs/<layer>/
@@ -121,4 +131,5 @@ committing:
 ./build/release/apps/render_demo --scene shaded --width 320 --height 180 --output tests/demo/golden/shaded_320x180.ppm
 ./build/release/apps/render_demo --scene cube --width 320 --height 180 --output tests/demo/golden/cube_320x180.ppm
 ./build/release/apps/render_demo --scene objects --width 320 --height 180 --output tests/demo/golden/objects_320x180.ppm
+./build/release/apps/render_demo --scene instances --width 320 --height 180 --output tests/demo/golden/instances_320x180.ppm
 ```

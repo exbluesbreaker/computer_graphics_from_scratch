@@ -54,6 +54,19 @@ void DrawCubeScene(Canvas& canvas, const Viewport& viewport);
 /// depends on the viewport like the cube, so render_demo's --distance zooms it.
 void DrawObjectsScene(Canvas& canvas, const Viewport& viewport);
 
+/// The rasterizer's first scene of instances, drawn with RenderScene: the cube and the
+/// pyramid of the objects picture are stored once each, as models, and sixteen instances
+/// place them by position alone. A building is a stack of cubes with a pyramid for a
+/// roof, standing on the ground 1.5 below the camera: a tower of three floors at x = 0,
+/// z = 20, and a house of one floor on each side of the street, at x = -3.5 and 3.5 and
+/// z = 14, 10 and 6, listed far to near so that where buildings overlap the near edges
+/// show. The houses shrink toward the tower, which is perspective, and the roofs' white
+/// base edges outline every eave, since an edge shared by two triangles shows the color
+/// of the one drawn later. Wireframes with nothing hidden, like the objects picture.
+/// Clears the canvas to a dark background first; depends on the viewport, so
+/// render_demo's --distance zooms it.
+void DrawInstancesScene(Canvas& canvas, const Viewport& viewport);
+
 /// The coordinate axes through the origin, a dot at the origin and a colored dot in
 /// each corner (red top-left, green top-right, blue bottom-left, black bottom-right): a
 /// quick visual check of the canvas's coordinate system. Drawn with PutPixel alone, on
