@@ -64,6 +64,7 @@ add_library(cgfs STATIC
     # camera: how canvas pixels map into the world
     src/camera/viewport.cpp
     src/camera/camera.cpp
+    src/camera/clipping_planes.cpp
     # raytracer: the ray tracing renderer
     src/raytracer/raytracer.cpp
     # rasterizer: the rasterizing renderer, one concept per file
@@ -74,6 +75,7 @@ add_library(cgfs STATIC
     src/rasterizer/object.cpp
     src/rasterizer/model.cpp
     src/rasterizer/instance.cpp
+    src/rasterizer/clipping.cpp
     src/rasterizer/scene.cpp)
 add_library(cgfs::cgfs ALIAS cgfs)
 target_include_directories(cgfs PUBLIC ${PROJECT_SOURCE_DIR}/include)

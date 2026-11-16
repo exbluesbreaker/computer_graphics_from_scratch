@@ -28,11 +28,12 @@ namespace cgfs {
 /// viewport point is converted to a pixel with ViewportToCanvas. Vertices on the same ray
 /// project to the same pixel; farther vertices land closer to the center.
 ///
-/// Precondition: v.z > 0, strictly in front of the camera; asserted. There is no
-/// clipping yet, so a vertex outside the field of view projects to a point beyond the
+/// Precondition: v.z > 0, strictly in front of the camera; asserted. The projection
+/// does not clip: a vertex outside the field of view projects to a point beyond the
 /// canvas, which DrawLine and the triangles draw as far as the canvas reaches, and a
-/// vertex very near the camera plane projects very far away; the clipping step that
-/// comes later removes both.
+/// vertex very near the camera plane projects very far away. Clipping the scene first
+/// (ClipScene, against the planes of MakeClippingPlanes) removes both, and guarantees
+/// the precondition.
 [[nodiscard]] Point ProjectVertex(const Viewport& viewport, Vec3 v);
 
 }  // namespace cgfs

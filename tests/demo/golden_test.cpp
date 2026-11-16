@@ -143,3 +143,11 @@ TEST_CASE("camera scene matches the reference drawing", "[golden]") {
         },
         "camera_320x180.ppm");
 }
+
+TEST_CASE("clipping scene matches the reference drawing", "[golden]") {
+    CheckDrawingMatchesGolden(
+        [](cgfs::Canvas& canvas) {
+            cgfs::demo::DrawClippingScene(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas));
+        },
+        "clipping_320x180.ppm");
+}

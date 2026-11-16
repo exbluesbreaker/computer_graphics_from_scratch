@@ -15,8 +15,9 @@ formulas, how the code is structured, how it is built and tested, and how it is 
 to grow. The current feature set is a ray tracer for spheres with ambient, point and
 directional lights, diffuse shading, specular highlights, shadows and reflections, and
 the first steps of the rasterizer, lines, filled and shaded triangles, the perspective
-projection of vertices, wireframe objects made of triangles and scenes of instances of
-models, each with a model transform, seen from a movable camera; section 13 lists what
+projection of vertices, objects made of triangles, drawn as wireframes, filled or
+shaded, and scenes of instances of models, each with a model transform, seen from a
+movable camera and clipped in 3D to what that camera can see; section 13 lists what
 comes next.
 
 ## 2. Goals and non-goals
@@ -214,8 +215,9 @@ the shaded triangle reads; it defaults to 1, the full color.
   clamped only at the canvas (3.1); `h` is nominally in `[0, 1]` and is not checked. Two
   triangles that share an edge compute the same `h` on the edge's pixels, since both
   interpolate it from the same two vertices in the same order.
-- There is no clipping. Pixels outside the canvas are dropped by `PutPixel`, so a line
-  or a triangle may run off the canvas; it costs time in proportion to its full size.
+- The 2D primitives do not clip. Pixels outside the canvas are dropped by `PutPixel`, so
+  a line or a triangle may run off the canvas; it costs time in proportion to its full
+  size. Clipping is done in 3D, on the scene, before anything reaches them (3.11).
 
 ### 3.7 Rasterizer: perspective projection
 
@@ -234,10 +236,11 @@ tracer looks through: the camera at the origin looking along +Z and the viewport
   through `ViewportToCanvas`. Vertices on one ray from the camera project to one pixel;
   a vertex twice as far from the camera lands at half the distance from the center;
   moving the viewport away (a larger `d`) zooms in. Precondition: `v.z > 0`, asserted.
-- There is no clipping. A vertex outside the field of view projects beyond the canvas
-  and the primitives draw what fits; a vertex very near the camera plane projects very
-  far away, and a canvas coordinate beyond the range of `int` is undefined behaviour in
-  `ToPixel`. The clipping step of the roadmap removes both.
+- The projection does not clip. A vertex outside the field of view projects beyond the
+  canvas and the primitives draw what fits; a vertex very near the camera plane projects
+  very far away, and a canvas coordinate beyond the range of `int` is undefined behaviour
+  in `ToPixel`. Clipping the scene first (3.11) removes both: what it leaves has
+  `z >= d` and projects onto the canvas or the row or column next to it.
 
 ### 3.8 Rasterizer: objects made of triangles
 
@@ -246,20 +249,31 @@ triangles, each naming three of the vertices by index and carrying a color. The
 indirection stores a vertex once however many triangles meet at it (a cube is eight
 vertices and twelve triangles, not thirty-six vertices) and projects it once.
 
-- `Triangle` is `{v, color}`, with `v` an array of three indices into the object's
-  vertex list.
-- `RenderObject(viewport, vertices, triangles)` first projects every vertex with
-  `ProjectVertex` (3.7) into a list `projected` parallel to `vertices`, then draws every
-  triangle `T`, in list order, as
-  `DrawWireframeTriangle(projected[T.v[0]], projected[T.v[1]], projected[T.v[2]], T.color)`:
-  the book's `RenderObject` and `RenderTriangle`. Triangles that share a vertex agree on
-  its pixel, and where two edges cover the same pixels the triangle drawn later shows.
-  Preconditions: every index is less than the number of vertices, asserted; every vertex
-  has `z > 0`, asserted by `ProjectVertex`.
-- It is a wireframe: every edge is drawn, those at the back too. Hidden-surface removal
-  (the depth buffer of the roadmap) and clipping come later; until then an object must
-  lie entirely in front of the camera, and an edge of a closed surface, which belongs to
-  two triangles, always shows the color of the one drawn later (section 15).
+- `Triangle` is `{v, color, h}`, with `v` an array of three indices into the object's
+  vertex list and `h` an array of three intensities, `h[k]` the intensity of the
+  triangle at its corner `v[k]`: the `h` of 3.6, a multiplier for the color. It is 1 at
+  every corner by default, the full color. The intensity belongs to the corner of the
+  triangle, not to the vertex, so two triangles that meet at a vertex may be differently
+  bright there, as two faces of a cube are (section 14, decision 14).
+- `RenderObject(viewport, vertices, triangles, draw_triangle = DrawWireframeTriangle)`
+  first projects every vertex with `ProjectVertex` (3.7) into a list `projected`
+  parallel to `vertices`, then draws every triangle `T`, in list order, as
+  `draw_triangle(P0, P1, P2, T.color)` with `Pk = projected[T.v[k]]` given the intensity
+  `T.h[k]`: the book's `RenderObject` and `RenderTriangle`. `draw_triangle` is one of the
+  three triangle primitives of 3.6, which share the signature `DrawTriangleFunction`:
+  `DrawWireframeTriangle`, the default and the outline the book draws at this point,
+  `DrawFilledTriangle` or `DrawShadedTriangle`; the first two ignore the intensities.
+  Triangles that share a vertex agree on its pixel, and where two triangles cover the
+  same pixels the one drawn later shows. Preconditions: every index is less than the
+  number of vertices, asserted; every vertex has `z > 0`, asserted by `ProjectVertex`.
+- There is no hidden-surface removal (the depth buffer of the roadmap). A wireframe
+  shows every edge, those at the back too, and an edge of a closed surface, which
+  belongs to two triangles, always shows the color of the one drawn later (section 15).
+  Filled or shaded triangles come out right only when the list runs from the back of the
+  object to its front as the camera sees it; for a convex solid seen from outside it is
+  enough that every triangle turned away from the camera comes before every triangle
+  turned toward it. `RenderObject` clips nothing; `ClipScene` (3.11) does that before
+  an object arrives here.
 
 ### 3.9 Rasterizer: models, instances and scenes
 
@@ -284,11 +298,12 @@ rotation until the transforms step).
   list and a triangle list that indexes it) one level up; there is no scene type until a
   scene holds more than those two lists (section 14, decision 11).
   `RenderScene(viewport, models, instances, camera)` draws every instance in list order
-  as the camera sees it (3.10); with the default camera the result is `RenderInstance`'s
-  for each: the book's `RenderScene`. Where two instances overlap, the later one's edges
-  show, as for the triangles within an object.
-- Wireframes, no hidden-surface removal and no clipping, as in 3.8: every instance must
-  stand entirely in front of the camera.
+  as the camera sees it (3.10), clipped to the camera's clipping planes (3.11); with the
+  default camera the result is `RenderInstance`'s for each: the book's `RenderScene`.
+  Where two instances overlap, the later one shows, as for the triangles within an
+  object.
+- No hidden-surface removal, as in 3.8. `RenderInstance` and `RenderModel` clip nothing
+  and outline their triangles: what they draw must stand entirely in front of the camera.
 
 ### 3.10 Rasterizer: model and camera transforms
 
@@ -325,18 +340,26 @@ stays outside the matrices (section 14, decision 12).
   first moved by `-position`, which puts the camera at the origin, and then turned by
   the inverse of the camera's rotation, its transpose, which puts the camera's line of
   sight on +Z. Precondition: `orientation` is a rotation (orthonormal), not checked.
-- `RenderModel(viewport, model, transform)` replaces every vertex `V` by `transform * V`
-  and draws the result with the model's triangles through `RenderObject` (3.8), which
-  projects each vertex with `ProjectVertex` and outlines each triangle: the book's
-  `RenderModel`.
+- `TransformModel(model, transform)` is the model under a transform, as a model of its
+  own: every vertex `V` replaced by `transform * V`, the same triangles, and the
+  bounding sphere moved along (3.11). `RenderModel(viewport, model, transform)` draws
+  the vertices of `TransformModel(model, transform)` with the model's triangles through
+  `RenderObject` (3.8), which projects each vertex with `ProjectVertex` and outlines
+  each triangle: the book's `RenderModel`.
 - `RenderInstance(viewport, instance, models)` is
   `RenderModel(models[instance.model], MakeModelMatrix(instance))`: the camera at the
-  origin. `RenderScene(viewport, models, instances, camera = Camera{})` is the book's
-  Listing 10-5: `M_camera = MakeCameraMatrix(camera.position, camera.orientation)` once,
-  then for every instance `I` in list order
-  `RenderModel(models[I.model], M_camera * MakeModelMatrix(I))`. One matrix per instance
-  takes a vertex from the model's coordinates through the world into the camera's, and
-  the projection follows vertex by vertex.
+  origin. `RenderScene(viewport, models, instances, camera = Camera{},
+  draw_triangle = DrawWireframeTriangle)` is the book's Listing 10-5 with the clipping
+  step of the next chapter in it:
+  `M_camera = MakeCameraMatrix(camera.position, camera.orientation)` once; then every
+  instance `I` becomes `TransformModel(models[I.model], M_camera * MakeModelMatrix(I))`,
+  geometry in the camera's coordinates; then that list is clipped,
+  `ClipScene(scene, camera.clipping_planes)` (3.11); then every instance that is left is
+  drawn, in list order, with `RenderObject(vertices, triangles, draw_triangle)`. One
+  matrix per instance takes a vertex from the model's coordinates through the world into
+  the camera's, the clipping works on the result in 3D, and the projection follows
+  vertex by vertex. A camera has no clipping planes unless it is given some, and
+  without them the middle step changes nothing.
 - The projection is not a matrix, by the book's own choice: "for practical reasons we
   won't be using the full projection matrix". The model and camera transforms are
   applied as matrices, their result is converted back to Cartesian coordinates, and
@@ -344,11 +367,138 @@ stays outside the matrices (section 14, decision 12).
   not matrix transforms, clipping first of all, between the transforms and the
   projection. The chapter's homogeneous projection matrix (a bottom row `(0, 0, 1, 0)`,
   which divides by z) is exercised by one unit test of `Mat4` and built nowhere else.
-- No clipping yet: a camera that moves into the scene can leave vertices with `z <= 0`
-  in its coordinates, which `ProjectVertex` asserts against; the demo keeps everything in
-  front of the camera.
+- A camera that moves into the scene leaves vertices with `z <= 0` in its coordinates,
+  which `ProjectVertex` asserts against. A camera with the clipping planes of its
+  viewport (3.11) may stand anywhere; one without them, as in the `camera` demo, must
+  keep everything in front of it.
 
-### 3.11 Numeric conventions
+### 3.11 Rasterizer: clipping
+
+The clipping volume is the part of space the camera can draw. Clipping computes the
+intersection of the scene with it: a 3D operation that takes the geometry of the scene
+and returns new geometry. It therefore happens after the scene has been placed, on
+vertices that have been through the model and camera transforms, and before the
+perspective projection, which cannot take a vertex behind the camera at all. The volume
+is bounded by planes, so clipping against it is clipping against one plane after
+another.
+
+Planes and bounding spheres:
+
+- `Plane` is `{normal, d}`: the points `P` with `<N, P> + D = 0`, `normal` a unit vector
+  and `d` the book's `D`, minus the distance from the origin to the plane along `N`. The
+  side the normal points to is in front of the plane; clipping keeps what is in front,
+  so a clipping plane's normal points into the volume.
+- `SignedDistance(plane, vertex)` is `<N, vertex> + D`: zero on the plane, positive in
+  front of it, negative behind, and for a unit normal the distance itself.
+- `IntersectSegmentPlane(A, B, plane)` is `t = (-D - <N, A>) / <N, B - A>`, the book's:
+  the fraction of the way from `A` to `B` at which the segment crosses the plane, at
+  `Q = A + t (B - A)`. The same `t` gives any attribute that is linear along the
+  segment, `a + t (b - a)`. Precondition: `<N, B - A> != 0`.
+- `BoundingSphere` is `{center, radius}`, a sphere that contains an object. Its default
+  radius is infinite: the sphere that contains everything, always a correct bound and
+  one that never saves work. `MakeBoundingSphere(points)` is the book's approximation:
+  the center is the average of the points and the radius the distance from it to the
+  farthest one. It contains every point, is exact for a shape symmetric about its center
+  (a box) and not always the smallest otherwise; for no points it is the origin with
+  radius 0.
+- `Model` has a `bounding_sphere` around its vertices, in their coordinates, the default
+  one unless a model is given another. `TransformModel(model, transform)` (3.10) moves
+  it with the vertices: the center is transformed like a vertex and the radius is
+  multiplied by the factor by which `transform` scales lengths, the book's
+  `radius * scale`. The factor is the length of the matrix's first column
+  `(m00, m10, m20)`, where the unit vector along X ends up; for the transforms of this
+  pipeline, a rotation, a uniform scaling and a translation, every direction is scaled
+  by it. Precondition: `transform` scales uniformly.
+
+The clipping volume:
+
+- `Camera` has `clipping_planes`, a list of planes in the camera's own coordinates (the
+  eye at the origin looking along +Z), normals pointing into the volume, as in the
+  book's demo. It is empty by default, which clips nothing.
+- `MakeClippingPlanes(viewport)` returns the five planes of what a viewport `w` x `h` at
+  distance `d` shows on a canvas `cw` x `ch`, in this order:
+
+  ```
+  near    N = (0, 0, 1)                    D = -d
+  left    N = ( d, 0, W) / |( d, 0, W)|    D = 0
+  right   N = (-d, 0, W) / |(-d, 0, W)|    D = 0
+  bottom  N = (0,  d, H) / |(0,  d, H)|    D = 0
+  top     N = (0, -d, H) / |(0, -d, H)|    D = 0
+  ```
+
+  with `W = (w / 2) (1 + 1 / cw)` and `H = (h / 2) (1 + 1 / ch)`. The near plane is the
+  viewport's plane `z = d`. Each of the other four passes through the eye and through
+  one side of a rectangle on that plane: the left one holds the points with
+  `x / z = -W / d`, that is `d x + W z = 0`. With `W = H = d`, a field of view of 90
+  degrees, the normals are the book's `(±1/sqrt(2), 0, 1/sqrt(2))` and
+  `(0, ±1/sqrt(2), 1/sqrt(2))`. There is no far plane.
+- The rectangle is the viewport's and half a pixel more on every side (section 14,
+  decision 13), because of the truncation in `ViewportToCanvas` (3.7). The canvas shows
+  more than the viewport: its leftmost column collects what projects up to one pixel to
+  the left of the viewport's left side and its bottom row what projects up to one pixel
+  below it, which a volume cut exactly at the viewport's sides would leave unpainted.
+  And a triangle cut by a side plane gets corners that project exactly onto the plane's
+  line on the canvas: at the viewport's own sides that line is the border between two
+  columns or rows, where rounding would decide the pixel, and half a pixel further out
+  it is the middle of one. A clipping volume may be larger than what is shown; what it
+  lets through beyond the canvas, `PutPixel` drops.
+
+Clipping, from the triangle up. An "instance" in these functions is the book's at this
+stage of the pipeline: not an `Instance`, a model index with a transform, but the
+geometry it stands for, a `Model` whose vertices and bounding sphere are in the camera's
+coordinates, as `TransformModel` returns it; a scene is a list of those.
+
+- `ClipTriangle(triangle, plane, vertices, clipped_triangles)` appends to
+  `clipped_triangles` what the plane leaves of one triangle, whose indices refer to
+  `vertices`. With `d0`, `d1`, `d2` the signed distances of its corners:
+  - none negative: the triangle itself;
+  - none positive: nothing;
+  - exactly one positive, the corner `A`: the triangle `A B' C'`, with `B'` where the
+    side `AB` crosses the plane and `C'` where `AC` does;
+  - exactly two positive, `A` and `B`, and `C` behind: the two triangles `A B A'` and
+    `A' B B'`, with `A'` on `AC` and `B'` on `BC`.
+
+  These are the book's four cases with the corners on the plane assigned: a distance of
+  0 is neither positive nor negative, so a triangle that only touches the plane is kept
+  or dropped whole, and one cut through a corner gives one triangle rather than a
+  triangle and a sliver without area. `A`, `B` and `C` are the triangle's corners
+  rotated, never swapped, so every piece keeps the triangle's winding. A crossing point
+  is `A + t (B - A)` with `t = IntersectSegmentPlane(A, B, plane)`, always computed from
+  the corner in front toward the corner behind, so two triangles that share the cut side
+  compute the same point bit for bit; it is appended to `vertices` and named by index.
+  The new corner's intensity is `hA + t (hB - hA)`, and the color is the triangle's.
+  The book's `ClipTriangle` returns the list; this one appends to it, as the book's own
+  demo code does.
+- `ClipTrianglesAgainstPlane(triangles, plane, vertices)` returns the concatenation of
+  `ClipTriangle` over the list, in order; the new vertices follow the old ones in
+  `vertices`.
+- `ClipInstanceAgainstPlane(instance, plane)`, with `d` the signed distance of the
+  bounding sphere's center and `r` its radius: when `d > r` the instance is in front of
+  the plane and is returned as it is; when `d < -r` it is behind and nothing is returned
+  (`std::nullopt`); otherwise it is returned with its triangles replaced by
+  `ClipTrianglesAgainstPlane` of them. The sphere is trusted: the first two cases do not
+  look at the triangles. In the third the vertices that no triangle names any more, the
+  corners that were cut off, are removed and the triangles renumbered, so that every
+  vertex of the result is in front of the plane or on it, to within the rounding of the
+  crossing points; the bounding sphere is kept, since what is left is inside it. An
+  instance whose sphere reached across the plane while its triangles did not is returned
+  with no triangles. Precondition: `|plane.normal| = 1`.
+- `ClipInstance(instance, planes)` clips against every plane in turn, each working on
+  what the one before left, and returns nothing as soon as one plane leaves nothing.
+- `ClipScene(scene, planes)` returns the instances of `scene` clipped by `ClipInstance`,
+  in order, without those of which nothing is left. With no planes it is the scene.
+- `RenderScene` (3.10) calls `ClipScene` between the transforms and the projection.
+  With the planes of `MakeClippingPlanes(viewport)` every vertex that reaches
+  `ProjectVertex` has `z >= d`, to within the rounding of a crossing point, and so
+  `z > 0`, whatever the scene and wherever the camera stands, and it projects onto the
+  canvas or the row or column next to it.
+- Drawn as a wireframe a clipped triangle is the outline of its pieces: the cut shows as
+  an edge along the plane, and the diagonal between the two pieces of a quadrilateral
+  shows too. Drawn shaded, the pieces have the intensities of the whole triangle at
+  their corners, taken along the sides in 3D; inside a piece `DrawShadedTriangle`
+  interpolates along the canvas as before (section 15).
+
+### 3.12 Numeric conventions
 
 - All geometry and color math uses `double`. Switching to `float` would be a deliberate
   decision rather than a detail, because it changes the golden images.
@@ -367,12 +517,12 @@ CLAUDE.md                 design principles and the folder-structure rules
 README.md                 build instructions and project overview
 docs/SPEC.md              this document
 include/cgfs/             public headers: one folder per layer, one file per concept
-    math/vec3.h  mat4.h
+    math/vec3.h  mat4.h  plane.h  bounding_sphere.h
     image/color.h  canvas.h  image_io.h
-    camera/viewport.h  camera.h
+    camera/viewport.h  camera.h  clipping_planes.h
     raytracer/scene.h  raytracer.h
     rasterizer/point.h  interpolate.h  line.h  triangle.h  projection.h  object.h
-    rasterizer/model.h  instance.h  scene.h
+    rasterizer/model.h  instance.h  clipping.h  scene.h
     demo/raytracer_scenes.h  rasterizer_scenes.h
                           the demo pictures shared by render_demo and the golden tests
 src/<layer>/              implementation files, mirroring include/cgfs/<layer>/
@@ -380,13 +530,15 @@ apps/
     render_demo.cpp       command-line renderer for the demo pictures
 tests/
     CMakeLists.txt
-    support/test_helpers.h      Catch2 printers for Vec3/Mat4/Color/Rgb8/Point, a temp-file helper
-    math/vec3_test.cpp  mat4_test.cpp
+    support/test_helpers.h      Catch2 printers for Vec3/Mat4/Plane/Color/Rgb8/Point/Triangle,
+                                a temp-file helper
+    math/vec3_test.cpp  mat4_test.cpp  plane_test.cpp  bounding_sphere_test.cpp
     image/color_test.cpp  canvas_test.cpp  image_io_test.cpp
-    camera/viewport_test.cpp  camera_test.cpp
+    camera/viewport_test.cpp  camera_test.cpp  clipping_planes_test.cpp
     raytracer/raytracer_test.cpp
     rasterizer/interpolate_test.cpp  line_test.cpp  triangle_test.cpp  projection_test.cpp
-    rasterizer/object_test.cpp  model_test.cpp  instance_test.cpp  scene_test.cpp
+    rasterizer/object_test.cpp  model_test.cpp  instance_test.cpp  clipping_test.cpp
+    rasterizer/scene_test.cpp
     rasterizer/pixel_helpers.h
     demo/golden_test.cpp
     demo/golden/          reference renders of the demo pictures (PPM)
@@ -406,41 +558,51 @@ not the namespaces, carry the structure. The layers, bottom to top, each dependi
 on the ones below it:
 
 ```
-math         vec3, mat4                                             vector algebra
+math         vec3, mat4, plane, bounding_sphere                     vector algebra and plain geometry
 image        color, canvas, image_io                                colors, the pixel buffer, file formats
-camera       viewport, camera                                       how canvas pixels map into the world
+camera       viewport, camera, clipping_planes                      how canvas pixels map into the world
 raytracer    scene, raytracer                                       the ray tracing renderer
 rasterizer   point, interpolate, line, triangle, projection,        the rasterizing renderer
-             object, model, instance, scene
+             object, model, instance, clipping, scene
 demo         raytracer_scenes, rasterizer_scenes                    the demo pictures
 ```
 
 - `math/vec3`: `Vec3` and its free functions, header-only, `constexpr` where possible.
   `math/mat4`: `Mat4`, the 4 x 4 matrix of the transforms, its product, its application
   to a point and the scaling, translation and rotation constructors; header-only.
+  `math/plane`: `Plane`, `SignedDistance` and `IntersectSegmentPlane`.
+  `math/bounding_sphere`: `BoundingSphere` and `MakeBoundingSphere`. Both header-only,
+  and in this layer because they depend on nothing but `Vec3`.
 - `image/color`: `Color`, `Rgb8`, `ToRgb8`, header-only. `image/canvas`: the pixel buffer
   and the centered coordinate system. `image/image_io`: PPM writer and reader, PNG
   writer; used by `Canvas::Save` and the tests.
 - `camera/viewport`: pixel to viewport-point mapping and field of view. Used by the ray
-  tracer and by the rasterizer's projection. `camera/camera`: `Camera`, a position and
-  an orientation, and `MakeCameraMatrix`; plain data for whichever renderer moves its
-  camera, the rasterizer today.
+  tracer and by the rasterizer's projection. `camera/camera`: `Camera`, a position, an
+  orientation and a list of clipping planes, and `MakeCameraMatrix`; plain data for
+  whichever renderer moves its camera, the rasterizer today.
+  `camera/clipping_planes`: `MakeClippingPlanes`, the five planes of what a viewport
+  shows.
 - `raytracer/scene`: plain data: spheres, lights, background color.
   `raytracer/raytracer`: intersection, lighting, the render loop.
 - `rasterizer/point`: `Point`, with its intensity `h`, and `ToPixel`, the one conversion
   from interpolated coordinates to pixels. `rasterizer/interpolate`: `Interpolate`, the
   building block. `rasterizer/line`: `DrawLine`. `rasterizer/triangle`:
-  `DrawWireframeTriangle`, `DrawFilledTriangle` and `DrawShadedTriangle`.
+  `DrawWireframeTriangle`, `DrawFilledTriangle` and `DrawShadedTriangle`, and the
+  signature the three share, `DrawTriangleFunction`.
   `rasterizer/projection`: `ViewportToCanvas` and `ProjectVertex`, from a `Vec3` seen
   through a `Viewport` to the `Point` the primitives draw; the start of the 3D pipeline.
-  `rasterizer/object`: `Triangle`, three vertex indices and a color, and `RenderObject`,
-  which projects an object's vertex list and outlines its triangles; the first use of
-  the projection. `rasterizer/model`: `Model`, the vertex list and the triangle list of
-  an object, stored once, and `RenderModel`, which draws a model under a transform
-  through `RenderObject`. `rasterizer/instance`: `Instance`, a model index with a
-  position, an orientation and a scale, `MakeModelMatrix`, its model matrix, and
-  `RenderInstance`. `rasterizer/scene`: `RenderScene`, every instance of a model list
-  and an instance list, in order, as a camera sees them.
+  `rasterizer/object`: `Triangle`, three vertex indices, a color and an intensity per
+  corner, and `RenderObject`, which projects an object's vertex list and draws its
+  triangles with the primitive it is given; the first use of the projection.
+  `rasterizer/model`: `Model`, the vertex list and the triangle list of an object,
+  stored once, with a bounding sphere, `TransformModel`, the model under a transform,
+  and `RenderModel`, which draws that through `RenderObject`. `rasterizer/instance`:
+  `Instance`, a model index with a position, an orientation and a scale,
+  `MakeModelMatrix`, its model matrix, and `RenderInstance`. `rasterizer/clipping`:
+  `ClipScene`, `ClipInstance`, `ClipInstanceAgainstPlane`, `ClipTrianglesAgainstPlane`
+  and `ClipTriangle`, what a list of planes leaves of a scene. `rasterizer/scene`:
+  `RenderScene`, every instance of a model list and an instance list, in order, as a
+  camera sees them: transformed, clipped, projected and drawn.
 - `demo/raytracer_scenes`: the ray-traced demo scenes, each a function returning a
   `Scene`. `demo/rasterizer_scenes`: the rasterized demo pictures, each a function that
   draws into a canvas. Either way the app and the golden tests render exactly the same
@@ -471,7 +633,7 @@ and a line in the table above.
 Signatures below are the intended shape. Names, parameter order and semantics are
 normative; exact qualifiers and overload sets may be adjusted during implementation.
 
-### 5.1 `math/vec3.h`, `math/mat4.h`
+### 5.1 `math/vec3.h`, `math/mat4.h`, `math/plane.h`, `math/bounding_sphere.h`
 
 ```cpp
 struct Vec3 {
@@ -503,6 +665,30 @@ Mat4           MakeOYRotationMatrix(double degrees);      // about Y; cos and si
 
 `Mat4` is plain data with free functions, like `Vec3`; the constructors carry the book's
 demo names. There is no projection matrix (section 14, decision 12).
+
+```cpp
+// plane.h
+struct Plane {                        // the points P with <N, P> + D = 0 (section 3.11)
+    Vec3 normal;                      // N, unit length; points to the plane's front
+    double d = 0.0;                   // D
+    bool operator==(const Plane&) const = default;
+};
+constexpr double SignedDistance(const Plane& plane, Vec3 vertex);        // <N, vertex> + D
+constexpr double IntersectSegmentPlane(Vec3 a, Vec3 b, const Plane& plane);
+// t with a + t (b - a) on the plane: (-D - <N, a>) / <N, b - a>
+
+// bounding_sphere.h
+struct BoundingSphere {               // a sphere that contains an object (section 3.11)
+    Vec3 center;
+    double radius = infinity;         // the default contains everything
+    bool operator==(const BoundingSphere&) const = default;
+};
+BoundingSphere MakeBoundingSphere(std::span<const Vec3> points);  // average; farthest point
+```
+
+Plain geometry on `Vec3`, header-only like the rest of the layer. The ray tracer's
+`Sphere` (5.6) is a thing to be drawn, with a color and a finish; a `BoundingSphere` is
+only a bound, and shares nothing with it but the two fields.
 
 ### 5.2 `image/color.h`
 
@@ -553,7 +739,7 @@ void  WritePng(const std::filesystem::path&, int width, int height, std::span<co
 Image ReadPpm(const std::filesystem::path&);   // binary P6 with maxval 255; used by golden tests
 ```
 
-### 5.5 `camera/viewport.h`, `camera/camera.h`
+### 5.5 `camera/viewport.h`, `camera/camera.h`, `camera/clipping_planes.h`
 
 ```cpp
 class Viewport {
@@ -584,13 +770,21 @@ canvas, so there is no lifetime coupling between the two.
 struct Camera {                               // where the eye is and which way it looks (section 3.10)
     Vec3 position;
     Mat4 orientation = Mat4::Identity();      // a rotation: the camera's axes in the world's
+    std::vector<Plane> clipping_planes;       // in the camera's coordinates; none: no clipping (3.11)
 };
 Mat4 MakeCameraMatrix(Vec3 position, const Mat4& orientation);  // Transposed(orientation) * T(-position)
+
+// clipping_planes.h
+std::vector<Plane> MakeClippingPlanes(const Viewport& viewport);
+// near, left, right, bottom, top: what the viewport shows, half a pixel more at the sides
 ```
 
-The default camera is the origin looking along +Z, the camera of every earlier chapter.
-The viewport is not part of it: the camera says where the eye is, the viewport what
-window it looks through.
+The default camera is the origin looking along +Z, without clipping planes: the camera
+of every earlier chapter. The viewport is not part of it: the camera says where the eye
+is, the viewport what window it looks through. The clipping planes are the camera's, as
+in the book's demo, because they are given in its coordinates and move with it;
+`MakeClippingPlanes` derives them from the viewport that the same camera looks through,
+and the caller keeps the two together.
 
 ### 5.6 `raytracer/scene.h`
 
@@ -650,7 +844,7 @@ The scene and viewport must outlive the tracer. `Hit::sphere` points into the sc
 sphere vector and is valid as long as that vector is not modified. `ClosestIntersection`,
 `TraceRay` and `ComputeLighting` are public so the tests can exercise them directly.
 
-### 5.8 `rasterizer/point.h`, `interpolate.h`, `line.h`, `triangle.h`, `projection.h`, `object.h`, `model.h`, `instance.h`, `scene.h`
+### 5.8 `rasterizer/point.h`, `interpolate.h`, `line.h`, `triangle.h`, `projection.h`, `object.h`, `model.h`, `instance.h`, `clipping.h`, `scene.h`
 
 ```cpp
 // point.h
@@ -673,6 +867,8 @@ void DrawLine(Canvas& canvas, Point p0, Point p1, Color color);
 void DrawWireframeTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
 void DrawFilledTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
 void DrawShadedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);  // color * h
+using DrawTriangleFunction = void (*)(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
+// the signature of the three, for whoever draws many triangles
 
 // projection.h
 Point ViewportToCanvas(const Viewport& viewport, double x, double y);  // truncated (section 3.7)
@@ -682,17 +878,25 @@ Point ProjectVertex(const Viewport& viewport, Vec3 v);                 // precon
 struct Triangle {                     // one face of an object (section 3.8)
     std::array<std::size_t, 3> v{};   // indices into the object's vertex list
     Color color;
+    std::array<double, 3> h{1.0, 1.0, 1.0};  // the intensity at each corner
+    bool operator==(const Triangle&) const = default;
 };
 void RenderObject(Canvas& canvas, const Viewport& viewport, std::span<const Vec3> vertices,
-                  std::span<const Triangle> triangles);  // wireframe; every index < vertices.size()
+                  std::span<const Triangle> triangles,
+                  DrawTriangleFunction draw_triangle = DrawWireframeTriangle);
+// every index < vertices.size(); every vertex has z > 0
 
 // model.h
 struct Model {                        // an object's shape, described once (section 3.9)
     std::vector<Vec3> vertices;       // in the model's own coordinates
     std::vector<Triangle> triangles;
+    BoundingSphere bounding_sphere;   // around the vertices; the default contains everything
+    bool operator==(const Model&) const = default;
 };
+Model TransformModel(const Model& model, const Mat4& transform);
+// transform * every vertex, the same triangles, the sphere moved and scaled along (section 3.11)
 void RenderModel(Canvas& canvas, const Viewport& viewport, const Model& model,
-                 const Mat4& transform);  // RenderObject on transform * every vertex (section 3.10)
+                 const Mat4& transform);  // RenderObject on TransformModel's vertices (section 3.10)
 
 // instance.h
 struct Instance {                     // one appearance of a model in the scene (section 3.9)
@@ -705,10 +909,20 @@ Mat4 MakeModelMatrix(const Instance& instance);  // T(position) * orientation * 
 void RenderInstance(Canvas& canvas, const Viewport& viewport, const Instance& instance,
                     std::span<const Model> models);  // RenderModel with the model matrix
 
+// clipping.h (section 3.11); an "instance" is a Model in the camera's coordinates
+void ClipTriangle(const Triangle& triangle, const Plane& plane, std::vector<Vec3>& vertices,
+                  std::vector<Triangle>& clipped_triangles);  // appends 0, 1 or 2 triangles
+std::vector<Triangle> ClipTrianglesAgainstPlane(std::span<const Triangle> triangles,
+                                                const Plane& plane, std::vector<Vec3>& vertices);
+std::optional<Model> ClipInstanceAgainstPlane(Model instance, const Plane& plane);
+std::optional<Model> ClipInstance(Model instance, std::span<const Plane> planes);
+std::vector<Model> ClipScene(std::vector<Model> scene, std::span<const Plane> planes);
+
 // scene.h
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
-                 std::span<const Instance> instances,
-                 const Camera& camera = Camera{});  // every instance, in list order, as camera sees it
+                 std::span<const Instance> instances, const Camera& camera = Camera{},
+                 DrawTriangleFunction draw_triangle = DrawWireframeTriangle);
+// every instance, in list order, as camera sees it: transformed, clipped, projected, drawn
 ```
 
 One header per primitive. Free functions that take the canvas as their first parameter,
@@ -720,7 +934,15 @@ and instance lists the same way, and `RenderInstance` takes the model list to re
 instance's index, as `RenderTriangle` takes the projected list inside `RenderObject`. The
 camera and the new `Instance` fields arrived as a defaulted parameter and defaulted
 fields, so every call and every aggregate initializer written before them still compiles
-and draws the same picture.
+and draws the same picture. Clipping and shading arrived the same way: the camera's
+clipping planes, a triangle's intensities and a model's bounding sphere are fields with
+defaults, the triangle primitive is a defaulted parameter, and without them a scene is
+drawn as it was.
+The clipping functions carry the book's names and take their instance, and `ClipScene`
+its scene, by value: an instance that needs no clipping is moved through untouched,
+which is what the pseudocode's "return instance" means, and the caller chooses between
+handing a scene over (`std::move`) and keeping it. "Nothing is left" is an empty
+`std::optional`, the pseudocode's NULL.
 They are the primitives; a class with state (a depth buffer, a camera) comes when the
 pipeline needs one, and the primitives stay as they are.
 
@@ -805,6 +1027,20 @@ Unit tests:
   `MakeOYRotationMatrix` turns +X to +Z and +Z to -X at 90 degrees within `1e-12`,
   leaves y exactly, is exactly the identity at 0 degrees, matches cos and sin by hand at
   30 degrees, composes (30 + 60 = 90), keeps lengths and inverts by transposition.
+- `plane`: `SignedDistance` is positive in front of the plane, negative behind it, zero
+  on it and `D` at the origin; flipping the normal and `D` exchanges the sides; a slanted
+  unit normal (0.6, 0, 0.8) gives distances within `1e-12`; a normal of length 2 gives
+  twice the distance and the same zero set. `IntersectSegmentPlane` is 1/4 from `z = 0`
+  to `z = 4` across `z = 1` and 3/4 from the other end; `A + t (B - A)` lies on the
+  plane, exactly for round numbers and within `1e-12` for a slanted plane; it is 0 with
+  `A` on the plane, 1 with `B` on it and outside `[0, 1]` beyond the segment. Both are
+  usable in constant expressions.
+- `bounding_sphere`: the default sphere has an infinite radius and contains anything;
+  `MakeBoundingSphere` of the book's cube is the origin and `sqrt(3)`, and of a box off
+  the origin its center and half its diagonal, exactly; of a lopsided set it is the
+  average and the distance to the farthest point (center (1, 0, 0), radius 3, where the
+  smallest sphere has radius 2) and still contains every point; one point gives radius
+  0 and no points the origin with radius 0.
 - `color`: scaling, addition, `ToRgb8` clamping and truncation (e.g. `254.9 -> 254`,
   `300 -> 255`, `-5 -> 0`).
 - `canvas`: default dimensions; `Clear` with and without a color; `PutPixel` at the
@@ -817,13 +1053,27 @@ Unit tests:
   (center, top-right `(0.5, 0.5, 1)`, bottom-left, quarter); the aspect-matched
   viewport maps the top-right corner to `(16/18, 0.5, 1)`; `Fov()` of the default
   viewport is 53.13 degrees on both axes within 0.01.
-- `camera`: the default camera is at the origin with the identity orientation and its
-  matrix is exactly the identity; a moved camera maps its own position to the origin and
+- `camera`: the default camera is at the origin with the identity orientation, has no
+  clipping planes and its matrix is exactly the identity; a moved camera maps its own position to the origin and
   a point 5 ahead to `(0, 0, 5)`; a camera turned 90 degrees looks along -X and maps
   `(-5, 0, 0)` to `(0, 0, 5)`, what was ahead to its right and up to up; for the book's
   demo camera, `(-3, 1, 2)` turned -30 degrees, the points `position + orientation * v`
   for `v` on the camera's axes map to `v`, and the matrix equals the transpose times the
   translation.
+- `clipping_planes`: five planes, the near one first, `(0, 0, 1)` with `D = -d` for two
+  distances; for a field of view of 90 degrees on a canvas of 10^9 pixels a side, where
+  the half pixel does not show, the normals are the book's within `1e-6` and every side
+  plane has `D = 0`; on 64 x 32 pixels with a 2 x 1 viewport at distance 2 the normals
+  are those of `(±2, 0, 1 + 1/64)` and `(0, ±2, 1/2 + 1/64)`; every normal has length 1
+  for four viewports; for the demo viewport on 320 x 180 the rectangle half a pixel
+  larger than the viewport lies on the four side planes at three depths, the viewport's
+  center is on the near plane and in front of the others, the viewport's own sides are
+  inside the volume by less than half a pixel and the points one pixel beyond them
+  outside it; a point of each side plane projects to ±160.5 or ±90.5, the middle of a
+  pixel; a table of points is in or out of the volume as it projects inside the viewport
+  and is no nearer than it, each side plane rejecting only its own side, and a point
+  behind the camera on the rays of a point in view is out; a viewport at distance 2
+  narrows the volume and moves the near plane.
 - `raytracer`:
   - `IntersectRaySphere`: miss gives two infinite roots; hit gives two finite roots in
     the right order; tangent gives equal roots; origin inside the sphere gives one
@@ -911,7 +1161,14 @@ Unit tests:
     its color and the one drawn later owns the shared edge, in both orders; a triangle
     twice as far and twice as large gives the same picture, and twice as far without the
     scaling half the size; the lists may be a `std::array` and a plain array; an object
-    without triangles, or without vertices, draws nothing.
+    without triangles, or without vertices, draws nothing. A `Triangle`'s intensities
+    are 1 unless given; with `DrawFilledTriangle` the canvas is that primitive's on the
+    projected corners, and with `DrawShadedTriangle` and the default intensities the
+    same; a shaded triangle with the intensities 1, 0.25 and 0.5 gives the canvas of
+    `DrawShadedTriangle` on points that carry them, 255, 63 and 127 at its corners,
+    whichever order the corners are named in; the two triangles of the square can be
+    differently bright at the vertices they share; outlines and fills ignore the
+    intensities.
   - `RenderModel` (same canvas and viewport; a lopsided triangle in its own plane
     z = 0): a translation to z = 1 gives the wireframe of its corners and the canvas of
     `RenderObject` on the vertices moved by hand; the transform is applied before the
@@ -919,7 +1176,14 @@ Unit tests:
     picture); a half turn about Y mirrors the model in x, exactly, since cos 180 is -1
     and the model has z = 0; a quarter turn shows it edge-on, 14 pixels on the column
     x = 0 from y = -7 to 6; a product of two translations draws as their sum; an empty
-    model draws nothing.
+    model draws nothing. `TransformModel` transforms every vertex and keeps the
+    triangles, and with the identity returns the model; a model's default bounding
+    sphere contains everything and stays so; a translation moves a sphere's center and
+    keeps its radius, a scaling by 2 or by 0.75 multiplies the radius, all exactly, a
+    rotation keeps it within `1e-12`, and under an instance's whole model matrix the
+    radius is multiplied by the scale; the transformed sphere of `MakeBoundingSphere`
+    still contains the transformed vertices under three transforms, one of them a
+    mirroring.
   - `RenderInstance` (same canvas and viewport; the model's triangle lies in its own
     plane z = 0 and is placed at z = 1): at `(0, 0, 1)` it gives the wireframe of its
     corners and the canvas of `RenderObject` on the vertices moved by hand; a position
@@ -934,6 +1198,42 @@ Unit tests:
     translation, and equals `T * R * S`; the scale shrinks the model about its own
     origin (half the size in place; twice the size twice as far is the same picture)
     and the orientation turns it there (a half turn mirrors a lopsided model in x).
+  - Clipping (against the plane `z = 1`, whose normal is an axis, with coordinates that
+    are small binary fractions, so every distance, fraction and crossing point is
+    exact). `ClipTriangle`: a triangle in front is appended as it is and one behind not
+    at all, in both cases without a new vertex; one corner in front, its sides cut at
+    1/4 and 1/2, gives the triangle `A B' C'` with the two crossing points appended in
+    that order and the intensities `1 + 1/4 (0 - 1)` and `1 + 1/2 (0.25 - 1)`; the same
+    result whichever of the three corners is in front, and the other winding gives
+    `A C' B'`; two corners in front give `A B A'` and `A' B B'` with the intensities
+    interpolated, whichever corner is behind; for both shapes and all six corner orders
+    every piece has the winding and the plane of its triangle and the pieces' areas add
+    up to the part in front (1/8 and 3/4 of the triangle); a corner or a side on the
+    plane makes a triangle in front be kept, one behind be dropped and one in the plane
+    be kept, all without new vertices; a triangle cut through a corner gives one
+    triangle, the crossing on the side to that corner being the corner itself; two
+    triangles that share a cut side and list it in opposite directions get the same
+    crossing point bit for bit, with coordinates that are not round.
+    `ClipTrianglesAgainstPlane` keeps the order and appends the new vertices after the
+    old. `ClipInstanceAgainstPlane` (a 2 x 2 square of two triangles with its bounding
+    sphere): in front it is returned equal to itself, behind nothing is returned, and
+    across the plane its three remaining triangles and six vertices are exactly the
+    expected ones, half the area, every vertex in front and in use, the crossing on the
+    shared diagonal present twice at the same place, the sphere unchanged; the sphere is
+    trusted, in both directions, against the triangles; a sphere that touches the plane
+    (`d = r`, `d = -r`) decides nothing; with the default sphere every case goes through
+    the triangles, an instance behind coming back with no triangles and no vertices; a
+    vertex behind the camera that no triangle names is removed. `ClipInstance`: no
+    planes return the instance; two planes leave a quarter of the square in either
+    order; nothing is left as soon as one plane leaves nothing. `ClipScene`: four
+    instances are kept, removed, clipped and kept, in order; no planes return the scene
+    and no scene gives none. Against `MakeClippingPlanes` of the demo viewport: the
+    book's cube at eight places across the planes (the near plane through it, the
+    camera inside it, each side, a corner, three planes at once) comes back changed and
+    not empty, with every vertex in use, in front of all five planes within `1e-9`, at
+    `z > 0.999`, and projected by `ProjectVertex` to `-160 <= x <= 160`,
+    `-90 <= y <= 90`; a cube well inside the volume is returned equal to itself, and
+    cubes behind the camera or beyond a side leave nothing.
   - `RenderScene`: three instances of one model, placed apart, give the three outlines,
     the canvas of three `RenderInstance` calls and as many pixels as the three drawn
     alone; two models of one shape in two colors at the same position show the color of
@@ -948,7 +1248,21 @@ Unit tests:
     placed 1 ahead along its line of sight exactly as the default camera sees the
     untransformed instance at `(0, 0, 1)`. The turned-camera tests use a triangle whose
     corners are 0.14 from its center, off the pixel boundary that 0.125 sits on, so that
-    cos and sin, exact only to a few ulps, cannot move a pixel (section 15).
+    cos and sin, exact only to a few ulps, cannot move a pixel (section 15). The
+    triangle primitive: an outline by default, and with `DrawFilledTriangle` or
+    `DrawShadedTriangle` the canvas of that primitive on the projected corners, the
+    intensities taken from the model's triangles. Clipping: instances in front of every
+    plane of `MakeClippingPlanes` are drawn as without planes; instances behind the
+    camera, at the camera and beyond each side are not drawn, and with one more in view
+    the picture is that one alone; a triangle with one corner 3 in front of the camera
+    and two 1 behind it is drawn as the outline of its tip, cut at `z = 1`; a triangle
+    cut by the plane `x = 0` is the outline of its two pieces and lights no pixel behind
+    the plane; drawn shaded, the same cut triangle is pixel for pixel the whole one with
+    everything behind the plane removed, intensities included, 127 on the cut; the
+    planes are in the camera's coordinates, so to a camera turned 90 degrees an instance
+    along -X is in front and one along +X behind, and a camera that steps forward leaves
+    an instance behind its near plane. The tests that compare pixels use planes whose
+    normals are axes, where the crossing points land on whole pixels.
 
 Golden-image tests:
 
@@ -963,17 +1277,20 @@ Golden-image tests:
   reference has no shadows because ambient light is never blocked; only the reflective
   and mirror ball references show reflections. `lines_320x180.ppm`,
   `triangles_320x180.ppm`, `shaded_320x180.ppm`, `cube_320x180.ppm`,
-  `objects_320x180.ppm`, `instances_320x180.ppm` and `camera_320x180.ppm` are the
-  rasterizer's demos (section 9): every pixel of them comes from `DrawLine`,
-  `DrawFilledTriangle` or `DrawShadedTriangle`, the objects' through `RenderObject`, the
-  instances' and the camera scene's through `RenderScene`. The 2D scenes compute their
+  `objects_320x180.ppm`, `instances_320x180.ppm`, `camera_320x180.ppm` and
+  `clipping_320x180.ppm` are the rasterizer's demos (section 9): every pixel of them
+  comes from `DrawLine`, `DrawFilledTriangle` or `DrawShadedTriangle`, the objects'
+  through `RenderObject`, the instances', the camera scene's and the clipping scene's
+  through `RenderScene`. The 2D scenes compute their
   vertices with integer arithmetic and their colors and intensities without any `libm`
   call, and the projections of the cube, the objects and the instances are a few IEEE
   additions, multiplications and divisions, which every platform rounds the same way,
   so those pictures are reproducible bit for bit. The camera scene is the first whose
   vertices pass through `cos` and `sin`; section 15 records the margin by which its
   projected vertices clear the pixel boundaries, so that a `libm` off by a few ulps
-  still draws the same pixels.
+  still draws the same pixels. The clipping scene is the second, and the first whose
+  picture is filled: section 15 records its margin, and what had to be moved off the
+  pixel boundaries to get one.
 - `golden_test.cpp` renders the same scenes and compares every channel of every pixel
   with the reference image. The test passes when no channel differs by more than 1. The
   tolerance absorbs floating-point differences between compilers and standard
@@ -981,19 +1298,21 @@ Golden-image tests:
 - The scenes are defined once, in the `demo` layer, shared by `render_demo` and the
   golden test, so the app and the test cannot drift apart.
 - The references are regenerated only when rendering behaviour changes on purpose, with
-  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles|shaded|cube|objects|instances|camera> --width 320 --height 180 --output tests/demo/golden/...`
+  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping> --width 320 --height 180 --output tests/demo/golden/...`
   from a Release build, and the pictures are reviewed before they are committed. The
   `flat` reference doubles as a regression test: neither the specular nor the shadow code
   path may change the output of an ambient-only scene, `diffuse` pins the shadows of
   matte surfaces independently of the highlights, and `specular` pins the output of
-  non-reflective surfaces under the recursive `TraceRay`.
+  non-reflective surfaces under the recursive `TraceRay`. In the same way `objects`,
+  `instances` and `camera` pin the wireframes through the pipeline that now clips and
+  can shade: they are byte for byte what they were before it could.
 
 ## 9. Demo application
 
 `render_demo` renders one of the demo pictures to a file:
 
 ```
-render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|axes] [--width N] [--height N] [--distance D] [--output PATH]
+render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|axes] [--width N] [--height N] [--distance D] [--output PATH]
 ```
 
 Defaults: `reflective`, 1920 x 1080, distance 1, `render.png`. The `mirrorball` scene is
@@ -1039,10 +1358,39 @@ at (1.25, 2.5, 7.5), the instances and the camera of the book's demo, and draws 
 `RenderScene` as seen from a camera at (-3, 1, 2) turned -30 degrees about Y, that is 30
 degrees to its right, toward the cubes; every vertex goes through one matrix, the camera
 matrix times the instance's model matrix, and then through `ProjectVertex` as before. The
+`clipping` scene is the picture of the clipping chapter and the first with shaded
+solids: `DrawClippingScene` draws a city of 47 instances of 8 models, seen by a camera
+that stands in it. The models are a checkerboard floor of 24 x 24 tiles of side 2 from
+(-12, -12) to (36, 36), boxes of four heights (a plinth of 1, a house of 2, a tower of 5,
+a high-rise of 9), two pyramids (a roof of 1.5 and an obelisk of 6) and a mast of 40, all
+2 x 2 at the base and standing on their origin, so that an instance is put on the ground
+by its position and stays there when scaled. Every triangle has an intensity at each
+corner: a shade per face (top 1, left 0.85, front 0.65, right 0.5, back 0.4, bottom 0.3),
+the walls of a box darkening to 0.55 of it at the ground and the sides of a pyramid to
+0.7 at the base, and a floor that fades as `1.1 - 0.024 (x + z)`, clamped to
+`[0.2, 1]`. The city is a map of six rows of six lots on a grid of 4, the nearest lot
+from (2, 2) to (4, 4), with the diagonal left open as an avenue and an obelisk at its
+far end; a house is a box with a roof on it. The camera stands at the map's corner, at
+(0, 2.5, 0), turned 42 degrees to its right, and its clipping planes are
+`MakeClippingPlanes(viewport)`; the picture is drawn by
+`RenderScene(..., camera, DrawShadedTriangle)`. The scene reaches through all five
+planes: the floor runs on under and behind the camera, high-rises leave the picture at
+the top and the plinth at the bottom, and a lantern an arm's length away, the mast
+scaled to a post 2.23 high with the obelisk scaled to 0.1 as its cap, has the near
+corner of its cap cut off by the near plane, so that the inside of the cap shows. One
+high-rise stands behind the camera and is discarded whole by its bounding sphere.
+Without the clipping step the scene could not be drawn: `ProjectVertex` cannot take a
+vertex behind the camera. There is no hidden-surface removal yet, so the picture is
+composed for it (section 14, decision 14): every solid stands ahead of the camera and to
+its right in the world's X and Z, each model lists its faces in an order that is right
+from there (right, back, bottom, top, left, front), and the instances are listed from
+the farthest row to the nearest, each row from its far end, the lantern last and a roof
+after its house. The
 `axes` scene draws the coordinate axes and corner dots; it exercises the canvas without
-ray tracing. For the ray-traced scenes, the cube, the objects, the instances and the
-camera scene the viewport width always matches the canvas aspect ratio, and `--distance`
-zooms them; it has no effect on the 2D pictures. The output format follows
+ray tracing. For the ray-traced scenes, the cube, the objects, the instances, the camera
+scene and the clipping scene the viewport width always matches the canvas aspect ratio,
+and `--distance` zooms them (in the clipping scene it moves the near plane out with the
+viewport as well); it has no effect on the 2D pictures. The output format follows
 the extension. The program prints the render time in milliseconds and exits non-zero with
 a message on bad arguments or I/O failure. Argument parsing is hand-written; no library
 is added for it. The scene table in `render_demo.cpp` is the single list of pictures: the
@@ -1076,9 +1424,14 @@ row.
 - The ray tracer's render loop, intersection and lighting code never throw and never
   allocate. The rasterizer's `Interpolate` returns a `std::vector`, as in the book: one
   allocation per line, a few per triangle and one per row of a shaded triangle; the
-  primitives can only throw if an allocation fails.
+  primitives can only throw if an allocation fails. `RenderScene` builds the scene in
+  the camera's coordinates as a list of models, one per instance, and clipping returns
+  new lists; both allocate per instance, and neither throws otherwise.
 - Programming errors inside the library (a non-unit normal, a dimension mismatch that
-  slipped past the constructor check) are `assert`ed in Debug builds.
+  slipped past the constructor check, a vertex index out of range) are `assert`ed in
+  Debug builds. A clipping plane whose normal is not a unit vector, a bounding sphere
+  that does not contain its model and a transform that does not scale uniformly are
+  stated as preconditions and not checked.
 
 ## 12. Performance
 
@@ -1094,6 +1447,8 @@ Targets apply to Release builds on a single core. Debug builds have no targets.
 | cube demo (12 projected lines)                   | 1920 x 1080 | under 10 ms; under 1 ms measured                 |
 | instances demo (16 instances, 150 triangles)     | 1920 x 1080 | under 10 ms; about 2 ms measured                 |
 | camera demo (2 transformed instances, 24 triangles)| 1920 x 1080 | under 10 ms; 1 to 2 ms measured                  |
+| clipping demo (47 instances, 1626 triangles, shaded)| 1920 x 1080 | under 150 ms; about 50 ms measured               |
+| clipping demo                                    | 320 x 180   | under 20 ms; about 2 ms measured                 |
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
@@ -1120,11 +1475,17 @@ section 4 is meant to absorb these steps as additions:
   `RenderScene`, a scene of models placed by position, and the transforms of the
   chapter's second half: `Mat4`, the model matrix of an instance (scale, rotation about
   Y, translation), `Camera` and the camera matrix, composed into one matrix per
-  instance by `RenderScene` and applied by `RenderModel`. Next, in the book's order:
-  clipping (in 3D, between the transforms and the projection, which is why the
-  projection is not a matrix), the depth buffer, shading (which feeds each vertex's
-  lighting into `Point::h`) and textures. Rotations about X and Z are added the way
-  `MakeOYRotationMatrix` is, when a scene needs them.
+  instance by `RenderScene` and applied by `TransformModel`; and clipping, in 3D between
+  the transforms and the projection (which is why the projection is not a matrix):
+  `Plane`, `BoundingSphere`, the clipping planes of a viewport and `ClipScene` down to
+  `ClipTriangle`, with objects drawn filled or shaded from an intensity per triangle
+  corner. Next, in the book's order: hidden-surface removal (the depth buffer, which
+  will free a shaded scene from having to be listed back to front, and back-face
+  culling, for which the clipped triangles already keep their winding), shading (which
+  computes the corner intensities from lights and normals instead of storing them) and
+  textures (which need perspective-correct interpolation, and with it the intensities
+  of a clipped triangle will stop depending on where it was cut). Rotations about X and
+  Z are added the way `MakeOYRotationMatrix` is, when a scene needs them.
 - Optional interactive window behind a `CGFS_ENABLE_WINDOW` option (SDL2 or similar),
   off by default so the dependency policy in section 7 holds for everyone else.
 
@@ -1174,8 +1535,8 @@ The judgment calls behind this design, so they are not relitigated by accident.
     in the flat namespace, and a scene that is only a model list and an instance list is
     passed as the two lists, exactly as an object is passed to `RenderObject`. The
     camera (3.10) joined as a defaulted parameter of `RenderScene`, which keeps every
-    earlier call compiling; a scene type is still a step away, for when clipping planes
-    or lights make the bundle worth naming.
+    earlier call compiling; a scene type is still a step away. The clipping planes did
+    not need one either: they went into the camera (decision 13). Lights may.
 12. The projection is not a matrix. The chapter derives the homogeneous projection and
     viewport matrices and then sets them aside "for practical reasons", and the project
     does the same: `Mat4` carries only the affine model and camera transforms, and
@@ -1188,14 +1549,81 @@ The judgment calls behind this design, so they are not relitigated by accident.
     orientation and position as data and `MakeModelMatrix` rebuilds the matrix on every
     render, two products per instance, rather than caching it, so the struct has one
     source of truth; and rotation exists only about Y, the one the book's demos use.
+13. Clipping follows the book's pseudocode function for function, `ClipScene` down to
+    `ClipTriangle` and `SignedDistance`, and the calls that fit it to this code are
+    these.
+    - The clipping planes are a field of `Camera`, as in the book's demo
+      (`camera.clipping_planes`), not a parameter of `RenderScene`: they are given in
+      the camera's coordinates and belong with it, and the signature stays as it was.
+      The list is empty by default and `RenderScene` then clips nothing, so every
+      picture from before the chapter is unchanged and its golden image keeps guarding
+      it; a scene opts in by giving its camera planes.
+    - What the pseudocode calls an instance, something with triangles and a bounding
+      sphere that has already been placed, is a `Model` in the camera's coordinates, as
+      it is in the book's own code, which returns a `Model` from `TransformAndClip`. So
+      `Model` got the bounding sphere, and `TransformModel` is the step that places an
+      instance. `RenderScene` builds the whole placed scene before it clips and draws,
+      rather than taking the instances one at a time, so that `ClipScene` is called on
+      a scene, as written.
+    - `TransformModel` reads the scale of the bounding sphere's radius off the matrix
+      instead of taking it as a second argument next to the matrix, as the book's
+      `TransformAndClip(planes, model, scale, transform)` does. The number is the same,
+      `radius * scale`; with one argument the two cannot disagree, and `RenderModel`,
+      which is handed only a matrix, gets a correct sphere as well.
+    - The default bounding sphere contains everything (an infinite radius) instead of
+      being absent. The three-way test of `ClipInstanceAgainstPlane` then needs no
+      special case: neither `d > r` nor `d < -r` can hold, and every triangle is
+      examined. A model without a real sphere is clipped correctly, only more slowly.
+    - Triangles stay indexed through clipping. A crossing point is appended to the
+      instance's vertex list and named by index; a side shared by two triangles is cut
+      twice, into two vertices at the same place (identical bits, since both are
+      computed from the corner in front toward the corner behind), which costs a
+      projection and keeps `ClipTriangle` the book's. Afterwards the vertices that no
+      triangle names are removed: the book's JavaScript leaves them in and projects
+      them to no effect, but here a vertex behind the camera in the list would fail
+      `ProjectVertex`'s precondition.
+    - `ClipTriangle` appends to a list instead of returning one, the shape of the
+      book's demo code rather than of its pseudocode, which saves a small vector per
+      triangle. Its last two cases are implemented; the book's demo leaves them empty.
+    - A corner exactly on the plane is neither in front nor behind (3.11). The book's
+      text does not say, and its code counts such a corner as behind (`d > 0` is "in"),
+      which turns a triangle with one side on the plane and the third corner in front
+      into a quadrilateral without area on one side.
+    - The side planes of `MakeClippingPlanes` are half a pixel outside the viewport
+      rather than through its sides. With pixel coordinates truncated toward zero
+      (decision 8) the exact planes leave part of the canvas's bottom row and leftmost
+      column unpainted and put every cut corner on the border between two pixels
+      (section 15 has the measurements). The book's demo does not meet the problem: its
+      planes are those of a 90 degree field of view around a viewport of 53.
+    - `Plane` and `BoundingSphere` live in `math/` and `MakeClippingPlanes` in
+      `camera/`, by the rule that a file belongs to the highest layer it depends on:
+      the first two need only `Vec3`, the third a `Viewport`. The clipping itself needs
+      `Model` and `Triangle` and is the rasterizer's.
+14. Objects can be drawn filled or shaded before there is hidden-surface removal or
+    lighting, because a demo of clipping is far easier to read with solid faces than
+    with outlines. Two additions carry it, both the smallest that would. The triangle
+    primitive is a parameter of `RenderObject` and `RenderScene`, a function pointer
+    (`DrawTriangleFunction`), since the three primitives already share a signature;
+    `RenderModel` and `RenderInstance`, steps of an earlier chapter that `RenderScene`
+    no longer goes through, keep outlining. And the intensity `h` of 3.6 is stored per
+    corner in `Triangle`, where the book's later chapters keep the other per-corner
+    attributes (normals, texture coordinates), rather than per vertex: faces that share
+    a vertex can then be shaded differently, and clipping interpolates it like the
+    position. Until the Shading chapter computes it from lights, a model simply states
+    it. Nothing was borrowed from the next chapter: there is no depth buffer and no
+    back-face culling, triangles are painted in list order, and a scene that wants
+    solid faces to come out right must be listed back to front. The `clipping` demo is
+    composed that way (section 9), which is a property of that picture, not of the
+    renderer.
 
 ## 15. Implementation notes
 
 Measurements and known behaviours of the implementation, recorded 2026-11-02, updated
 2026-11-03 with shadows and reflections, 2026-11-04 with the rasterizer's lines and
 filled triangles and the reorganisation into layers, 2026-11-05 with shaded triangles,
-the perspective projection and objects made of triangles, and 2026-11-09 with models,
-instances and scenes and, the same day, with model and camera transforms.
+the perspective projection and objects made of triangles, 2026-11-09 with models,
+instances and scenes and, the same day, with model and camera transforms, and
+2026-11-16 with clipping and shaded objects.
 
 - Catch2 is pinned to v3.16.1.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
@@ -1313,6 +1741,62 @@ instances and scenes and, the same day, with model and camera transforms.
   boundary, which the rotation's rounding errors, a few ulps, would otherwise cross:
   through a camera turned 90 degrees a corner at 0.125 comes out as `0.125 - 6e-17`,
   which truncates to pixel 3.
+- `RenderScene` now places every instance with `TransformModel`, clips the list and
+  draws what is left, instead of calling `RenderModel` per instance. With a camera that
+  has no clipping planes the vertices that reach `RenderObject` are the same doubles as
+  before, and `objects_320x180.ppm`, `instances_320x180.ppm` and `camera_320x180.ppm`
+  are byte for byte unchanged.
+- The clipping demo has 47 instances of 8 models and 1626 triangles, 1152 of them the
+  floor's. At 320 x 180 clipping leaves 46 instances and 1149 triangles: the high-rise
+  behind the camera is discarded by its bounding sphere against the near plane, without
+  a look at its triangles; 33 instances come back as they went in; 13 are cut, among
+  them the floor, from 1152 triangles on 625 vertices to 664 on 460, and the lantern's
+  cap, from 6 triangles to 10. The picture draws in about 50 ms at 1920 x 1080 and 2 ms
+  at 320 x 180. The transforms and the clipping together take about 0.06 ms of that at
+  either size; the rest is `DrawShadedTriangle`, which paints every covered pixel 3.7
+  times on average, since nothing is hidden before it is drawn.
+- With the side planes exactly at the viewport's sides, as first written, the clipping
+  demo at 320 x 180 left 46 of the 320 pixels of its bottom row unpainted, where the row
+  above had 1, and 150 of the 180 of its leftmost column, where the next had 106. A
+  coordinate is truncated toward zero, so the bottom row is reached only by what
+  projects to y <= -90 and the leftmost column by x <= -160, which is on or beyond the
+  viewport's side; a corner cut exactly there lands at -90 give or take the last bit,
+  and which it was changed from corner to corner and with the camera's angle (181 and
+  127 at 45 degrees). Half a pixel further out every such corner projects to -90.5 or
+  -160.5 and truncates to the outermost row or column, and the gaps are gone.
+- The clipping picture went through `cos` and `sin` like the camera picture, and at
+  first one ulp of difference in the camera's angle changed ten thousand of its 57600
+  pixels. Three things sat exactly on pixel boundaries. The corners cut by the side
+  planes, as above. The city itself: with the camera at the corner of an integer grid
+  and turned 45 degrees, a corner (x, z) projects to 180 (x - z) / (x + z) pixels across,
+  a whole number for many small integers. And the lantern: the floor of its cap, 0.3
+  below the eye and cut at z = 1, projected to row -54 exactly. The camera is therefore
+  turned 42 degrees, not 45, and the lantern's post is 2.23 high, not 2.2. As it stands,
+  no projected coordinate of the clipped scene's 3447 triangle corners comes closer
+  than 6.0e-4 pixels to a boundary at 320 x 180, rounding noise being about 1e-13; one
+  ulp in the angle changes no pixel, and an error of up to 1e-4 degrees changes at most
+  four, none by more than one level in any channel, inside the golden test's tolerance.
+  A new filled scene should be checked the same way: exact coincidences are the rule,
+  not the exception, when round numbers meet a symmetric view.
+- That the clipping demo's painting order is its depth order was checked once, outside
+  the repository: the clipped triangles were dumped in drawing order and rasterized
+  twice by a separate script, once keeping the last triangle on every sample and once
+  the nearest, for eight canvas sizes and viewport distances (320 x 180 to 1920 x 1080,
+  distances 0.3 to 2, wide and tall). The two agreed on every covered sample; with the
+  list reversed they disagreed on four out of five. The argument that makes it so is in
+  section 9; nothing in the renderer enforces it.
+- A triangle cut by a plane is not, in general, pixel for pixel the part of the whole
+  triangle in front of the plane. Its new corners are truncated to whole pixels like any
+  vertex, so the sides that run to them are redrawn from there and can differ by a pixel
+  from the same sides of the whole triangle; and its intensities are taken along the
+  sides in 3D at the cut and interpolated along the canvas inside each piece, where the
+  whole triangle interpolates along the canvas throughout, which is not the same thing
+  under perspective. The unit test that does compare the two pixel for pixel uses a
+  triangle parallel to the viewport whose pieces have every side through whole pixels.
+  Perspective-correct interpolation, due with textures, removes the second difference.
+- Neighbouring triangles stay joined through clipping: the two that share a cut side get
+  the same crossing point bit for bit, so no gap opens along a cut. The price is the
+  duplicate vertex, one per triangle and cut side, each projected on its own.
 - On 2026-11-04 the tree was reorganised into the layers of 4.2 (`CLAUDE.md` has the
   rules): the rasterizer was split into one file per primitive, the demo pictures moved
   into their own library target with the `axes` picture joining them from the app, the

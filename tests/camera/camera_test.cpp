@@ -32,6 +32,7 @@ TEST_CASE("Camera: the default camera is at the origin looking along +Z, its mat
     CHECK(camera.position == Vec3{});
     CHECK(camera.orientation == Mat4::Identity());
     CHECK(MakeCameraMatrix(camera.position, camera.orientation) == Mat4::Identity());
+    CHECK(camera.clipping_planes.empty());  // and it clips nothing
 }
 
 TEST_CASE("MakeCameraMatrix: a moved camera moves the world the opposite way", "[camera]") {

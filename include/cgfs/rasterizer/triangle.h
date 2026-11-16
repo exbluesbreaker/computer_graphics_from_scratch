@@ -46,4 +46,9 @@ void DrawFilledTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color colo
 /// only when it reaches the canvas. The vertex order does not matter; no clipping.
 void DrawShadedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
 
+/// A way to draw a triangle: the signature the three primitives above share. Whoever
+/// draws many triangles (RenderObject, RenderScene) takes one of them as a parameter and
+/// so draws its objects as wireframes, filled or shaded without knowing which.
+using DrawTriangleFunction = void (*)(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
+
 }  // namespace cgfs

@@ -79,6 +79,29 @@ void DrawInstancesScene(Canvas& canvas, const Viewport& viewport);
 /// first; depends on the viewport, so render_demo's --distance zooms it.
 void DrawCameraScene(Canvas& canvas, const Viewport& viewport);
 
+/// The picture of the clipping chapter, and the first with shaded solids: a city of
+/// boxes and pyramids on a checkerboard floor, seen by a camera that stands in it, at
+/// its corner, 2.5 above the ground, turned 42 degrees to its right to look down the
+/// avenue that crosses it. The scene reaches all around the camera and through each of
+/// the five planes of its clipping volume, MakeClippingPlanes of `viewport`: the floor
+/// runs on under and behind it, high-rises leave the picture at the top and a plinth at
+/// the bottom, a lantern an arm's length away has the near corner of its cap cut off by
+/// the near plane, so that the inside of the cap shows, and one high-rise stands behind
+/// the camera and is discarded whole. RenderScene clips the scene in 3D between the
+/// transforms and the projection; without that step this scene could not be drawn at
+/// all, since ProjectVertex cannot take a vertex behind the camera.
+///
+/// The solids are drawn with DrawShadedTriangle from intensities stored at the corners
+/// of the models' triangles: a shade per face, darker toward the ground, and a floor
+/// that fades with distance. A cut triangle gets the intensity of its new corners by
+/// the same interpolation as their position. There is no hidden-surface removal yet, so
+/// the picture is composed for it: every solid stands ahead of the camera and to its
+/// right, lists the faces turned away from there first, and the instances are listed
+/// from far to near. Clears the canvas to a dark background first; depends on the
+/// viewport, so render_demo's --distance zooms it, and moves the near plane out with
+/// the viewport.
+void DrawClippingScene(Canvas& canvas, const Viewport& viewport);
+
 /// The coordinate axes through the origin, a dot at the origin and a colored dot in
 /// each corner (red top-left, green top-right, blue bottom-left, black bottom-right): a
 /// quick visual check of the canvas's coordinate system. Drawn with PutPixel alone, on

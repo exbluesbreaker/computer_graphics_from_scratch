@@ -1,8 +1,10 @@
 #include <cgfs/camera/camera.h>
+#include <cgfs/camera/clipping_planes.h>
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
 #include <cgfs/math/mat4.h>
+#include <cgfs/math/plane.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/instance.h>
 #include <cgfs/rasterizer/model.h>
@@ -21,10 +23,15 @@
 
 using cgfs::Camera;
 using cgfs::Canvas;
+using cgfs::DrawFilledTriangle;
+using cgfs::DrawShadedTriangle;
+using cgfs::DrawTriangleFunction;
 using cgfs::DrawWireframeTriangle;
 using cgfs::Instance;
+using cgfs::MakeClippingPlanes;
 using cgfs::MakeOYRotationMatrix;
 using cgfs::Model;
+using cgfs::Plane;
 using cgfs::Point;
 using cgfs::RenderInstance;
 using cgfs::RenderScene;
@@ -45,10 +52,27 @@ Viewport TestViewport() { return Viewport(kSize, kSize); }
 
 // A fresh black canvas with the scene rendered on it, as `camera` sees it.
 Canvas CanvasWithScene(const std::vector<Model>& models, const std::vector<Instance>& instances,
-                       const Camera& camera = Camera{}) {
+                       const Camera& camera = Camera{},
+                       DrawTriangleFunction draw_triangle = DrawWireframeTriangle) {
     Canvas canvas(kSize, kSize, kBlack);
-    RenderScene(canvas, TestViewport(), models, instances, camera);
+    RenderScene(canvas, TestViewport(), models, instances, camera, draw_triangle);
     return canvas;
+}
+
+// The near plane of TestViewport(), z = 1 in the camera's coordinates, and the plane
+// x = 0 with +X in front. Their normals are axes, so cutting a triangle whose corners
+// are small binary fractions is exact, and the crossing points land on whole pixels.
+constexpr Plane kNear{.normal = {0.0, 0.0, 1.0}, .d = -1.0};
+constexpr Plane kRightHalf{.normal = {1.0, 0.0, 0.0}, .d = 0.0};
+
+// A right triangle in its own plane z = 0 whose intensity grows from 0 at its left
+// corner to 1 on its right side. Placed at (0, 0, 1) its corners land on the pixels
+// (-8, -8), (8, -8) and (8, 0), and the plane x = 0 cuts it through (0, -8) and (0, -4).
+Model RightTriangle() {
+    return {
+        .vertices = {{-0.25, -0.25, 0.0}, {0.25, -0.25, 0.0}, {0.25, 0.0, 0.0}},
+        .triangles = {{{0, 1, 2}, kWhite, {0.0, 1.0, 1.0}}},
+    };
 }
 
 // A fresh black canvas with some wireframe triangles on it, for the expected picture.
@@ -214,4 +238,152 @@ TEST_CASE("RenderScene: the camera and the model transform combine into one matr
     CHECK(Bytes(CanvasWithScene(models, ahead, camera)) == Bytes(CanvasWithScene(models, plain)));
     CHECK(Bytes(CanvasWithScene(models, ahead, camera)) ==
           Bytes(CanvasWithOutlines({SmallOutline(0, 0)})));
+}
+
+TEST_CASE("RenderScene: draws with the primitive it is given", "[rasterizer]") {
+    const std::vector<Model> models = {SmallTriangle(kRed)};
+    const std::vector<Instance> instances = {{.model = 0, .position = {0.25, 0.0, 1.0}}};
+    const Outline o = SmallOutline(8, 0, kRed);
+
+    // An outline unless it is told otherwise.
+    CHECK(Bytes(CanvasWithScene(models, instances, Camera{}, DrawWireframeTriangle)) ==
+          Bytes(CanvasWithScene(models, instances)));
+
+    Canvas filled(kSize, kSize, kBlack);
+    DrawFilledTriangle(filled, o.a, o.b, o.c, o.color);
+    CHECK(Bytes(CanvasWithScene(models, instances, Camera{}, DrawFilledTriangle)) == Bytes(filled));
+
+    // Shaded, the intensities come from the corners of the model's triangles.
+    const std::vector<Model> shaded_models = {RightTriangle()};
+    const std::vector<Instance> at_the_viewport = {{.model = 0, .position = {0.0, 0.0, 1.0}}};
+    Canvas shaded(kSize, kSize, kBlack);
+    DrawShadedTriangle(shaded, {-8, -8, 0.0}, {8, -8, 1.0}, {8, 0, 1.0}, kWhite);
+    CHECK(Bytes(CanvasWithScene(shaded_models, at_the_viewport, Camera{}, DrawShadedTriangle)) ==
+          Bytes(shaded));
+}
+
+TEST_CASE("RenderScene: an instance in front of every clipping plane is drawn as without them",
+          "[rasterizer]") {
+    const std::vector<Model> models = {SmallTriangle(kWhite)};
+    const std::vector<Instance> instances = {
+        {.model = 0, .position = {-0.25, 0.25, 2.0}},
+        {.model = 0, .position = {0.5, -0.25, 2.0}},
+    };
+    const Camera clipping{.clipping_planes = MakeClippingPlanes(TestViewport())};
+    const Canvas canvas = CanvasWithScene(models, instances, clipping);
+    CHECK(Bytes(canvas) == Bytes(CanvasWithScene(models, instances)));
+    CHECK(LitPixels(canvas).size() > 20);
+}
+
+TEST_CASE("RenderScene: an instance outside the clipping volume is not drawn", "[rasterizer]") {
+    // Behind the camera, where ProjectVertex cannot go at all, and off to each side,
+    // where it would only draw beyond the canvas.
+    const std::vector<Model> models = {SmallTriangle(kWhite)};
+    const std::vector<Instance> instances = {
+        {.model = 0, .position = {0.0, 0.0, -5.0}}, {.model = 0, .position = {0.0, 0.0, 0.0}},
+        {.model = 0, .position = {-9.0, 0.0, 4.0}}, {.model = 0, .position = {9.0, 0.0, 4.0}},
+        {.model = 0, .position = {0.0, 9.0, 4.0}},  {.model = 0, .position = {0.0, -9.0, 4.0}},
+    };
+    const Camera clipping{.clipping_planes = MakeClippingPlanes(TestViewport())};
+    CHECK(LitPixels(CanvasWithScene(models, instances, clipping)).empty());
+
+    // With one more instance, in view, the picture is that instance alone.
+    std::vector<Instance> with_one_in_view = instances;
+    with_one_in_view.push_back({.model = 0, .position = {0.0, 0.0, 2.0}});
+    CHECK(Bytes(CanvasWithScene(models, with_one_in_view, clipping)) ==
+          Bytes(CanvasWithOutlines({{{2, 2}, {-2, 2}, {0, -2}}})));
+}
+
+TEST_CASE("RenderScene: an instance that reaches behind the camera is cut at the near plane",
+          "[rasterizer]") {
+    // One corner 3 in front of the camera and two 1 behind it: the sides cross the plane
+    // z = 1 half way, at (0.125, 0, 1) and (-0.125, 0, 1). What is drawn is the tip in
+    // front: its corner projects to (0, 0.25 / 3) of the viewport, the pixel (0, 2).
+    const std::vector<Model> models = {{
+        .vertices = {{0.0, 0.25, 3.0}, {0.25, -0.25, -1.0}, {-0.25, -0.25, -1.0}},
+        .triangles = {{{0, 1, 2}, kWhite}},
+    }};
+    const std::vector<Instance> instances = {{.model = 0}};
+    const Camera clipping{.clipping_planes = {kNear}};
+    CHECK(Bytes(CanvasWithScene(models, instances, clipping)) ==
+          Bytes(CanvasWithOutlines({{{0, 2}, {4, 0}, {-4, 0}}})));
+}
+
+TEST_CASE("RenderScene: a wireframe cut by a plane is the outline of the pieces", "[rasterizer]") {
+    // The plane x = 0 keeps the right part of the triangle, a quadrilateral, which
+    // ClipTriangle returns as two triangles: the cut shows as a new edge along the
+    // plane, and the diagonal between the two pieces shows too.
+    const std::vector<Model> models = {RightTriangle()};
+    const std::vector<Instance> instances = {{.model = 0, .position = {0.0, 0.0, 1.0}}};
+    const Camera clipping{.clipping_planes = {kRightHalf}};
+    const Canvas canvas = CanvasWithScene(models, instances, clipping);
+    CHECK(Bytes(canvas) ==
+          Bytes(CanvasWithOutlines({{{8, -8}, {8, 0}, {0, -8}}, {{0, -8}, {8, 0}, {0, -4}}})));
+    for (const Point p : LitPixels(canvas)) {
+        CHECK(p.x >= 0);
+    }
+}
+
+TEST_CASE(
+    "RenderScene: a shaded triangle cut by a plane is the part of the whole one in front "
+    "of it",
+    "[rasterizer]") {
+    // The crossing points take their intensity from the same fraction of the side as
+    // their position, so the shading of what is left does not change: pixel for pixel
+    // the cut picture is the whole one with everything left of x = 0 removed. (Exactly
+    // so here, where every edge of the pieces passes through whole pixels.)
+    const std::vector<Model> models = {RightTriangle()};
+    const std::vector<Instance> instances = {{.model = 0, .position = {0.0, 0.0, 1.0}}};
+    const Canvas whole = CanvasWithScene(models, instances, Camera{}, DrawShadedTriangle);
+    const Canvas cut = CanvasWithScene(models, instances, Camera{.clipping_planes = {kRightHalf}},
+                                       DrawShadedTriangle);
+
+    std::size_t kept = 0;
+    std::size_t removed = 0;
+    for (int x = -kSize / 2; x < kSize / 2; ++x) {
+        for (int y = -kSize / 2; y < kSize / 2; ++y) {
+            if (x >= 0) {
+                CHECK(cut.GetPixel(x, y) == whole.GetPixel(x, y));
+                if (cut.GetPixel(x, y) != Rgb8{0, 0, 0}) {
+                    ++kept;
+                }
+            } else {
+                CHECK(cut.GetPixel(x, y) == Rgb8{0, 0, 0});
+                if (whole.GetPixel(x, y) != Rgb8{0, 0, 0}) {
+                    ++removed;
+                }
+            }
+        }
+    }
+    CHECK(kept > 30);     // something is left,
+    CHECK(removed > 10);  // and something was cut away
+    // The intensity at the cut is the one the whole triangle has there: half way from 0
+    // at x = -8 to 1 at x = 8.
+    CHECK(cut.GetPixel(0, -8) == Rgb8{127, 127, 127});
+    CHECK(cut.GetPixel(8, -8) == Rgb8{255, 255, 255});
+}
+
+TEST_CASE("RenderScene: the clipping planes are in the camera's coordinates", "[rasterizer]") {
+    // Two instances 2 away from the origin, one along -X and one along +X, each turned
+    // to face a camera that looks along -X. To that camera, turned 90 degrees to its
+    // left, the first is 2 ahead and the second 2 behind, whatever the world's axes say:
+    // the near plane goes with the camera, and only the first is drawn, half its size.
+    const std::vector<Model> models = {OffGridTriangle(kWhite)};
+    const std::vector<Instance> instances = {
+        {.model = 0, .position = {-2.0, 0.0, 0.0}, .orientation = MakeOYRotationMatrix(90.0)},
+        {.model = 0, .position = {2.0, 0.0, 0.0}, .orientation = MakeOYRotationMatrix(90.0)},
+    };
+    const Camera turned{.orientation = MakeOYRotationMatrix(90.0), .clipping_planes = {kNear}};
+    CHECK(Bytes(CanvasWithScene(models, instances, turned)) ==
+          Bytes(CanvasWithOutlines({{{2, 2}, {-2, 2}, {0, -2}}})));
+
+    // A camera that steps forward leaves an instance behind its near plane.
+    const std::vector<Model> plain_models = {SmallTriangle(kWhite)};
+    const std::vector<Instance> ahead = {{.model = 0, .position = {0.0, 0.0, 2.0}}};
+    CHECK_FALSE(LitPixels(CanvasWithScene(plain_models, ahead, Camera{.clipping_planes = {kNear}}))
+                    .empty());
+    CHECK(
+        LitPixels(CanvasWithScene(plain_models, ahead,
+                                  Camera{.position = {0.0, 0.0, 1.5}, .clipping_planes = {kNear}}))
+            .empty());
 }

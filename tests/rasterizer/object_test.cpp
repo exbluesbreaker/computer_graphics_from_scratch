@@ -15,6 +15,8 @@
 #include "support/test_helpers.h"
 
 using cgfs::Canvas;
+using cgfs::DrawFilledTriangle;
+using cgfs::DrawShadedTriangle;
 using cgfs::DrawWireframeTriangle;
 using cgfs::Point;
 using cgfs::RenderObject;
@@ -141,4 +143,86 @@ TEST_CASE("RenderObject: the vertex and triangle lists may be any contiguous ran
 TEST_CASE("RenderObject: an object without triangles draws nothing", "[rasterizer]") {
     CHECK(LitPixels(CanvasWithObject(kSquare, {})).empty());
     CHECK(LitPixels(CanvasWithObject({}, {})).empty());
+}
+
+TEST_CASE("Triangle: the intensity is 1 at every corner unless it says otherwise", "[rasterizer]") {
+    const Triangle triangle{{0, 1, 2}, kRed};
+    CHECK(triangle.h == std::array<double, 3>{1.0, 1.0, 1.0});
+    CHECK(triangle == Triangle{{0, 1, 2}, kRed, {1.0, 1.0, 1.0}});
+    CHECK_FALSE(triangle == Triangle{{0, 1, 2}, kRed, {1.0, 0.5, 1.0}});
+}
+
+TEST_CASE("RenderObject: the triangles are drawn with the primitive it is given", "[rasterizer]") {
+    const std::vector<Vec3> vertices = {{0.25, 0.25, 1.0}, {-0.25, 0.0, 1.0}, {0.125, -0.25, 1.0}};
+    const std::vector<Triangle> triangles = {{{0, 1, 2}, kRed}};
+    const Point a{8, 8};
+    const Point b{-8, 0};
+    const Point c{4, -8};
+
+    // An outline when nothing is said, which is saying DrawWireframeTriangle.
+    Canvas outlined(kSize, kSize, kBlack);
+    RenderObject(outlined, TestViewport(), vertices, triangles, DrawWireframeTriangle);
+    CHECK(Bytes(outlined) == Bytes(CanvasWithObject(vertices, triangles)));
+
+    // Filled: the canvas of DrawFilledTriangle on the projected corners.
+    Canvas filled(kSize, kSize, kBlack);
+    RenderObject(filled, TestViewport(), vertices, triangles, DrawFilledTriangle);
+    Canvas filled_by_hand(kSize, kSize, kBlack);
+    DrawFilledTriangle(filled_by_hand, a, b, c, kRed);
+    CHECK(Bytes(filled) == Bytes(filled_by_hand));
+    CHECK(LitPixels(filled).size() > LitPixels(outlined).size());
+
+    // Shaded, with the default intensities: the full color everywhere, the filled one.
+    Canvas shaded(kSize, kSize, kBlack);
+    RenderObject(shaded, TestViewport(), vertices, triangles, DrawShadedTriangle);
+    CHECK(Bytes(shaded) == Bytes(filled));
+}
+
+TEST_CASE("RenderObject: a shaded triangle takes its intensities from its corners",
+          "[rasterizer]") {
+    const std::vector<Vec3> vertices = {{0.25, 0.25, 1.0}, {-0.25, 0.0, 1.0}, {0.125, -0.25, 1.0}};
+    const std::vector<Triangle> triangles = {{{0, 1, 2}, kGreen, {1.0, 0.25, 0.5}}};
+    Canvas canvas(kSize, kSize, kBlack);
+    RenderObject(canvas, TestViewport(), vertices, triangles, DrawShadedTriangle);
+
+    Canvas by_hand(kSize, kSize, kBlack);
+    DrawShadedTriangle(by_hand, {8, 8, 1.0}, {-8, 0, 0.25}, {4, -8, 0.5}, kGreen);
+    CHECK(Bytes(canvas) == Bytes(by_hand));
+    CHECK(canvas.GetPixel(8, 8) == Rgb8{0, 255, 0});   // the full color at the first corner
+    CHECK(canvas.GetPixel(-8, 0) == Rgb8{0, 63, 0});   // a quarter of it at the second
+    CHECK(canvas.GetPixel(4, -8) == Rgb8{0, 127, 0});  // half at the third
+
+    // The intensity goes with the corner, whichever vertex the corner names.
+    const std::vector<Triangle> other_order = {{{2, 0, 1}, kGreen, {0.5, 1.0, 0.25}}};
+    Canvas same(kSize, kSize, kBlack);
+    RenderObject(same, TestViewport(), vertices, other_order, DrawShadedTriangle);
+    CHECK(Bytes(same) == Bytes(by_hand));
+}
+
+TEST_CASE("RenderObject: the intensity belongs to the triangle's corner, not to the vertex",
+          "[rasterizer]") {
+    // The square cut along its diagonal: the two triangles share the vertices 0 and 2,
+    // and each has its own shade there, as two faces of a cube would.
+    const std::vector<Triangle> triangles = {
+        {{0, 1, 2}, kWhite, {1.0, 1.0, 1.0}},     // bottom right: bright
+        {{0, 2, 3}, kWhite, {0.25, 0.25, 0.25}},  // top left: dim
+    };
+    Canvas canvas(kSize, kSize, kBlack);
+    RenderObject(canvas, TestViewport(), kSquare, triangles, DrawShadedTriangle);
+    CHECK(canvas.GetPixel(4, -4) == Rgb8{255, 255, 255});
+    CHECK(canvas.GetPixel(-4, 4) == Rgb8{63, 63, 63});
+    CHECK(canvas.GetPixel(8, -8) == Rgb8{255, 255, 255});  // a corner only the first one has
+    CHECK(canvas.GetPixel(-8, 8) == Rgb8{63, 63, 63});     // and one only the second has
+}
+
+TEST_CASE("RenderObject: outlines and fills do not look at the intensities", "[rasterizer]") {
+    const std::vector<Triangle> dim = {{{0, 1, 2}, kWhite, {0.0, 0.25, 0.5}}};
+    const std::vector<Triangle> plain = {{{0, 1, 2}, kWhite}};
+    CHECK(Bytes(CanvasWithObject(kSquare, dim)) == Bytes(CanvasWithObject(kSquare, plain)));
+
+    Canvas filled_dim(kSize, kSize, kBlack);
+    RenderObject(filled_dim, TestViewport(), kSquare, dim, DrawFilledTriangle);
+    Canvas filled_plain(kSize, kSize, kBlack);
+    RenderObject(filled_plain, TestViewport(), kSquare, plain, DrawFilledTriangle);
+    CHECK(Bytes(filled_dim) == Bytes(filled_plain));
 }

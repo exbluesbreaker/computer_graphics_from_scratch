@@ -1,6 +1,7 @@
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
+#include <cgfs/math/bounding_sphere.h>
 #include <cgfs/math/mat4.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/model.h>
@@ -9,14 +10,18 @@
 #include <cgfs/rasterizer/triangle.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
 #include "rasterizer/pixel_helpers.h"
 #include "support/test_helpers.h"
 
+using cgfs::BoundingSphere;
 using cgfs::Canvas;
 using cgfs::DrawWireframeTriangle;
+using cgfs::Length;
+using cgfs::MakeBoundingSphere;
 using cgfs::MakeOYRotationMatrix;
 using cgfs::MakeScalingMatrix;
 using cgfs::MakeTranslationMatrix;
@@ -26,6 +31,7 @@ using cgfs::Point;
 using cgfs::RenderModel;
 using cgfs::RenderObject;
 using cgfs::Rgb8;
+using cgfs::TransformModel;
 using cgfs::Vec3;
 using cgfs::Viewport;
 using cgfs_test::Bytes;
@@ -126,4 +132,75 @@ TEST_CASE("RenderModel: a model without triangles, or without vertices, draws no
                                     kToViewportPlane))
               .empty());
     CHECK(LitPixels(CanvasWithModel(Model{}, kToViewportPlane)).empty());
+}
+
+TEST_CASE("Model: the default bounding sphere contains everything", "[rasterizer]") {
+    CHECK(std::isinf(kTriangle.bounding_sphere.radius));
+    CHECK(kTriangle.bounding_sphere == BoundingSphere{});
+}
+
+TEST_CASE("TransformModel: every vertex is transformed and the triangles are kept",
+          "[rasterizer]") {
+    const Model moved = TransformModel(kTriangle, MakeTranslationMatrix({1.0, 2.0, 3.0}));
+    CHECK(moved.vertices ==
+          std::vector<Vec3>{{1.25, 2.25, 3.0}, {0.75, 2.0, 3.0}, {1.125, 1.75, 3.0}});
+    CHECK(moved.triangles == kTriangle.triangles);
+
+    // The identity changes nothing, and the model itself is never changed.
+    CHECK(TransformModel(kTriangle, Mat4::Identity()) == kTriangle);
+    CHECK(kTriangle.vertices[0] == Vec3{0.25, 0.25, 0.0});
+}
+
+TEST_CASE("TransformModel: the bounding sphere moves and grows with the vertices", "[rasterizer]") {
+    Model model = kTriangle;
+    model.bounding_sphere = {.center = {0.5, 0.0, 0.0}, .radius = 2.0};
+
+    // A translation moves the center and leaves the radius alone.
+    const Model moved = TransformModel(model, MakeTranslationMatrix({1.0, 2.0, 3.0}));
+    CHECK(moved.bounding_sphere == BoundingSphere{.center = {1.5, 2.0, 3.0}, .radius = 2.0});
+
+    // A scaling multiplies the radius, and the center's distance from the origin.
+    const Model doubled = TransformModel(model, MakeScalingMatrix(2.0));
+    CHECK(doubled.bounding_sphere == BoundingSphere{.center = {1.0, 0.0, 0.0}, .radius = 4.0});
+    const Model shrunk = TransformModel(model, MakeScalingMatrix(0.75));
+    CHECK(shrunk.bounding_sphere == BoundingSphere{.center = {0.375, 0.0, 0.0}, .radius = 1.5});
+
+    // A rotation turns the center about the origin and keeps the radius.
+    const Model turned = TransformModel(model, MakeOYRotationMatrix(90.0));
+    CHECK(std::abs(turned.bounding_sphere.center.x) < 1e-12);
+    CHECK(std::abs(turned.bounding_sphere.center.z - 0.5) < 1e-12);
+    CHECK(std::abs(turned.bounding_sphere.radius - 2.0) < 1e-12);
+
+    // All three at once, in the order of an instance's model matrix: the radius is
+    // multiplied by the scale whatever the rotation.
+    const Mat4 model_matrix = MakeTranslationMatrix({-3.0, 1.0, 7.0}) *
+                              MakeOYRotationMatrix(195.0) * MakeScalingMatrix(0.75);
+    const Model placed = TransformModel(model, model_matrix);
+    CHECK(std::abs(placed.bounding_sphere.radius - 1.5) < 1e-12);
+    const Vec3 center = model_matrix * Vec3{0.5, 0.0, 0.0};
+    CHECK(placed.bounding_sphere.center == center);
+}
+
+TEST_CASE("TransformModel: the transformed sphere still contains the transformed vertices",
+          "[rasterizer]") {
+    Model model = kTriangle;
+    model.bounding_sphere = MakeBoundingSphere(model.vertices);
+    for (const Mat4& transform :
+         {MakeTranslationMatrix({-3.0, 1.0, 7.0}) * MakeOYRotationMatrix(195.0) *
+              MakeScalingMatrix(0.75),
+          MakeOYRotationMatrix(-30.0) * MakeTranslationMatrix({3.0, -1.0, -2.0}) *
+              MakeScalingMatrix(40.0),
+          MakeScalingMatrix(-2.0)}) {
+        const Model placed = TransformModel(model, transform);
+        for (const Vec3 vertex : placed.vertices) {
+            CHECK(Length(vertex - placed.bounding_sphere.center) <=
+                  placed.bounding_sphere.radius * (1.0 + 1e-12));
+        }
+    }
+}
+
+TEST_CASE("TransformModel: the sphere that contains everything stays that", "[rasterizer]") {
+    const Model placed = TransformModel(
+        kTriangle, MakeTranslationMatrix({-3.0, 1.0, 7.0}) * MakeScalingMatrix(0.75));
+    CHECK(std::isinf(placed.bounding_sphere.radius));
 }

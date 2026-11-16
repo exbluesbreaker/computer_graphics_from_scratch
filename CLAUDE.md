@@ -9,7 +9,8 @@ A change is finished when the code, the tests, the spec and the README agree.
 A software 3D renderer written from scratch in C++20, following Gabriel Gambetta's
 *Computer Graphics from Scratch* chapter by chapter: a ray tracer (complete through
 reflections) and a rasterizer (lines, filled and shaded triangles, perspective
-projection and the wireframes of objects made of triangles so far). It exists for
+projection, objects made of triangles, scenes of transformed instances seen from a
+movable camera, and clipping so far; no hidden-surface removal yet). It exists for
 learning: every algorithm is written by hand, reads like the book's listing and is
 pinned by unit tests and golden images. No graphics libraries, no GPU.
 
@@ -91,14 +92,15 @@ The source tree is organised by layer, and the same layer names appear under
 reading the architecture:
 
 ```
-math/         vec3                                            vector algebra; nothing above the numbers
+math/         vec3, mat4, plane, bounding_sphere              vector algebra and plain geometry; nothing above the numbers
 image/        color, canvas, image_io                         the picture: colors, the pixel buffer, file formats
-camera/       viewport                                        how canvas pixels map into the world; shared by both renderers
+camera/       viewport, camera, clipping_planes               how canvas pixels map into the world; shared by both renderers
 raytracer/    scene, raytracer                                the ray tracing renderer: spheres, lights, tracing
-rasterizer/   point, interpolate, line, triangle, projection, object
+rasterizer/   point, interpolate, line, triangle, projection, object, model, instance, clipping, scene
                                                               the rasterizing renderer: 2D primitives, the
-                                                              projection that feeds them and objects made of
-                                                              triangles, one per file
+                                                              projection that feeds them, objects made of
+                                                              triangles, scenes of instances and their clipping,
+                                                              one per file
 demo/         raytracer_scenes, rasterizer_scenes             the demo pictures, built on everything above
 ```
 

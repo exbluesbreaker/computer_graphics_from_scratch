@@ -1,7 +1,9 @@
 #include <cgfs/demo/rasterizer_scenes.h>
 
 #include <cgfs/camera/camera.h>
+#include <cgfs/camera/clipping_planes.h>
 #include <cgfs/image/color.h>
+#include <cgfs/math/bounding_sphere.h>
 #include <cgfs/math/mat4.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/instance.h>
@@ -13,8 +15,11 @@
 #include <cgfs/rasterizer/scene.h>
 #include <cgfs/rasterizer/triangle.h>
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <initializer_list>
+#include <string_view>
 #include <vector>
 
 // These pictures are shared by render_demo and the golden-image tests. Changing them
@@ -131,6 +136,122 @@ Model Pyramid() {
         {{0, 4, 1}, kPink},                                        // left, x = -1
     };
     return pyramid;
+}
+
+// The models of the clipping picture. Unlike the ones above they are made to be drawn
+// with DrawShadedTriangle, so every triangle has an intensity at each corner, and they
+// stand on their origin rather than around it: the base is in the plane y = 0, so an
+// instance is put on the ground by its position and stays there when it is scaled.
+//
+// There is no hidden-surface removal yet: triangles are painted in list order and the
+// later one shows. Each solid therefore lists its faces in an order that is right for a
+// camera standing to its front left (at a smaller x and a smaller z than any of its
+// corners): first the faces such a camera cannot see, the right, the back and the bottom,
+// then the top, then the two that face it, the left and the front. A convex solid seen
+// from outside comes out right whenever the faces turned away are painted before the
+// faces turned toward the viewer, and the top may be either.
+
+/// How bright each face of a solid is, as if lit from above and from the front left.
+constexpr double kTopShade = 1.0;
+constexpr double kLeftShade = 0.85;
+constexpr double kFrontShade = 0.65;
+constexpr double kRightShade = 0.5;
+constexpr double kBackShade = 0.4;
+constexpr double kBottomShade = 0.3;
+
+/// Append the quadrilateral `corners` to the model as two triangles that share the
+/// diagonal from the first corner to the third. The corners are listed clockwise as seen
+/// from outside the solid, the book's winding, and `h` is the intensity at each of them.
+void AddFace(Model& model, std::array<std::size_t, 4> corners, std::array<double, 4> h,
+             Color color) {
+    model.triangles.push_back({{corners[0], corners[1], corners[2]}, color, {h[0], h[1], h[2]}});
+    model.triangles.push_back({{corners[0], corners[2], corners[3]}, color, {h[0], h[2], h[3]}});
+}
+
+/// A box 2 x `height` x 2 that stands on its origin, in one color. Each face has its own
+/// shade, and the four walls darken toward the ground, to `kGroundShade` of that.
+Model ShadedBox(double height, Color color) {
+    constexpr double kGroundShade = 0.55;
+    Model box;
+    box.vertices = {
+        {-1.0, 0.0, -1.0},    {1.0, 0.0, -1.0},     // 0, 1: the front edge of the base
+        {1.0, 0.0, 1.0},      {-1.0, 0.0, 1.0},     // 2, 3: the back edge of the base
+        {-1.0, height, -1.0}, {1.0, height, -1.0},  // 4, 5: the front edge of the top
+        {1.0, height, 1.0},   {-1.0, height, 1.0},  // 6, 7: the back edge of the top
+    };
+    // A wall: two corners on the ground, then the two above them.
+    const auto wall = [&](std::array<std::size_t, 4> corners, double shade) {
+        AddFace(box, corners, {shade * kGroundShade, shade, shade, shade * kGroundShade}, color);
+    };
+    wall({1, 5, 6, 2}, kRightShade);  // right, x = 1
+    wall({2, 6, 7, 3}, kBackShade);   // back, z = 1
+    AddFace(box, {0, 1, 2, 3}, {kBottomShade, kBottomShade, kBottomShade, kBottomShade}, color);
+    AddFace(box, {4, 7, 6, 5}, {kTopShade, kTopShade, kTopShade, kTopShade}, color);
+    wall({3, 7, 4, 0}, kLeftShade);   // left, x = -1
+    wall({0, 4, 5, 1}, kFrontShade);  // front, z = -1
+    box.bounding_sphere = MakeBoundingSphere(box.vertices);
+    return box;
+}
+
+/// A square pyramid on the base of the box above, its apex `height` above the middle of
+/// it. Each side has the shade of the wall under it, darker toward its base.
+Model ShadedPyramid(double height, Color color) {
+    constexpr double kBaseShade = 0.7;
+    Model pyramid;
+    pyramid.vertices = {
+        {-1.0, 0.0, -1.0},  {1.0, 0.0, -1.0},  // 0, 1: the front edge of the base
+        {1.0, 0.0, 1.0},    {-1.0, 0.0, 1.0},  // 2, 3: the back edge of the base
+        {0.0, height, 0.0},                    // 4: the apex
+    };
+    // A side: the apex, then its two corners on the base.
+    const auto side = [&](std::size_t from, std::size_t to, double shade) {
+        pyramid.triangles.push_back(
+            {{4, from, to}, color, {shade, shade * kBaseShade, shade * kBaseShade}});
+    };
+    side(2, 1, kRightShade);  // right
+    side(3, 2, kBackShade);   // back
+    AddFace(pyramid, {0, 1, 2, 3}, {kBottomShade, kBottomShade, kBottomShade, kBottomShade}, color);
+    side(0, 3, kLeftShade);   // left
+    side(1, 0, kFrontShade);  // front
+    pyramid.bounding_sphere = MakeBoundingSphere(pyramid.vertices);
+    return pyramid;
+}
+
+/// A checkerboard floor in the plane y = 0: `tiles` x `tiles` squares of side 2 in two
+/// colors, the corner of the first one at (`start`, 0, `start`). One model, far larger
+/// than anything a camera standing on it can see. The intensity at a corner falls off
+/// with x + z, its distance from the origin along the diagonal x = z, which is the way
+/// the camera of the clipping picture looks from there, so the floor fades into the
+/// distance.
+Model Checkerboard(double start, int tiles, Color light, Color dark) {
+    constexpr double kTile = 2.0;
+    const auto shade = [](Vec3 corner) {
+        return std::clamp(1.1 - 0.024 * (corner.x + corner.z), 0.2, 1.0);
+    };
+    Model floor;
+    const int corners = tiles + 1;
+    for (int row = 0; row < corners; ++row) {
+        for (int column = 0; column < corners; ++column) {
+            floor.vertices.push_back({start + kTile * column, 0.0, start + kTile * row});
+        }
+    }
+    const auto corner = [&](int row, int column) {
+        return static_cast<std::size_t>(row * corners + column);
+    };
+    for (int row = 0; row < tiles; ++row) {
+        for (int column = 0; column < tiles; ++column) {
+            // Clockwise as seen from above: near left, far left, far right, near right.
+            const std::array<std::size_t, 4> tile = {corner(row, column), corner(row + 1, column),
+                                                     corner(row + 1, column + 1),
+                                                     corner(row, column + 1)};
+            AddFace(floor, tile,
+                    {shade(floor.vertices[tile[0]]), shade(floor.vertices[tile[1]]),
+                     shade(floor.vertices[tile[2]]), shade(floor.vertices[tile[3]])},
+                    (row + column) % 2 == 0 ? light : dark);
+        }
+    }
+    floor.bounding_sphere = MakeBoundingSphere(floor.vertices);
+    return floor;
 }
 
 }  // namespace
@@ -426,10 +547,130 @@ void DrawCameraScene(Canvas& canvas, const Viewport& viewport) {
 
     // The camera stands to the left of the cubes, a little above the first, and turns 30
     // degrees to its right, toward them. Everything stays well in front of it, which
-    // nothing enforces until the clipping step.
+    // nothing enforces: this camera has no clipping planes. The clipping picture's has.
     const Camera camera{.position = {-3.0, 1.0, 2.0}, .orientation = MakeOYRotationMatrix(-30.0)};
 
     RenderScene(canvas, viewport, models, instances, camera);
+}
+
+void DrawClippingScene(Canvas& canvas, const Viewport& viewport) {
+    constexpr Color kBackground{18.0, 20.0, 28.0};
+
+    canvas.Clear(kBackground);
+
+    // The models: the floor, and the solids that stand on it.
+    constexpr std::size_t kFloor = 0;
+    constexpr std::size_t kPlinth = 1;
+    constexpr std::size_t kHouse = 2;
+    constexpr std::size_t kRoof = 3;
+    constexpr std::size_t kTower = 4;
+    constexpr std::size_t kHighRise = 5;
+    constexpr std::size_t kObelisk = 6;
+    constexpr std::size_t kMast = 7;
+    constexpr double kHouseHeight = 2.0;
+    const std::vector<Model> models = {
+        Checkerboard(-12.0, 24, {214.0, 208.0, 190.0}, {96.0, 108.0, 132.0}),
+        ShadedBox(1.0, {226.0, 190.0, 110.0}),
+        ShadedBox(kHouseHeight, {236.0, 226.0, 204.0}),
+        ShadedPyramid(1.5, {214.0, 92.0, 62.0}),
+        ShadedBox(5.0, {92.0, 150.0, 226.0}),
+        ShadedBox(9.0, {72.0, 196.0, 176.0}),
+        ShadedPyramid(6.0, {240.0, 200.0, 90.0}),
+        ShadedBox(40.0, {226.0, 84.0, 104.0}),
+    };
+
+    // The city, as a map: every letter is a lot of 2 x 2 on a grid of 4, the camera's
+    // corner at the bottom left, X to the right and Z up the page. The diagonal is left
+    // open as an avenue.
+    //
+    //   .  nothing        p  a plinth      h  a house with a roof
+    //   t  a tower        T  a high-rise   o  an obelisk
+    constexpr std::string_view kCity[] = {
+        "TthTho",  // z from 22 to 24, the farthest row
+        "htTh.T",  // z from 18 to 20
+        "Tht.tt",  // z from 14 to 16
+        "th.hTh",  // z from 10 to 12
+        "h.thtT",  // z from 6 to 8
+        "pTthtT",  // z from 2 to 4, the nearest row
+    };
+    constexpr double kLotSpacing = 4.0;
+    constexpr double kFirstLot = 3.0;  // the center of the nearest lot, along X and Z
+
+    std::vector<Instance> instances;
+
+    // The floor first: everything stands on it.
+    instances.push_back({.model = kFloor});
+
+    // A high-rise behind the camera, which no clipping plane has to cut: its bounding
+    // sphere is behind the near plane and the whole instance is discarded at once.
+    instances.push_back({.model = kHighRise, .position = {-6.0, 0.0, -6.0}});
+
+    // The lots, from the farthest row to the nearest, and in each row from the right
+    // end, the farthest from the camera, to the left: the order in which they must be
+    // painted, as long as nothing sorts them by depth.
+    const int rows = static_cast<int>(std::size(kCity));
+    for (int row = 0; row < rows; ++row) {
+        const std::string_view lots = kCity[row];
+        const double z = kFirstLot + kLotSpacing * (rows - 1 - row);
+        for (int column = static_cast<int>(lots.size()) - 1; column >= 0; --column) {
+            const Vec3 lot{kFirstLot + kLotSpacing * column, 0.0, z};
+            switch (lots[static_cast<std::size_t>(column)]) {
+                case 'p':
+                    instances.push_back({.model = kPlinth, .position = lot});
+                    break;
+                case 'h':
+                    // The roof after the house under it: the camera is above the eaves.
+                    instances.push_back({.model = kHouse, .position = lot});
+                    instances.push_back(
+                        {.model = kRoof, .position = lot + Vec3{0.0, kHouseHeight, 0.0}});
+                    break;
+                case 't':
+                    instances.push_back({.model = kTower, .position = lot});
+                    break;
+                case 'T':
+                    instances.push_back({.model = kHighRise, .position = lot});
+                    break;
+                case 'o':
+                    instances.push_back({.model = kObelisk, .position = lot});
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    // A lantern an arm's length from the camera: a post, the mast scaled down to
+    // 0.11 x 2.23 x 0.11, and on it a cap, the obelisk scaled down to 0.2 x 0.6 x 0.2.
+    // The cap is at the height of the camera and its nearest corner is nearer than the
+    // viewport, so the near plane cuts that corner off, and through the cut the inside
+    // of the cap shows: its floor and the two sides beyond. The lantern comes after the
+    // rows of lots, being nearer than all of them, and its cap after its post, like a
+    // roof after its house.
+    //
+    // The post's height is not a round number on purpose. The cut corners of the cap's
+    // floor are exactly on the near plane, at z = 1, so they project to (height - 2.5)
+    // times the canvas height: with 2.2 that is row -54 of 180 exactly, the border
+    // between two rows, and the last bit of the arithmetic would pick the row.
+    constexpr Vec3 kLantern{1.16, 0.0, 0.41};
+    constexpr double kPostHeight = 2.23;
+    instances.push_back({.model = kMast, .position = kLantern, .scale = kPostHeight / 40.0});
+    instances.push_back(
+        {.model = kObelisk, .position = kLantern + Vec3{0.0, kPostHeight, 0.0}, .scale = 0.1});
+
+    // The camera stands at the corner of the city, 2.5 above the ground, and looks down
+    // the avenue: turned 42 degrees to its right. Every solid is ahead of it and to its
+    // right in the world's X and Z, which is what the face order of the models and the
+    // order of the instances assume. Its clipping volume is what the viewport shows.
+    //
+    // Not 45 degrees, along the avenue exactly: from the corner of a grid of whole
+    // numbers that view projects one corner after another onto the border between two
+    // columns of pixels (the corner (x, z) to 180 (x - z) / (x + z) on a canvas 180
+    // high), where the last bit of cos and sin would decide the column.
+    const Camera camera{.position = {0.0, 2.5, 0.0},
+                        .orientation = MakeOYRotationMatrix(-42.0),
+                        .clipping_planes = MakeClippingPlanes(viewport)};
+
+    RenderScene(canvas, viewport, models, instances, camera, DrawShadedTriangle);
 }
 
 void DrawAxesScene(Canvas& canvas) {

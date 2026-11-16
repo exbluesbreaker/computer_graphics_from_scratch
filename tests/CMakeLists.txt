@@ -14,11 +14,14 @@ FetchContent_MakeAvailable(Catch2)
 add_executable(cgfs_tests
     math/vec3_test.cpp
     math/mat4_test.cpp
+    math/plane_test.cpp
+    math/bounding_sphere_test.cpp
     image/color_test.cpp
     image/canvas_test.cpp
     image/image_io_test.cpp
     camera/viewport_test.cpp
     camera/camera_test.cpp
+    camera/clipping_planes_test.cpp
     raytracer/raytracer_test.cpp
     rasterizer/interpolate_test.cpp
     rasterizer/line_test.cpp
@@ -27,6 +30,7 @@ add_executable(cgfs_tests
     rasterizer/object_test.cpp
     rasterizer/model_test.cpp
     rasterizer/instance_test.cpp
+    rasterizer/clipping_test.cpp
     rasterizer/scene_test.cpp
     demo/golden_test.cpp)
 # So that helpers are included by their path in the tree: "support/test_helpers.h".

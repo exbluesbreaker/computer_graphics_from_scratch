@@ -4,7 +4,9 @@
 
 #include <cgfs/image/color.h>
 #include <cgfs/math/mat4.h>
+#include <cgfs/math/plane.h>
 #include <cgfs/math/vec3.h>
+#include <cgfs/rasterizer/object.h>
 #include <cgfs/rasterizer/point.h>
 
 #include <catch2/catch_tostring.hpp>
@@ -36,6 +38,14 @@ struct StringMaker<cgfs::Mat4> {
 };
 
 template <>
+struct StringMaker<cgfs::Plane> {
+    static std::string convert(const cgfs::Plane& plane) {
+        return "Plane(N=" + StringMaker<cgfs::Vec3>::convert(plane.normal) +
+               ", D=" + std::to_string(plane.d) + ")";
+    }
+};
+
+template <>
 struct StringMaker<cgfs::Color> {
     static std::string convert(const cgfs::Color& c) {
         return "Color(" + std::to_string(c.r) + ", " + std::to_string(c.g) + ", " +
@@ -56,6 +66,16 @@ struct StringMaker<cgfs::Point> {
     static std::string convert(const cgfs::Point& p) {
         return "(" + std::to_string(p.x) + ", " + std::to_string(p.y) +
                ", h=" + std::to_string(p.h) + ")";
+    }
+};
+
+template <>
+struct StringMaker<cgfs::Triangle> {
+    static std::string convert(const cgfs::Triangle& t) {
+        return "Triangle(v=" + std::to_string(t.v[0]) + " " + std::to_string(t.v[1]) + " " +
+               std::to_string(t.v[2]) + ", " + StringMaker<cgfs::Color>::convert(t.color) +
+               ", h=" + std::to_string(t.h[0]) + " " + std::to_string(t.h[1]) + " " +
+               std::to_string(t.h[2]) + ")";
     }
 };
 

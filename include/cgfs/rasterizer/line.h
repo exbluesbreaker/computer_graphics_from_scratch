@@ -18,7 +18,8 @@ namespace cgfs {
 ///
 /// The interpolated coordinate is a double; the pixel it lands in is found with
 /// ToPixel. Pixels outside the canvas are dropped by PutPixel, so a line may run off the
-/// canvas; there is no clipping yet.
+/// canvas; the primitive does not clip. (The 3D pipeline clips its scene before anything
+/// is projected, see ClipScene.)
 void DrawLine(Canvas& canvas, Point p0, Point p1, Color color);
 
 }  // namespace cgfs
