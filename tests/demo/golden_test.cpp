@@ -151,3 +151,11 @@ TEST_CASE("clipping scene matches the reference drawing", "[golden]") {
         },
         "clipping_320x180.ppm");
 }
+
+TEST_CASE("filled cubes scene matches the reference drawing", "[golden]") {
+    CheckDrawingMatchesGolden(
+        [](cgfs::Canvas& canvas) {
+            cgfs::demo::DrawFilledCubesScene(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas));
+        },
+        "filled_320x180.ppm");
+}

@@ -3,6 +3,7 @@
 #include <cgfs/camera/camera.h>
 #include <cgfs/camera/clipping_planes.h>
 #include <cgfs/image/color.h>
+#include <cgfs/image/depth_buffer.h>
 #include <cgfs/math/bounding_sphere.h>
 #include <cgfs/math/mat4.h>
 #include <cgfs/math/vec3.h>
@@ -143,8 +144,9 @@ Model Pyramid() {
 // stand on their origin rather than around it: the base is in the plane y = 0, so an
 // instance is put on the ground by its position and stays there when it is scaled.
 //
-// There is no hidden-surface removal yet: triangles are painted in list order and the
-// later one shows. Each solid therefore lists its faces in an order that is right for a
+// The clipping picture is drawn without a depth buffer: triangles are painted in list
+// order and the later one shows. Each solid therefore lists its faces in an order that
+// is right for a
 // camera standing to its front left (at a smaller x and a smaller z than any of its
 // corners): first the faces such a camera cannot see, the right, the back and the bottom,
 // then the top, then the two that face it, the left and the front. A convex solid seen
@@ -671,6 +673,54 @@ void DrawClippingScene(Canvas& canvas, const Viewport& viewport) {
                         .clipping_planes = MakeClippingPlanes(viewport)};
 
     RenderScene(canvas, viewport, models, instances, camera, DrawShadedTriangle);
+}
+
+void DrawFilledCubesScene(Canvas& canvas, const Viewport& viewport) {
+    constexpr Color kBackground{18.0, 20.0, 28.0};
+
+    canvas.Clear(kBackground);
+
+    // One model, the cube of the objects picture: six faces in six colors, listed back,
+    // right, front, left, top, bottom. Every instance is that cube as it stands, moved
+    // and nothing else, and the camera is the default one, so every cube is drawn in
+    // that one order whichever of its sides the camera sees. The scene is composed so
+    // that the order is wrong almost everywhere; the depth buffer is what makes it not
+    // matter.
+    const std::vector<Model> models = {Cube()};
+    constexpr std::size_t kCube = 0;
+    std::vector<Instance> instances;
+
+    // The cube from nine directions: a wall of 3 x 3 cubes facing the camera, the middle
+    // one straight ahead. From outside a cube shows three faces at most: here the blue
+    // front and, off the axis, the side and the top or bottom turned toward the camera.
+    // The faces turned away are drawn all the same, and those listed after the front
+    // (the left, the top and the bottom) would be painted over it; they are farther
+    // away than the front, so the depth buffer turns them down.
+    constexpr double kWallSpacing = 3.5;
+    constexpr double kWallDistance = 12.0;
+    for (const double y : {kWallSpacing, 0.0, -kWallSpacing}) {
+        for (const double x : {-kWallSpacing, 0.0, kWallSpacing}) {
+            instances.push_back({.model = kCube, .position = {x, y, kWallDistance}});
+        }
+    }
+
+    // Beside the wall, on each side, a row of three cubes that leads away from the camera
+    // and outward, a little below it, so that each cube stands partly behind the one
+    // before. The rows are listed from the nearest cube to the farthest, the wrong way
+    // around for painting in list order, which would put every cube over the cube in
+    // front of it. Through the depth buffer the nearer cube keeps its pixels.
+    constexpr Vec3 kRowStart{7.0, -2.0, 12.0};
+    constexpr Vec3 kRowStep{5.5, 0.0, 6.0};
+    for (const double side : {-1.0, 1.0}) {
+        for (int k = 0; k < 3; ++k) {
+            const Vec3 right = kRowStart + kRowStep * k;
+            instances.push_back({.model = kCube, .position = {side * right.x, right.y, right.z}});
+        }
+    }
+
+    // One depth buffer for the picture, shared by all the cubes.
+    DepthBuffer depth_buffer(canvas);
+    RenderScene(canvas, viewport, models, instances, Camera{}, DrawFilledTriangle, &depth_buffer);
 }
 
 void DrawAxesScene(Canvas& canvas) {

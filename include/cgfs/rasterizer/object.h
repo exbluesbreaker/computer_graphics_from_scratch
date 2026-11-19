@@ -3,6 +3,7 @@
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
+#include <cgfs/image/depth_buffer.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/triangle.h>
 
@@ -46,16 +47,22 @@ struct Triangle {
 /// caller says otherwise, the outline the book draws at this point; DrawFilledTriangle
 /// fills the faces and DrawShadedTriangle shades them by the corners' intensities.
 ///
-/// The triangles are drawn in order, so where two of them cover the same pixels the
-/// later one shows. There is no hidden-surface removal yet: a wireframe shows the edges
-/// at the back too, and filled or shaded triangles come out right only if the list
-/// happens to run from the back of the object to its front. Nor is anything clipped
-/// here; ClipScene does that before the object arrives.
+/// The triangles are drawn in order. Without a `depth_buffer`, where two of them cover
+/// the same pixels the later one shows: a wireframe shows the edges at the back too,
+/// and filled or shaded triangles come out right only if the list happens to run from
+/// the back of the object to its front. With one, every triangle is drawn through it
+/// (see DrawFilledTriangle), the projected vertices bringing their 1/z along, and a
+/// pixel shows the nearest triangle whatever the order: hidden-surface removal. The
+/// buffer is the caller's, like the canvas, because objects hide each other only
+/// through a buffer they share: one buffer per picture, passed to every call that draws
+/// into it. Nothing is clipped here; ClipScene does that before the object arrives.
 ///
 /// Preconditions: every index is less than `vertices.size()`, asserted; every vertex has
-/// z > 0, asserted by ProjectVertex.
+/// z > 0, asserted by ProjectVertex; the depth buffer, if there is one, has the canvas's
+/// size, asserted by the triangles.
 void RenderObject(Canvas& canvas, const Viewport& viewport, std::span<const Vec3> vertices,
                   std::span<const Triangle> triangles,
-                  DrawTriangleFunction draw_triangle = DrawWireframeTriangle);
+                  DrawTriangleFunction draw_triangle = DrawWireframeTriangle,
+                  DepthBuffer* depth_buffer = nullptr);
 
 }  // namespace cgfs

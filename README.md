@@ -19,6 +19,8 @@ turned and moved by its own model transform, as seen by a camera that can stand 
 and look any way. The transforms are 4 x 4 matrices; the projection, as in the book,
 deliberately is not, and between the two the scene is clipped in 3D against the planes
 that bound what the camera can see, so the camera may stand in the middle of a scene.
+A depth buffer, which keeps 1/z for every pixel, removes hidden surfaces: through it a
+pixel shows the nearest triangle, in whatever order the scene is listed.
 `docs/SPEC.md` describes the design, the architecture and the roadmap.
 
 ## Requirements
@@ -51,6 +53,7 @@ Use `--preset release` for an optimized build in `build/release`. Then:
 ./build/release/apps/render_demo --scene instances --output instances.png   # a scene of instances
 ./build/release/apps/render_demo --scene camera --output camera.png   # model and camera transforms
 ./build/release/apps/render_demo --scene clipping --output clipping.png   # clipping, shaded solids
+./build/release/apps/render_demo --scene filled --output filled.png   # hidden-surface removal
 ./build/release/apps/render_demo --help
 ```
 
@@ -80,14 +83,23 @@ picture of the clipping chapter and the first with shaded solids: a city of boxe
 pyramids on a checkerboard floor, seen by a camera standing in it; the floor runs on
 under and behind the camera, high-rises leave the picture at the top, and a lantern an
 arm's length away is cut open by the near plane, all of it clipped by `ClipScene` between
-the transforms and the projection), `axes` (the coordinate axes and corner dots, no ray
-tracing). A larger `--distance` narrows the field of view of the ray-traced scenes, the
-cube, the objects, the instances, the camera scene and the clipping scene.
+the transforms and the projection), `filled` (the picture of hidden-surface removal:
+fifteen copies of the book's six-colored cube drawn with `DrawFilledTriangle` through a
+`DepthBuffer`, a wall of 3 x 3 and a row on each side, listed so that painting them in
+order would put the back of every cube over its front and every cube over the one in
+front of it; through the depth buffer each cube shows the three faces it should),
+`axes` (the coordinate axes and corner dots, no ray tracing). A larger `--distance`
+narrows the field of view of the ray-traced scenes, the cube, the objects, the
+instances, the camera scene, the clipping scene and the filled cubes.
 
-The rasterizer has no hidden-surface removal yet (the depth buffer is the next chapter):
-triangles are painted in list order. The wireframes show everything, and the `clipping`
-scene is composed so that its list order is its depth order; `docs/SPEC.md`, section 9,
-says how.
+Hidden-surface removal is a depth buffer that a scene asks for: `RenderScene` and
+`RenderObject` take a `DepthBuffer` of the canvas's size as their last argument, and
+without one triangles are painted in list order, as before. The `filled` scene uses
+it. The wireframes show everything either way, and the `clipping` scene is still
+painted, composed so that its list order is its depth order; `docs/SPEC.md`, sections
+3.12 and 9, has the details. Back-face culling, the other half of the book's chapter,
+is not implemented yet: along some edges of the `filled` picture a line one pixel wide
+shows a face that is turned away, where two faces are equally deep.
 
 ## Layout
 
@@ -99,7 +111,10 @@ include/cgfs/   public headers: one folder per layer, one file per concept
                 plane.h         Plane, SignedDistance and IntersectSegmentPlane
                 bounding_sphere.h  BoundingSphere and MakeBoundingSphere
   image/        color.h         Color (double channels, nominal 0..255), Rgb8, ToRgb8
+                pixel_index.h   PixelIndex: the centered coordinate system, as one function
                 canvas.h        Canvas: pixel buffer with a centered coordinate system, Save()
+                depth_buffer.h  DepthBuffer: 1/z per pixel of a canvas, for hidden-surface
+                                removal
                 image_io.h      PPM writer and reader, PNG writer
   camera/       viewport.h      Viewport: CanvasToViewport(x, y), field of view
                 camera.h        Camera (position, orientation and clipping planes) and
@@ -109,17 +124,19 @@ include/cgfs/   public headers: one folder per layer, one file per concept
                                 lights (a std::variant) and Scene
                 raytracer.h     IntersectRaySphere and RayTracer: Render, ClosestIntersection,
                                 TraceRay (recursive, for reflections), ComputeLighting (shadows)
-  rasterizer/   point.h         Point (x, y and the intensity h), and ToPixel (the one
-                                coordinate-to-pixel conversion)
+  rasterizer/   point.h         Point (x, y, the intensity h and the depth 1/z), and ToPixel
+                                (the one coordinate-to-pixel conversion)
                 interpolate.h   Interpolate
                 line.h          DrawLine
                 triangle.h      DrawWireframeTriangle, DrawFilledTriangle, DrawShadedTriangle
-                                and DrawTriangleFunction, the signature they share
+                                (the last two through a depth buffer when given one) and
+                                DrawTriangleFunction, the signature they share
                 projection.h    ViewportToCanvas and ProjectVertex: a Vec3 seen through a
                                 Viewport becomes the Point the primitives draw
                 object.h        Triangle (three vertex indices, a color and an intensity per
                                 corner) and RenderObject: project an object's vertices, draw
-                                its triangles outlined, filled or shaded
+                                its triangles outlined, filled or shaded, through a depth
+                                buffer or painted in list order
                 model.h         Model: an object's vertex list and triangle list, stored once,
                                 with a bounding sphere; TransformModel and RenderModel: the
                                 model under a transform matrix, and its wireframe
@@ -167,4 +184,5 @@ committing:
 ./build/release/apps/render_demo --scene instances --width 320 --height 180 --output tests/demo/golden/instances_320x180.ppm
 ./build/release/apps/render_demo --scene camera --width 320 --height 180 --output tests/demo/golden/camera_320x180.ppm
 ./build/release/apps/render_demo --scene clipping --width 320 --height 180 --output tests/demo/golden/clipping_320x180.ppm
+./build/release/apps/render_demo --scene filled --width 320 --height 180 --output tests/demo/golden/filled_320x180.ppm
 ```

@@ -17,8 +17,9 @@ directional lights, diffuse shading, specular highlights, shadows and reflection
 the first steps of the rasterizer, lines, filled and shaded triangles, the perspective
 projection of vertices, objects made of triangles, drawn as wireframes, filled or
 shaded, and scenes of instances of models, each with a model transform, seen from a
-movable camera and clipped in 3D to what that camera can see; section 13 lists what
-comes next.
+movable camera, clipped in 3D to what that camera can see and, where asked, drawn
+through a depth buffer that removes the hidden surfaces; section 13 lists what comes
+next.
 
 ## 2. Goals and non-goals
 
@@ -57,6 +58,10 @@ images.
 - `PutPixel(x, y, color)` maps centered coordinates to the buffer as
   `column = width / 2 + x` and `row = height / 2 - 1 - y`, with row 0 at the top of the
   image. Pixels outside the buffer are silently ignored.
+- That mapping is one function, `PixelIndex(width, height, x, y)`: the index
+  `row * width + column` of the pixel in a buffer stored row by row, or nothing when
+  the pixel is outside. The canvas keeps its colors by it and the depth buffer (3.12)
+  its depths, so the two agree on where every pixel is and on which pixels exist.
 - Colors are written to the buffer by clamping each channel to `[0, 255]` and then
   truncating toward zero to an 8-bit integer.
 - `Clear()` fills the canvas with its background color. `Clear(color)` sets a new
@@ -159,7 +164,9 @@ the formula.
 The rasterizer draws 2D primitives straight into the canvas with `PutPixel`; nothing of
 the ray tracer is involved. A `Point` is a canvas position in the centered integer
 coordinates of 3.1 together with an intensity `h`, a multiplier for the color that only
-the shaded triangle reads; it defaults to 1, the full color.
+the shaded triangle reads; it defaults to 1, the full color. It also carries a depth,
+`inv_z`, which the filled and the shaded triangle read when they are given a depth
+buffer (3.12) and which nothing reads otherwise.
 
 - `Interpolate(i0, d0, i1, d1)` returns the values of a dependent variable `d` at the
   integers `i0, i0 + 1, ..., i1`, given `d = d0` at `i0` and `d = d1` at `i1`: that is
@@ -235,7 +242,10 @@ tracer looks through: the camera at the origin looking along +Z and the viewport
   `Px = v.x * d / v.z`, `Py = v.y * d / v.z` (similar triangles), and that point goes
   through `ViewportToCanvas`. Vertices on one ray from the camera project to one pixel;
   a vertex twice as far from the camera lands at half the distance from the center;
-  moving the viewport away (a larger `d`) zooms in. Precondition: `v.z > 0`, asserted.
+  moving the viewport away (a larger `d`) zooms in. The point also carries
+  `inv_z = 1 / v.z`, all that is left of the vertex's depth once it is a pixel, for
+  the depth buffer (3.12); `ViewportToCanvas`, which is given no depth, leaves it at
+  0. Precondition: `v.z > 0`, asserted.
 - The projection does not clip. A vertex outside the field of view projects beyond the
   canvas and the primitives draw what fits; a vertex very near the camera plane projects
   very far away, and a canvas coordinate beyond the range of `int` is undefined behaviour
@@ -255,24 +265,27 @@ vertices and twelve triangles, not thirty-six vertices) and projects it once.
   every corner by default, the full color. The intensity belongs to the corner of the
   triangle, not to the vertex, so two triangles that meet at a vertex may be differently
   bright there, as two faces of a cube are (section 14, decision 14).
-- `RenderObject(viewport, vertices, triangles, draw_triangle = DrawWireframeTriangle)`
+- `RenderObject(viewport, vertices, triangles, draw_triangle = DrawWireframeTriangle,
+  depth_buffer = none)`
   first projects every vertex with `ProjectVertex` (3.7) into a list `projected`
   parallel to `vertices`, then draws every triangle `T`, in list order, as
-  `draw_triangle(P0, P1, P2, T.color)` with `Pk = projected[T.v[k]]` given the intensity
-  `T.h[k]`: the book's `RenderObject` and `RenderTriangle`. `draw_triangle` is one of the
+  `draw_triangle(P0, P1, P2, T.color, depth_buffer)` with `Pk = projected[T.v[k]]` given
+  the intensity `T.h[k]`: the book's `RenderObject` and `RenderTriangle`. `draw_triangle` is one of the
   three triangle primitives of 3.6, which share the signature `DrawTriangleFunction`:
   `DrawWireframeTriangle`, the default and the outline the book draws at this point,
   `DrawFilledTriangle` or `DrawShadedTriangle`; the first two ignore the intensities.
   Triangles that share a vertex agree on its pixel, and where two triangles cover the
-  same pixels the one drawn later shows. Preconditions: every index is less than the
+  same pixels the one drawn later shows, unless there is a depth buffer. Preconditions: every index is less than the
   number of vertices, asserted; every vertex has `z > 0`, asserted by `ProjectVertex`.
-- There is no hidden-surface removal (the depth buffer of the roadmap). A wireframe
+- Without a depth buffer there is no hidden-surface removal. A wireframe
   shows every edge, those at the back too, and an edge of a closed surface, which
   belongs to two triangles, always shows the color of the one drawn later (section 15).
   Filled or shaded triangles come out right only when the list runs from the back of the
   object to its front as the camera sees it; for a convex solid seen from outside it is
   enough that every triangle turned away from the camera comes before every triangle
-  turned toward it. `RenderObject` clips nothing; `ClipScene` (3.11) does that before
+  turned toward it. With a depth buffer (3.12) the filled and the shaded primitive set
+  a pixel only where their triangle is the nearest thing so far, and the order of the
+  list stops mattering. `RenderObject` clips nothing; `ClipScene` (3.11) does that before
   an object arrives here.
 
 ### 3.9 Rasterizer: models, instances and scenes
@@ -301,9 +314,9 @@ rotation until the transforms step).
   as the camera sees it (3.10), clipped to the camera's clipping planes (3.11); with the
   default camera the result is `RenderInstance`'s for each: the book's `RenderScene`.
   Where two instances overlap, the later one shows, as for the triangles within an
-  object.
-- No hidden-surface removal, as in 3.8. `RenderInstance` and `RenderModel` clip nothing
-  and outline their triangles: what they draw must stand entirely in front of the camera.
+  object, unless the scene is drawn through a depth buffer (3.12).
+- `RenderInstance` and `RenderModel` clip nothing, take no depth buffer and outline
+  their triangles: what they draw must stand entirely in front of the camera.
 
 ### 3.10 Rasterizer: model and camera transforms
 
@@ -349,13 +362,14 @@ stays outside the matrices (section 14, decision 12).
 - `RenderInstance(viewport, instance, models)` is
   `RenderModel(models[instance.model], MakeModelMatrix(instance))`: the camera at the
   origin. `RenderScene(viewport, models, instances, camera = Camera{},
-  draw_triangle = DrawWireframeTriangle)` is the book's Listing 10-5 with the clipping
-  step of the next chapter in it:
+  draw_triangle = DrawWireframeTriangle, depth_buffer = none)` is the book's Listing
+  10-5 with the clipping step of the next chapter in it:
   `M_camera = MakeCameraMatrix(camera.position, camera.orientation)` once; then every
   instance `I` becomes `TransformModel(models[I.model], M_camera * MakeModelMatrix(I))`,
   geometry in the camera's coordinates; then that list is clipped,
   `ClipScene(scene, camera.clipping_planes)` (3.11); then every instance that is left is
-  drawn, in list order, with `RenderObject(vertices, triangles, draw_triangle)`. One
+  drawn, in list order, with
+  `RenderObject(vertices, triangles, draw_triangle, depth_buffer)`. One
   matrix per instance takes a vertex from the model's coordinates through the world into
   the camera's, the clipping works on the result in 3D, and the projection follows
   vertex by vertex. A camera has no clipping planes unless it is given some, and
@@ -498,7 +512,81 @@ coordinates, as `TransformModel` returns it; a scene is a list of those.
   their corners, taken along the sides in 3D; inside a piece `DrawShadedTriangle`
   interpolates along the canvas as before (section 15).
 
-### 3.12 Numeric conventions
+### 3.12 Rasterizer: hidden-surface removal
+
+Triangles are drawn one after another, and a pixel that several of them cover shows the
+one drawn last (3.8). A depth buffer makes it show the nearest one instead, whatever the
+order: for every pixel of the canvas it remembers how near the nearest thing drawn there
+so far is, and a triangle sets a pixel only where it is nearer than that. This is the
+book's depth buffering; its back-face culling is not implemented yet (section 13).
+
+- The buffer stores `1/z`, not `z`, because `1/z` can be interpolated over the picture
+  of a triangle and `z` cannot. A triangle lies in a plane `A X + B Y + C Z + D = 0` of
+  the camera's coordinates. The projection (3.7) shows the point `(X, Y, Z)` at
+  `x = X d / Z`, `y = Y d / Z` on the viewport, so `X = x Z / d` and `Y = y Z / d`;
+  substituting these in the plane's equation and dividing by `Z D` gives
+
+  ```
+  1/Z = -(A x + B y + C d) / (D d)
+  ```
+
+  which is linear in `x` and `y`, and so in the canvas coordinates: the same amount is
+  added to `1/Z` with every step along a row or along a side, which is exactly what
+  `Interpolate` (3.6) computes. `Z` itself is the reciprocal of that linear function and
+  does not change by equal steps. Halfway along the picture of an edge that runs from
+  `z = 1` to `z = 4` the depth is `1.6`, the reciprocal of the mean of `1` and `1/4`,
+  and not `2.5`; interpolating `z` would put the edge behind a surface at `z = 2` that
+  it is in front of. (`D = 0` is a plane through the camera, seen edge-on: its picture
+  is a line.)
+- `1/z` orders the depths in reverse: in front of the camera `z > 0`, so `1/z > 0`, and
+  the nearer of two points has the larger `1/z`. As `z` grows without bound `1/z` falls
+  to `0`, so `0` stands for "infinitely far" and is what an empty pixel holds; no
+  special value is needed for "nothing drawn yet".
+- A `Point` (3.6) carries `inv_z`, the `1/z` of the vertex it is the projection of.
+  `ProjectVertex` (3.7) sets it. It defaults to `0`, infinitely far: a point made in 2D
+  has no depth, and nothing reads the field unless there is a depth buffer.
+- `DepthBuffer(width, height)` holds one `double` per pixel of a canvas of that size,
+  addressed by the canvas's centered coordinates (3.1), all `0` at first.
+  `UpdateIfCloser(x, y, inv_z)` is the book's `UpdateDepthBufferIfCloser`: when
+  `(x, y)` is on the canvas and `inv_z` is greater than the stored value it stores
+  `inv_z` and returns true; otherwise it changes nothing and returns false. The
+  comparison is strict, so of two surfaces that are equally deep at a pixel the one
+  drawn first stays, and a depth of `0` or less is never stored. `InvZ(x, y)` reads the
+  stored value. The buffer and the canvas agree on which coordinates are on the canvas
+  because both get the answer from one function, `PixelIndex` (3.1).
+- `DrawFilledTriangle` and `DrawShadedTriangle` (3.6) take a depth buffer as an optional
+  last parameter. The pixels they consider are exactly those of 3.6. Alongside each x
+  list the sides get a list of `1/z` from the same calls over the same rows, as for `h`:
+  `iz01 = Interpolate(y0, inv_z0, y1, inv_z1)`, `iz12`, `iz02` likewise and
+  `iz012 = iz01 without its last value + iz12`, and the lists follow their x lists to
+  the left and to the right. In every row
+  `iz_segment = Interpolate(x_l, iz_left[y - y0], x_r, iz_right[y - y0])`, and the pixel
+  `(x, y)` is set only if `UpdateIfCloser(x, y, iz_segment[x - x_l])` says so. Without a
+  depth buffer every pixel is set, as before, and the rows' depths are not computed:
+  the 2D pictures and every scene drawn without one are byte for byte what they were,
+  and take as long as they did.
+  `DrawWireframeTriangle` takes the parameter too, since the three share a signature,
+  and ignores it: an outline neither hides anything nor is hidden.
+- `RenderObject` (3.8) and `RenderScene` (3.9) take the depth buffer as an optional last
+  parameter and hand it to the primitive with every triangle. Things hide each other
+  only through a buffer they share, so the caller makes one buffer of the canvas's size
+  for the picture, as it makes the canvas, and passes it to every call that draws into
+  that picture. With it the order of the instances, and of the triangles in a model, no
+  longer decides what is seen.
+- What depth buffering leaves undecided is a tie. Two faces that share an edge both draw
+  the edge's pixels (3.6), from the same two vertices and so at the same depth, give or
+  take the rounding of the running sums; such a pixel shows one face or the other, and
+  which one is decided by the last bit. Between two faces that are both visible this
+  cannot be told from a correct picture. Where one of the two is turned away from the
+  camera its picture lies inside the other's, and the shared edge can show a line one
+  pixel wide in the color of the hidden face. Removing the faces turned away, back-face
+  culling, removes those lines; coplanar surfaces that overlap would tie over their
+  whole area and have to be avoided in the scene.
+- The depths are interpolated between vertices that were truncated to whole pixels
+  (3.7), like `h`, so the depth at a pixel is that of a slightly moved triangle. The
+  difference is far below the distance between two surfaces that do not touch.
+
+### 3.13 Numeric conventions
 
 - All geometry and color math uses `double`. Switching to `float` would be a deliberate
   decision rather than a detail, because it changes the golden images.
@@ -518,7 +606,7 @@ README.md                 build instructions and project overview
 docs/SPEC.md              this document
 include/cgfs/             public headers: one folder per layer, one file per concept
     math/vec3.h  mat4.h  plane.h  bounding_sphere.h
-    image/color.h  canvas.h  image_io.h
+    image/color.h  pixel_index.h  canvas.h  depth_buffer.h  image_io.h
     camera/viewport.h  camera.h  clipping_planes.h
     raytracer/scene.h  raytracer.h
     rasterizer/point.h  interpolate.h  line.h  triangle.h  projection.h  object.h
@@ -533,7 +621,8 @@ tests/
     support/test_helpers.h      Catch2 printers for Vec3/Mat4/Plane/Color/Rgb8/Point/Triangle,
                                 a temp-file helper
     math/vec3_test.cpp  mat4_test.cpp  plane_test.cpp  bounding_sphere_test.cpp
-    image/color_test.cpp  canvas_test.cpp  image_io_test.cpp
+    image/color_test.cpp  pixel_index_test.cpp  canvas_test.cpp  depth_buffer_test.cpp
+    image/image_io_test.cpp
     camera/viewport_test.cpp  camera_test.cpp  clipping_planes_test.cpp
     raytracer/raytracer_test.cpp
     rasterizer/interpolate_test.cpp  line_test.cpp  triangle_test.cpp  projection_test.cpp
@@ -559,7 +648,7 @@ on the ones below it:
 
 ```
 math         vec3, mat4, plane, bounding_sphere                     vector algebra and plain geometry
-image        color, canvas, image_io                                colors, the pixel buffer, file formats
+image        color, pixel_index, canvas, depth_buffer, image_io     colors, the pixel buffer, the depth buffer, file formats
 camera       viewport, camera, clipping_planes                      how canvas pixels map into the world
 raytracer    scene, raytracer                                       the ray tracing renderer
 rasterizer   point, interpolate, line, triangle, projection,        the rasterizing renderer
@@ -573,9 +662,12 @@ demo         raytracer_scenes, rasterizer_scenes                    the demo pic
   `math/plane`: `Plane`, `SignedDistance` and `IntersectSegmentPlane`.
   `math/bounding_sphere`: `BoundingSphere` and `MakeBoundingSphere`. Both header-only,
   and in this layer because they depend on nothing but `Vec3`.
-- `image/color`: `Color`, `Rgb8`, `ToRgb8`, header-only. `image/canvas`: the pixel buffer
-  and the centered coordinate system. `image/image_io`: PPM writer and reader, PNG
-  writer; used by `Canvas::Save` and the tests.
+- `image/color`: `Color`, `Rgb8`, `ToRgb8`, header-only. `image/pixel_index`:
+  `PixelIndex`, the centered coordinate system as one function, header-only.
+  `image/canvas`: the pixel buffer. `image/depth_buffer`: `DepthBuffer`, a `1/z` per
+  pixel of a canvas, for hidden-surface removal; in this layer because it depends on
+  nothing but the canvas's size and coordinates. `image/image_io`: PPM writer and
+  reader, PNG writer; used by `Canvas::Save` and the tests.
 - `camera/viewport`: pixel to viewport-point mapping and field of view. Used by the ray
   tracer and by the rasterizer's projection. `camera/camera`: `Camera`, a position, an
   orientation and a list of clipping planes, and `MakeCameraMatrix`; plain data for
@@ -584,11 +676,13 @@ demo         raytracer_scenes, rasterizer_scenes                    the demo pic
   shows.
 - `raytracer/scene`: plain data: spheres, lights, background color.
   `raytracer/raytracer`: intersection, lighting, the render loop.
-- `rasterizer/point`: `Point`, with its intensity `h`, and `ToPixel`, the one conversion
+- `rasterizer/point`: `Point`, with its intensity `h` and its depth `inv_z`, and
+  `ToPixel`, the one conversion
   from interpolated coordinates to pixels. `rasterizer/interpolate`: `Interpolate`, the
   building block. `rasterizer/line`: `DrawLine`. `rasterizer/triangle`:
-  `DrawWireframeTriangle`, `DrawFilledTriangle` and `DrawShadedTriangle`, and the
-  signature the three share, `DrawTriangleFunction`.
+  `DrawWireframeTriangle`, `DrawFilledTriangle` and `DrawShadedTriangle`, the last two
+  through a depth buffer when they are given one, and the signature the three share,
+  `DrawTriangleFunction`.
   `rasterizer/projection`: `ViewportToCanvas` and `ProjectVertex`, from a `Vec3` seen
   through a `Viewport` to the `Point` the primitives draw; the start of the 3D pipeline.
   `rasterizer/object`: `Triangle`, three vertex indices, a color and an intensity per
@@ -608,7 +702,8 @@ demo         raytracer_scenes, rasterizer_scenes                    the demo pic
   draws into a canvas. Either way the app and the golden tests render exactly the same
   thing.
 
-The canvas knows nothing about 3D. The viewport knows nothing about spheres. The tracer
+The canvas knows nothing about 3D, and the depth buffer nothing about triangles. The
+viewport knows nothing about spheres. The tracer
 and the rasterizer write to the canvas only through `PutPixel`, and neither knows the
 other exists. `CLAUDE.md` states the design principles and the rules that keep the tree
 in this shape: a new layer is a new folder under `include/cgfs/`, `src/` and `tests/`
@@ -706,9 +801,14 @@ namespace colors { inline constexpr Color kWhite{255, 255, 255}, kBlack{0, 0, 0}
                                          kRed{255, 0, 0}, kGreen{0, 255, 0}, kBlue{0, 0, 255}; }
 ```
 
-### 5.3 `image/canvas.h`
+### 5.3 `image/pixel_index.h`, `image/canvas.h`, `image/depth_buffer.h`
 
 ```cpp
+// pixel_index.h
+constexpr std::optional<std::size_t> PixelIndex(int width, int height, int x, int y);
+// row * width + column of the pixel at centered (x, y); nullopt outside (section 3.1)
+
+// canvas.h
 class Canvas {
 public:
     explicit Canvas(int width = 1920, int height = 1080, Color background = colors::kWhite);
@@ -727,6 +827,21 @@ public:
     void Save(const std::filesystem::path& path) const;
     // ".ppm" writes binary P6, ".png" writes PNG. Any other extension or an I/O
     // failure throws std::runtime_error.
+};
+
+// depth_buffer.h
+class DepthBuffer {                          // 1/z per pixel of a canvas (section 3.12)
+public:
+    DepthBuffer(int width, int height);      // every pixel 0, infinitely far
+    explicit DepthBuffer(const Canvas& canvas);
+    // throws std::invalid_argument when width <= 0 or height <= 0
+
+    int width() const;
+    int height() const;
+
+    bool UpdateIfCloser(int x, int y, double inv_z);
+    // inv_z > stored: store it, true. Otherwise, or out of range: false, nothing changes
+    std::optional<double> InvZ(int x, int y) const;     // nullopt when out of range
 };
 ```
 
@@ -848,10 +963,11 @@ sphere vector and is valid as long as that vector is not modified. `ClosestInter
 
 ```cpp
 // point.h
-struct Point {                 // canvas coordinates and the vertex's intensity (section 3.6)
+struct Point {                 // canvas coordinates, intensity and depth (section 3.6)
     int x = 0;
     int y = 0;
     double h = 1.0;            // multiplier for the color; read by DrawShadedTriangle only
+    double inv_z = 0.0;        // 1/z of the projected vertex; read through a depth buffer
     bool operator==(const Point&) const = default;
 };
 constexpr int ToPixel(double coordinate);    // truncation toward zero (section 3.6)
@@ -864,15 +980,21 @@ std::vector<double> Interpolate(int i0, double d0, int i1, double d1);
 void DrawLine(Canvas& canvas, Point p0, Point p1, Color color);
 
 // triangle.h
-void DrawWireframeTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
-void DrawFilledTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
-void DrawShadedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);  // color * h
-using DrawTriangleFunction = void (*)(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
+void DrawWireframeTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color,
+                           DepthBuffer* depth_buffer = nullptr);  // ignores the buffer
+void DrawFilledTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color,
+                        DepthBuffer* depth_buffer = nullptr);
+void DrawShadedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color,
+                        DepthBuffer* depth_buffer = nullptr);     // color * h
+// with a depth buffer, of the canvas's size, only the pixels where the triangle is the
+// nearest so far (section 3.12)
+using DrawTriangleFunction = void (*)(Canvas& canvas, Point p0, Point p1, Point p2, Color color,
+                                      DepthBuffer* depth_buffer);
 // the signature of the three, for whoever draws many triangles
 
 // projection.h
 Point ViewportToCanvas(const Viewport& viewport, double x, double y);  // truncated (section 3.7)
-Point ProjectVertex(const Viewport& viewport, Vec3 v);                 // precondition v.z > 0
+Point ProjectVertex(const Viewport& viewport, Vec3 v);  // precondition v.z > 0; inv_z = 1 / v.z
 
 // object.h
 struct Triangle {                     // one face of an object (section 3.8)
@@ -883,7 +1005,8 @@ struct Triangle {                     // one face of an object (section 3.8)
 };
 void RenderObject(Canvas& canvas, const Viewport& viewport, std::span<const Vec3> vertices,
                   std::span<const Triangle> triangles,
-                  DrawTriangleFunction draw_triangle = DrawWireframeTriangle);
+                  DrawTriangleFunction draw_triangle = DrawWireframeTriangle,
+                  DepthBuffer* depth_buffer = nullptr);
 // every index < vertices.size(); every vertex has z > 0
 
 // model.h
@@ -921,8 +1044,10 @@ std::vector<Model> ClipScene(std::vector<Model> scene, std::span<const Plane> pl
 // scene.h
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
                  std::span<const Instance> instances, const Camera& camera = Camera{},
-                 DrawTriangleFunction draw_triangle = DrawWireframeTriangle);
-// every instance, in list order, as camera sees it: transformed, clipped, projected, drawn
+                 DrawTriangleFunction draw_triangle = DrawWireframeTriangle,
+                 DepthBuffer* depth_buffer = nullptr);
+// every instance, in list order, as camera sees it: transformed, clipped, projected, drawn;
+// through the depth buffer, if there is one, the nearest surface shows whatever the order
 ```
 
 One header per primitive. Free functions that take the canvas as their first parameter,
@@ -937,14 +1062,20 @@ fields, so every call and every aggregate initializer written before them still 
 and draws the same picture. Clipping and shading arrived the same way: the camera's
 clipping planes, a triangle's intensities and a model's bounding sphere are fields with
 defaults, the triangle primitive is a defaulted parameter, and without them a scene is
-drawn as it was.
+drawn as it was. Hidden-surface removal arrived the same way once more: a point's
+`inv_z` is a field with a default, and the depth buffer is a defaulted last parameter
+of the primitives, of `RenderObject` and of `RenderScene`, a pointer because "none" is
+the default and the buffer is the caller's, like the canvas. The one signature that
+changed outright is the function pointer type `DrawTriangleFunction`, which cannot
+have a default; whoever passes one of the three primitives by name is not affected.
 The clipping functions carry the book's names and take their instance, and `ClipScene`
 its scene, by value: an instance that needs no clipping is moved through untouched,
 which is what the pseudocode's "return instance" means, and the caller chooses between
 handing a scene over (`std::move`) and keeping it. "Nothing is left" is an empty
 `std::optional`, the pseudocode's NULL.
-They are the primitives; a class with state (a depth buffer, a camera) comes when the
-pipeline needs one, and the primitives stay as they are.
+They are the primitives; a class comes when there is state to protect, and the depth
+buffer is the first in the rasterizer: a buffer whose size and contents must stay in
+step. The primitives stay free functions.
 
 ## 6. Build system
 
@@ -1043,10 +1174,22 @@ Unit tests:
   0 and no points the origin with radius 0.
 - `color`: scaling, addition, `ToRgb8` clamping and truncation (e.g. `254.9 -> 254`,
   `300 -> 255`, `-5 -> 0`).
+- `pixel_index`: on a 4 x 4 grid the origin has index 6 and the four corners 0, 3, 12
+  and 15; a step in x is the next index and a step up one width earlier; coordinates
+  outside the grid have none; a 5 x 3 grid follows the integer-division rule; the
+  function is usable in a constant expression; and for every pixel of a 5 x 3 canvas
+  and a border around it `PutPixel` changes exactly the three bytes at
+  `3 * PixelIndex`, or nothing where there is no index.
 - `canvas`: default dimensions; `Clear` with and without a color; `PutPixel` at the
   origin and the four corners lands on the expected buffer rows and columns; writes
   outside the range are ignored; odd dimensions follow the integer-division rule;
   `GetPixel` round-trips `PutPixel`.
+- `depth_buffer`: non-positive dimensions throw; the size can come from a canvas; an
+  empty buffer holds 0 at every pixel; any positive `1/z` is nearer than nothing; a
+  nearer surface replaces a farther one and not the other way around; of two equal
+  depths the first stays; 0 and negative values are never stored; every pixel has a
+  depth of its own; coordinates outside the buffer are never the nearest and have no
+  value; a 5 x 3 buffer has exactly the pixels of a 5 x 3 canvas.
 - `image_io`: PPM write then read round-trips the bytes; PNG write produces a file that
   starts with the PNG signature.
 - `viewport`: a table of points for a 1920 x 1080 canvas and a 1 x 1 x 1 viewport
@@ -1131,7 +1274,21 @@ Unit tests:
     rectangle exactly and overlap on the diagonal's pixels only, which the later one
     owns; a triangle larger than the canvas fills it and one outside it draws nothing;
     the color is clamped. `DrawWireframeTriangle` draws the same pixels as the three
-    `DrawLine` calls.
+    `DrawLine` calls. With a depth buffer: of two triangles that overlap, one at z = 2
+    and one at z = 4, the nearer shows in either order, which is the painter's picture
+    with the far one first; without a buffer the later one shows and the depths are
+    not looked at; on an empty buffer a triangle covers what it covers without one,
+    and the buffer holds its `1/z` exactly there; on the triangle (0, 0), (8, 0),
+    (0, 8) with `1/z` = 1, 1/4 and 1/2 the buffer holds those at the vertices, 0.75
+    and 0.375 halfway along two sides, 0.6875 at (2, 2), and 0.625 halfway along the
+    bottom side, which is z = 1.6 and not 2.5; that triangle and one facing the camera
+    at z = 2 on the same pixels are sorted out pixel by pixel, the tilted one in front
+    up to x = 5 on the bottom row (interpolating z would stop at x = 2), and on the
+    line where the two are exactly equally deep the one drawn first stays; a second
+    triangle at the same depth changes nothing; a triangle of points without depth is
+    not drawn; a triangle that reaches beyond the canvas is drawn as without a buffer.
+    `DrawWireframeTriangle` draws its outline whole through a depth buffer and leaves
+    no depth behind.
   - `DrawShadedTriangle`: with `h = 1` at every vertex it gives the filled triangle's
     canvas for eleven shapes, among them the two whose rows the filled triangle skips
     (the two-row case and the straddled apex row of section 15); a constant `h` of 0.5
@@ -1141,17 +1298,22 @@ Unit tests:
     orders give the same canvas and each intensity stays with its vertex; the two
     triangles of a rectangle cut along its diagonal give identical bytes on the
     diagonal's three pixels; `h = 2` is clamped to 255 by the canvas and a negative `h`
-    to 0.
+    to 0. With a depth buffer the nearer of two shaded triangles shows in either
+    order with its shading, the painter's picture to the byte, and with `h = 1` the
+    canvas and the depths are those of the filled triangle.
   - `ViewportToCanvas`: the viewport test's table the other way round (the default
     viewport on 1920 x 1080); a 2 x 1 viewport scales each axis by its own ratio;
-    truncation toward zero (`33.7 -> 33`, `-33.7 -> -33`, `0.5` and `-0.5` to 0).
+    truncation toward zero (`33.7 -> 33`, `-33.7 -> -33`, `0.5` and `-0.5` to 0); the
+    point has no depth, `inv_z = 0`.
   - `ProjectVertex`: a vertex on the viewport plane keeps its x and y; a vertex twice
     and four times as far lands at a half and a quarter of the distance from the
     center, and one nearer than the viewport beyond the canvas; four vertices on one
     ray project to one pixel; the viewport at distance 2 sees `(0.5, 0.5, 4)` where
     the one at distance 1 sees `(0.5, 0.5, 2)`; on a 64 x 32 canvas with a 2 x 1
     viewport at distance 2 (powers of two, so every step is exact) `ProjectVertex`
-    inverts `CanvasToViewport` on every pixel.
+    inverts `CanvasToViewport` on every pixel. The point's `inv_z` is `1 / z`: 1, 1/2
+    and 1/8 for three vertices on one ray, larger for the nearer of two vertices
+    anywhere, and the vertex's depth whatever the viewport's distance.
   - `RenderObject` (on a 32 x 32 canvas through a 1 x 1 viewport at distance 1, where a
     vertex `(x, y, 1)` lands on the pixel `(32 x, 32 y)`): one triangle gives the canvas
     of `DrawWireframeTriangle` on its projected corners; a triangle names its corners by
@@ -1168,7 +1330,11 @@ Unit tests:
     `DrawShadedTriangle` on points that carry them, 255, 63 and 127 at its corners,
     whichever order the corners are named in; the two triangles of the square can be
     differently bright at the vertices they share; outlines and fills ignore the
-    intensities.
+    intensities. Through a depth buffer, of two filled triangles that overlap, at
+    z = 1 and z = 2, the nearer shows in both list orders, the painter's picture with
+    the far one first; the buffer holds 1/2 where only the far one is; two objects
+    drawn through one shared buffer hide each other and through a buffer each the
+    later one shows; a wireframe is drawn whole.
   - `RenderModel` (same canvas and viewport; a lopsided triangle in its own plane
     z = 0): a translation to z = 1 gives the wireframe of its corners and the canvas of
     `RenderObject` on the vertices moved by hand; the transform is applied before the
@@ -1262,7 +1428,12 @@ Unit tests:
     planes are in the camera's coordinates, so to a camera turned 90 degrees an instance
     along -X is in front and one along +X behind, and a camera that steps forward leaves
     an instance behind its near plane. The tests that compare pixels use planes whose
-    normals are axes, where the crossing points land on whole pixels.
+    normals are axes, where the crossing points land on whole pixels. Through a depth
+    buffer, of two filled instances on the camera's axis the nearer shows in both
+    list orders and nothing of the farther is seen; to a camera turned 180 degrees
+    the instance at z = -1 of the world hides the one at z = -2, the depth being the
+    camera's; and what the plane `x = 0` leaves of a triangle hides an instance
+    behind it, in both orders.
 
 Golden-image tests:
 
@@ -1277,13 +1448,16 @@ Golden-image tests:
   reference has no shadows because ambient light is never blocked; only the reflective
   and mirror ball references show reflections. `lines_320x180.ppm`,
   `triangles_320x180.ppm`, `shaded_320x180.ppm`, `cube_320x180.ppm`,
-  `objects_320x180.ppm`, `instances_320x180.ppm`, `camera_320x180.ppm` and
-  `clipping_320x180.ppm` are the rasterizer's demos (section 9): every pixel of them
-  comes from `DrawLine`, `DrawFilledTriangle` or `DrawShadedTriangle`, the objects'
-  through `RenderObject`, the instances', the camera scene's and the clipping scene's
-  through `RenderScene`. The 2D scenes compute their
+  `objects_320x180.ppm`, `instances_320x180.ppm`, `camera_320x180.ppm`,
+  `clipping_320x180.ppm` and `filled_320x180.ppm` are the rasterizer's demos (section
+  9): every pixel of them comes from `DrawLine`, `DrawFilledTriangle` or
+  `DrawShadedTriangle`, the objects' through `RenderObject`, the instances', the camera
+  scene's, the clipping scene's and the filled cubes' through `RenderScene`, the last
+  through a depth buffer as well. The 2D
+  scenes compute their
   vertices with integer arithmetic and their colors and intensities without any `libm`
-  call, and the projections of the cube, the objects and the instances are a few IEEE
+  call, and the projections of the cube, the objects, the instances and the filled
+  cubes, with the depths of the last, are a few IEEE
   additions, multiplications and divisions, which every platform rounds the same way,
   so those pictures are reproducible bit for bit. The camera scene is the first whose
   vertices pass through `cos` and `sin`; section 15 records the margin by which its
@@ -1298,21 +1472,24 @@ Golden-image tests:
 - The scenes are defined once, in the `demo` layer, shared by `render_demo` and the
   golden test, so the app and the test cannot drift apart.
 - The references are regenerated only when rendering behaviour changes on purpose, with
-  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping> --width 320 --height 180 --output tests/demo/golden/...`
+  `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|filled> --width 320 --height 180 --output tests/demo/golden/...`
   from a Release build, and the pictures are reviewed before they are committed. The
   `flat` reference doubles as a regression test: neither the specular nor the shadow code
   path may change the output of an ambient-only scene, `diffuse` pins the shadows of
   matte surfaces independently of the highlights, and `specular` pins the output of
   non-reflective surfaces under the recursive `TraceRay`. In the same way `objects`,
   `instances` and `camera` pin the wireframes through the pipeline that now clips and
-  can shade: they are byte for byte what they were before it could.
+  can shade: they are byte for byte what they were before it could. `filled` pins
+  hidden-surface removal: a scene whose list order painting gets wrong, drawn through
+  the depth buffer. Every other reference is drawn without a depth buffer and did not
+  change by a byte when it arrived.
 
 ## 9. Demo application
 
 `render_demo` renders one of the demo pictures to a file:
 
 ```
-render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|axes] [--width N] [--height N] [--distance D] [--output PATH]
+render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|filled|axes] [--width N] [--height N] [--distance D] [--output PATH]
 ```
 
 Defaults: `reflective`, 1920 x 1080, distance 1, `render.png`. The `mirrorball` scene is
@@ -1380,15 +1557,38 @@ scaled to a post 2.23 high with the obelisk scaled to 0.1 as its cap, has the ne
 corner of its cap cut off by the near plane, so that the inside of the cap shows. One
 high-rise stands behind the camera and is discarded whole by its bounding sphere.
 Without the clipping step the scene could not be drawn: `ProjectVertex` cannot take a
-vertex behind the camera. There is no hidden-surface removal yet, so the picture is
-composed for it (section 14, decision 14): every solid stands ahead of the camera and to
+vertex behind the camera. The scene is drawn without a depth buffer, painted in list
+order, so the picture is composed for it (section 14, decisions 14 and 15): every solid stands ahead of the camera and to
 its right in the world's X and Z, each model lists its faces in an order that is right
 from there (right, back, bottom, top, left, front), and the instances are listed from
 the farthest row to the nearest, each row from its far end, the lantern last and a roof
-after its house. The
+after its house. The `filled` scene is the picture of hidden-surface removal:
+`DrawFilledCubesScene` draws fifteen instances of the cube of the objects scene, moved
+and nothing else, through the default camera and a `DepthBuffer` of the canvas's size,
+with `RenderScene(..., Camera{}, DrawFilledTriangle, &depth_buffer)`. It is composed so
+that painting it in list order gets it wrong, within every cube and between cubes, the
+opposite of the clipping scene, which is still painted. The cube lists its faces back
+(red), right (green), front (blue), left (yellow), top (purple), bottom (cyan), and
+every instance is drawn in that order whichever of its sides the camera sees. Nine of
+them form a wall of 3 x 3 facing the camera, at x and y = -3.5, 0 and 3.5 and z = 12:
+the same cube from nine directions. Each shows what a cube shows from outside, three
+faces at most: the front and, off the axis, the side and the top or bottom turned toward
+the camera, the cube straight ahead a plain blue square. Painted, the faces listed after
+the front would lie on top of it wherever they are turned away, the left as a yellow
+band on the cubes of the left and middle columns, the top as a purple one on the top and
+middle rows, the bottom as a cyan one on the middle and bottom rows; through the depth
+buffer they are refused, being farther than the front. On each side of the wall a row
+of three cubes leads away from the camera and outward, at (7, -2, 12), (12.5, -2, 18)
+and (18, -2, 24) on the right and mirrored on the left, each cube partly behind the one
+before, and is listed from the nearest to the farthest: painted, every cube would cover
+the cube in front of it, and through the buffer each is hidden where the nearer one
+stands. What the picture still shows of the missing half of the chapter are the ties of
+3.12, lines one pixel wide along some edges in the color of a face turned away; section
+15 counts them. The
 `axes` scene draws the coordinate axes and corner dots; it exercises the canvas without
 ray tracing. For the ray-traced scenes, the cube, the objects, the instances, the camera
-scene and the clipping scene the viewport width always matches the canvas aspect ratio,
+scene, the clipping scene and the filled cubes the viewport width always matches the
+canvas aspect ratio,
 and `--distance` zooms them (in the clipping scene it moves the near plane out with the
 viewport as well); it has no effect on the 2D pictures. The output format follows
 the extension. The program prints the render time in milliseconds and exits non-zero with
@@ -1418,17 +1618,19 @@ row.
 
 ## 11. Error handling
 
-- Constructor preconditions (canvas size, viewport dimensions and distance must be
-  positive) throw `std::invalid_argument`.
+- Constructor preconditions (canvas size, depth buffer size, viewport dimensions and
+  distance must be positive) throw `std::invalid_argument`.
 - File I/O failures throw `std::runtime_error` with the path in the message.
 - The ray tracer's render loop, intersection and lighting code never throw and never
   allocate. The rasterizer's `Interpolate` returns a `std::vector`, as in the book: one
-  allocation per line, a few per triangle and one per row of a shaded triangle; the
+  allocation per line, a few per triangle, one per row of a shaded triangle and one more
+  per row of a triangle drawn through a depth buffer; the
   primitives can only throw if an allocation fails. `RenderScene` builds the scene in
   the camera's coordinates as a list of models, one per instance, and clipping returns
   new lists; both allocate per instance, and neither throws otherwise.
 - Programming errors inside the library (a non-unit normal, a dimension mismatch that
-  slipped past the constructor check, a vertex index out of range) are `assert`ed in
+  slipped past the constructor check, a vertex index out of range, a depth buffer of
+  another size than the canvas) are `assert`ed in
   Debug builds. A clipping plane whose normal is not a unit vector, a bounding sphere
   that does not contain its model and a transform that does not scale uniformly are
   stated as preconditions and not checked.
@@ -1449,6 +1651,7 @@ Targets apply to Release builds on a single core. Debug builds have no targets.
 | camera demo (2 transformed instances, 24 triangles)| 1920 x 1080 | under 10 ms; 1 to 2 ms measured                  |
 | clipping demo (47 instances, 1626 triangles, shaded)| 1920 x 1080 | under 150 ms; about 50 ms measured               |
 | clipping demo                                    | 320 x 180   | under 20 ms; about 2 ms measured                 |
+| filled demo (15 instances, 180 triangles, depth buffer)| 1920 x 1080 | under 60 ms; about 20 ms measured          |
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
@@ -1479,9 +1682,12 @@ section 4 is meant to absorb these steps as additions:
   the transforms and the projection (which is why the projection is not a matrix):
   `Plane`, `BoundingSphere`, the clipping planes of a viewport and `ClipScene` down to
   `ClipTriangle`, with objects drawn filled or shaded from an intensity per triangle
-  corner. Next, in the book's order: hidden-surface removal (the depth buffer, which
-  will free a shaded scene from having to be listed back to front, and back-face
-  culling, for which the clipped triangles already keep their winding), shading (which
+  corner; and the first half of hidden-surface removal, the depth buffer: `DepthBuffer`,
+  a `1/z` per pixel, through which the filled and the shaded triangle set only the
+  pixels where they are nearest, so that a scene no longer has to be listed back to
+  front. Next, in the book's order: the other half, back-face
+  culling (for which the clipped triangles already keep their winding, and which
+  removes the ties of 3.12 along the edges of faces turned away), shading (which
   computes the corner intensities from lights and normals instead of storing them) and
   textures (which need perspective-correct interpolation, and with it the intensities
   of a clipped triangle will stop depending on where it was cut). Rotations about X and
@@ -1610,11 +1816,42 @@ The judgment calls behind this design, so they are not relitigated by accident.
     attributes (normals, texture coordinates), rather than per vertex: faces that share
     a vertex can then be shaded differently, and clipping interpolates it like the
     position. Until the Shading chapter computes it from lights, a model simply states
-    it. Nothing was borrowed from the next chapter: there is no depth buffer and no
-    back-face culling, triangles are painted in list order, and a scene that wants
-    solid faces to come out right must be listed back to front. The `clipping` demo is
-    composed that way (section 9), which is a property of that picture, not of the
-    renderer.
+    it. Nothing was borrowed from the next chapter: without a depth buffer triangles
+    are painted in list order, and a scene that wants solid faces to come out right
+    must be listed back to front. The `clipping` demo is composed that way (section 9),
+    which is a property of that picture, not of the renderer, and it is still drawn
+    that way (decision 15).
+15. Hidden-surface removal is a depth buffer that the caller makes and passes on, not
+    something `RenderScene` does by itself.
+    - It stores `1/z`, the book's final form, and never `z`; 3.12 has the reason. The
+      comparison is the book's strict one, so of two equal depths the first drawn stays.
+    - `DepthBuffer` is a class, the rasterizer's first: its size and its contents have
+      to stay in step. It lives in `image/` by the rule of decision 13, that a file
+      belongs to the highest layer it depends on: it needs the canvas's size and
+      coordinate system and nothing of the rasterizer. That coordinate system, until
+      then a private function of `Canvas`, became `PixelIndex` when the buffer became
+      its second user, so the two cannot disagree about which pixels exist; with an odd
+      height they would if each had its own rule.
+    - The buffer is optional and off by default: a defaulted pointer at the end of the
+      parameters of the triangle primitives, of `RenderObject` and of `RenderScene`.
+      Every picture that existed before is drawn without one, is byte for byte what it
+      was and takes as long as it did. `RenderScene` could have made a buffer for every
+      scene instead; that would have changed `clipping_320x180.ppm`, a picture that goes
+      through `cos` and `sin`, and with a depth buffer its shared edges become ties
+      decided by the last bit (3.12), which the measurements of section 15 do not cover.
+      The clipping demo therefore stays painted in the order it was composed for, and
+      moving it to the depth buffer is a change of its reference, to be made on its own.
+    - The buffer is the caller's, like the canvas, and not `RenderObject`'s: objects
+      hide each other only through a buffer they share, so it has to outlive the call.
+    - The depth reaches the primitives on the `Point`, as `inv_z`, set by
+      `ProjectVertex`. The book's `RenderTriangle` reads `1/z` from the 3D vertices
+      instead; here the triangle primitives draw canvas points and know nothing of 3D,
+      so what they need of the third dimension has to arrive the way `h` does.
+    - The filled and the shaded triangle each got the same few lines, in the shape of
+      their listings, rather than a routine in common. The wireframe takes the parameter
+      because the three share a signature, and ignores it.
+    - Back-face culling, the other half of the book's chapter, is not here yet. The
+      `filled` demo is drawn without it and shows the ties that it would remove.
 
 ## 15. Implementation notes
 
@@ -1721,7 +1958,7 @@ instances and scenes and, the same day, with model and camera transforms, and
 - In the instances demo a roof's base and the top of the cube under it share their four
   edges and cross their diagonals: the pyramid's base is cut from front-left to
   back-right, the cube's top from front-right to back-left, so every roof shows a white
-  X over a purple one. Nothing hides in a wireframe; the depth buffer will settle it.
+  X over a purple one. Nothing hides in a wireframe, with or without a depth buffer.
 - The camera demo (2 instances, 24 triangles, 72 lines) draws in 1 to 2 ms at
   1920 x 1080; the matrices cost nothing measurable next to the lines. The instances
   demo, now drawn through the same matrices with the default camera, is byte for byte
@@ -1785,6 +2022,33 @@ instances and scenes and, the same day, with model and camera transforms, and
   distances 0.3 to 2, wide and tall). The two agreed on every covered sample; with the
   list reversed they disagreed on four out of five. The argument that makes it so is in
   section 9; nothing in the renderer enforces it.
+- The filled demo (15 instances of one model, 180 triangles) draws in about 20 ms at
+  1920 x 1080 through its depth buffer, and in 7 to 8 ms painted without one: every
+  pixel of every triangle is now compared before it is set. It has no rotation and the
+  default camera, so no `libm`: like the instances demo its vertices are exact sums and
+  its projections and depths a few IEEE operations. Its coordinates are still kept off
+  the pixel boundaries, which is why the wall stands at z = 12 rather than at 10 (a face
+  at z = 9 projects a whole x to a whole pixel at 320 x 180): no projected coordinate of
+  its 120 vertices comes closer than 0.043 pixels to a boundary there.
+- What the depth buffer does to the filled demo was measured once, outside the
+  repository, at 320 x 180. A script with a replica of `ProjectVertex` and
+  `DrawFilledTriangle` painted the scene the way a painter would if the order were
+  right: only the faces turned toward the camera, and the cubes of each row from the
+  farthest to the nearest. Painted in list order, as the scene is listed, the picture
+  differs from that one on 6338 of the 16840 pixels the cubes cover, 38%. Through the
+  depth buffer it differs on 1311, every one of them on an edge that two faces share,
+  where the two pictures settle a tie differently: the painter gives the edge to the
+  face drawn later, the depth buffer to the face that is nearer by the last bit of a
+  running sum. On 698 of those the face that shows is one turned away from the camera,
+  the lines of 3.12: the red of a back face along the far edge of a side, the green of
+  a hidden right face down the right edge of a front. They are deterministic, the
+  arithmetic being what it is, and back-face culling will remove them.
+- The depth buffer changed no picture that is drawn without one: the thirteen other
+  references, and the 1920 x 1080 renders of the triangles, shaded, objects, instances,
+  camera and clipping demos, are byte for byte what they were. Without a buffer the
+  primitives still interpolate `1/z` along the sides, a few values per triangle, and
+  skip it along the rows, so the timings did not move either. Interpolating the rows
+  regardless would have cost the clipping demo about 30%, 64 ms against 49.
 - A triangle cut by a plane is not, in general, pixel for pixel the part of the whole
   triangle in front of the plane. Its new corners are truncated to whole pixels like any
   vertex, so the sides that run to them are redrawn from there and can differ by a pixel

@@ -86,6 +86,8 @@ constexpr DemoScene kScenes[] = {
      Projected<cgfs::demo::DrawCameraScene>},
     {"clipping", "a shaded city seen from inside it, clipped to what the camera can see",
      Projected<cgfs::demo::DrawClippingScene>},
+    {"filled", "filled cubes listed in the wrong order and set right by a depth buffer",
+     Projected<cgfs::demo::DrawFilledCubesScene>},
     {"axes", "the coordinate axes and corner dots (no ray tracing)",
      Rasterized<cgfs::demo::DrawAxesScene>},
 };

@@ -94,13 +94,44 @@ void DrawCameraScene(Canvas& canvas, const Viewport& viewport);
 /// The solids are drawn with DrawShadedTriangle from intensities stored at the corners
 /// of the models' triangles: a shade per face, darker toward the ground, and a floor
 /// that fades with distance. A cut triangle gets the intensity of its new corners by
-/// the same interpolation as their position. There is no hidden-surface removal yet, so
-/// the picture is composed for it: every solid stands ahead of the camera and to its
-/// right, lists the faces turned away from there first, and the instances are listed
-/// from far to near. Clears the canvas to a dark background first; depends on the
-/// viewport, so render_demo's --distance zooms it, and moves the near plane out with
-/// the viewport.
+/// the same interpolation as their position. The scene is painted in list order,
+/// without a depth buffer, so the picture is composed for it: every solid stands ahead
+/// of the camera and to its right, lists the faces turned away from there first, and the
+/// instances are listed from far to near. Clears the canvas to a dark background first;
+/// depends on the viewport, so render_demo's --distance zooms it, and moves the near
+/// plane out with the viewport.
 void DrawClippingScene(Canvas& canvas, const Viewport& viewport);
+
+/// The picture of hidden-surface removal: fifteen instances of the cube of the objects
+/// picture, six faces in six colors, drawn with RenderScene and DrawFilledTriangle
+/// through a DepthBuffer. The scene is composed so that painting it in list order gets
+/// it wrong, within every cube and between cubes; the depth buffer, which lets a pixel
+/// be set only by something nearer than what it shows, makes the order irrelevant.
+///
+/// In the middle a wall of 3 x 3 cubes faces the camera, 3.5 apart at z = 12: the same
+/// cube from nine directions, each drawn back, right, front, left, top, bottom. Every
+/// one shows what a cube shows from outside, three faces at most: the blue front and,
+/// off the axis, the side and the top or bottom turned toward the camera, the cube
+/// straight ahead a plain blue square. The left, the top and the bottom are listed
+/// after the front and, where they are turned away, would be painted over it as a
+/// yellow, a purple and a cyan band; they are farther than the front and are refused.
+///
+/// On each side of the wall a row of three cubes leads away from the camera and
+/// outward, from (7, -2, 12) in steps of (5.5, 0, 6), mirrored on the left, and is
+/// listed from the nearest cube to the farthest. Painted in that order every cube would
+/// cover the one in front of it; here each is hidden where the nearer one stands. That
+/// is the same fault between objects instead of within one, and the reason the buffer
+/// belongs to the picture and not to an object.
+///
+/// One thing the depth buffer leaves open: two faces that share an edge are equally
+/// deep along it, and a face turned away can win the edge's pixels from the face in
+/// front of it, a line one pixel wide in the wrong color (the spec says where). Back-face
+/// culling is what removes those.
+///
+/// The default camera and no rotation: plain arithmetic, no trigonometry. Clears the
+/// canvas to a dark background first; depends on the viewport, so render_demo's
+/// --distance zooms it.
+void DrawFilledCubesScene(Canvas& canvas, const Viewport& viewport);
 
 /// The coordinate axes through the origin, a dot at the origin and a colored dot in
 /// each corner (red top-left, green top-right, blue bottom-left, black bottom-right): a

@@ -1,6 +1,7 @@
 #include <cgfs/image/canvas.h>
 
 #include <cgfs/image/image_io.h>
+#include <cgfs/image/pixel_index.h>
 
 #include <cctype>
 #include <stdexcept>
@@ -50,16 +51,11 @@ std::optional<Rgb8> Canvas::GetPixel(int x, int y) const {
 }
 
 std::optional<std::size_t> Canvas::Offset(int x, int y) const noexcept {
-    // The origin sits at column width/2 and row height/2 - 1, so that y = 0 is the
-    // lowest row of the upper half.
-    const int column = width_ / 2 + x;
-    const int row = height_ / 2 - 1 - y;
-    if (column < 0 || column >= width_ || row < 0 || row >= height_) {
+    const auto index = PixelIndex(width_, height_, x, y);
+    if (!index) {
         return std::nullopt;
     }
-    return (static_cast<std::size_t>(row) * static_cast<std::size_t>(width_) +
-            static_cast<std::size_t>(column)) *
-           3;
+    return *index * 3;  // three bytes per pixel
 }
 
 void Canvas::Save(const std::filesystem::path& path) const {

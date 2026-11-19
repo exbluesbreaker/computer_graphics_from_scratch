@@ -3,6 +3,7 @@
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
+#include <cgfs/image/depth_buffer.h>
 #include <cgfs/math/mat4.h>
 #include <cgfs/math/plane.h>
 #include <cgfs/math/vec3.h>
@@ -23,6 +24,7 @@
 
 using cgfs::Camera;
 using cgfs::Canvas;
+using cgfs::DepthBuffer;
 using cgfs::DrawFilledTriangle;
 using cgfs::DrawShadedTriangle;
 using cgfs::DrawTriangleFunction;
@@ -386,4 +388,75 @@ TEST_CASE("RenderScene: the clipping planes are in the camera's coordinates", "[
         LitPixels(CanvasWithScene(plain_models, ahead,
                                   Camera{.position = {0.0, 0.0, 1.5}, .clipping_planes = {kNear}}))
             .empty());
+}
+
+// --- With a depth buffer ---------------------------------------------------------------
+
+namespace {
+
+// A fresh black canvas with the scene drawn filled, through a depth buffer of its own.
+Canvas CanvasWithDepthBufferedScene(const std::vector<Model>& models,
+                                    const std::vector<Instance>& instances,
+                                    const Camera& camera = Camera{}) {
+    Canvas canvas(kSize, kSize, kBlack);
+    DepthBuffer depth_buffer(canvas);
+    RenderScene(canvas, TestViewport(), models, instances, camera, DrawFilledTriangle,
+                &depth_buffer);
+    return canvas;
+}
+
+}  // namespace
+
+TEST_CASE("RenderScene: with a depth buffer the nearer instance shows, whatever the list order",
+          "[rasterizer]") {
+    // The same triangle in two colors, one behind the other on the camera's axis: the
+    // red one on the viewport plane, the blue one twice as far, half the size on the
+    // canvas and wholly behind the red one.
+    const std::vector<Model> models = {SmallTriangle(kRed), SmallTriangle(kBlue)};
+    const Instance near{.model = 0, .position = {0.0, 0.0, 1.0}};
+    const Instance far{.model = 1, .position = {0.0, 0.0, 2.0}};
+
+    const Canvas near_first = CanvasWithDepthBufferedScene(models, {near, far});
+    CHECK(Bytes(near_first) == Bytes(CanvasWithDepthBufferedScene(models, {far, near})));
+    CHECK(near_first.GetPixel(0, 0) == Rgb8{255, 0, 0});
+    // Nothing of the blue one is seen: the picture is that of the red one alone.
+    CHECK(Bytes(near_first) == Bytes(CanvasWithDepthBufferedScene(models, {near})));
+
+    // Without a depth buffer the later instance owns the pixels, as before.
+    const Canvas painted = CanvasWithScene(models, {near, far}, Camera{}, DrawFilledTriangle);
+    CHECK(painted.GetPixel(0, 0) == Rgb8{0, 0, 255});
+}
+
+TEST_CASE(
+    "RenderScene: the depth is the distance in front of the camera, not a place in the "
+    "world",
+    "[rasterizer]") {
+    // A camera turned to look back along -Z: of two triangles at z = -1 and z = -2 of
+    // the world the first is the nearer, though its z is the larger.
+    const std::vector<Model> models = {OffGridTriangle(kRed), OffGridTriangle(kBlue)};
+    const Instance near{.model = 0, .position = {0.0, 0.0, -1.0}};
+    const Instance far{.model = 1, .position = {0.0, 0.0, -2.0}};
+    const Camera looking_back{.orientation = MakeOYRotationMatrix(180.0)};
+
+    const Canvas near_first = CanvasWithDepthBufferedScene(models, {near, far}, looking_back);
+    CHECK(Bytes(near_first) ==
+          Bytes(CanvasWithDepthBufferedScene(models, {far, near}, looking_back)));
+    CHECK(near_first.GetPixel(0, 0) == Rgb8{255, 0, 0});
+    CHECK(Bytes(near_first) == Bytes(CanvasWithDepthBufferedScene(models, {near}, looking_back)));
+}
+
+TEST_CASE("RenderScene: what a clipping plane leaves of a triangle keeps its depths",
+          "[rasterizer]") {
+    // A white triangle on the viewport plane, cut by the plane x = 0, in front of a red
+    // one at twice the distance that the plane leaves whole on its right. Where the
+    // white one is left it hides the red one, in either order.
+    const std::vector<Model> models = {RightTriangle(), SmallTriangle(kRed)};
+    const Instance cut{.model = 0, .position = {0.0, 0.0, 1.0}};
+    const Instance behind{.model = 1, .position = {0.5, -0.375, 2.0}};
+    const Camera camera{.clipping_planes = {kRightHalf}};
+
+    const Canvas cut_first = CanvasWithDepthBufferedScene(models, {cut, behind}, camera);
+    CHECK(Bytes(cut_first) == Bytes(CanvasWithDepthBufferedScene(models, {behind, cut}, camera)));
+    CHECK(cut_first.GetPixel(7, -7) == Rgb8{255, 255, 255});  // inside both: the nearer, white
+    CHECK(cut_first.GetPixel(-4, -7) == Rgb8{0, 0, 0});       // cut away, and nothing behind it
 }

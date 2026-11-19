@@ -47,8 +47,8 @@ struct Instance {
 ///
 /// Preconditions: `instance.model < models.size()`, asserted; every transformed vertex
 /// has z > 0, asserted by ProjectVertex, so an instance must stand entirely in front of
-/// the camera: nothing is clipped here, RenderScene does that. No hidden-surface
-/// removal, as for RenderObject.
+/// the camera: nothing is clipped here, RenderScene does that. A wireframe, so nothing
+/// is hidden either.
 void RenderInstance(Canvas& canvas, const Viewport& viewport, const Instance& instance,
                     std::span<const Model> models);
 

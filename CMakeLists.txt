@@ -60,6 +60,7 @@ add_subdirectory(third_party)
 add_library(cgfs STATIC
     # image: colors, the pixel buffer, file formats
     src/image/canvas.cpp
+    src/image/depth_buffer.cpp
     src/image/image_io.cpp
     # camera: how canvas pixels map into the world
     src/camera/viewport.cpp

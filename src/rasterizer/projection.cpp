@@ -12,7 +12,9 @@ Point ViewportToCanvas(const Viewport& viewport, double x, double y) {
 Point ProjectVertex(const Viewport& viewport, Vec3 v) {
     assert(v.z > 0 && "ProjectVertex: the vertex must be in front of the camera");
     const double d = viewport.distance();
-    return ViewportToCanvas(viewport, v.x * d / v.z, v.y * d / v.z);
+    Point projected = ViewportToCanvas(viewport, v.x * d / v.z, v.y * d / v.z);
+    projected.inv_z = 1.0 / v.z;
+    return projected;
 }
 
 }  // namespace cgfs

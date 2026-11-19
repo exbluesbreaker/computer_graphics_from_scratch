@@ -3,6 +3,7 @@
 #include <cgfs/camera/camera.h>
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
+#include <cgfs/image/depth_buffer.h>
 #include <cgfs/rasterizer/instance.h>
 #include <cgfs/rasterizer/model.h>
 #include <cgfs/rasterizer/triangle.h>
@@ -19,7 +20,7 @@ namespace cgfs {
 ///                    TransformModel(models[I.model], M_camera * MakeModelMatrix(I))
 ///     clipped  = ClipScene(scene, camera.clipping_planes)
 ///     for each instance C of clipped:
-///                    RenderObject(C.vertices, C.triangles, draw_triangle)
+///                    RenderObject(C.vertices, C.triangles, draw_triangle, depth_buffer)
 ///
 /// First the transforms: one matrix per instance takes its vertices from the model's
 /// coordinates through the world into the camera's, and the instance becomes geometry
@@ -40,13 +41,19 @@ namespace cgfs {
 /// the models alongside because an Instance names its model rather than holding it, and
 /// the camera beside them.
 ///
-/// Instances are drawn in list order, so where two overlap the later one shows; there is
-/// no hidden-surface removal yet. Preconditions: every `instance.model` is less than
-/// `models.size()`, asserted; after the clipping every vertex has z > 0, asserted by
-/// ProjectVertex. The planes of MakeClippingPlanes guarantee the second for any scene;
-/// a camera without clipping planes must have every instance entirely in front of it.
+/// Instances are drawn in list order. Without a `depth_buffer`, where two overlap the
+/// later one shows, and a scene of solid faces must be listed from the back to the
+/// front. With one, a buffer of the canvas's size that the caller makes for the picture,
+/// every triangle of every instance is drawn through it and a pixel shows whatever is
+/// nearest there, in any order: hidden-surface removal (see DepthBuffer).
+///
+/// Preconditions: every `instance.model` is less than `models.size()`, asserted; after
+/// the clipping every vertex has z > 0, asserted by ProjectVertex. The planes of
+/// MakeClippingPlanes guarantee the second for any scene; a camera without clipping
+/// planes must have every instance entirely in front of it.
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
                  std::span<const Instance> instances, const Camera& camera = Camera{},
-                 DrawTriangleFunction draw_triangle = DrawWireframeTriangle);
+                 DrawTriangleFunction draw_triangle = DrawWireframeTriangle,
+                 DepthBuffer* depth_buffer = nullptr);
 
 }  // namespace cgfs

@@ -17,7 +17,9 @@ add_executable(cgfs_tests
     math/plane_test.cpp
     math/bounding_sphere_test.cpp
     image/color_test.cpp
+    image/pixel_index_test.cpp
     image/canvas_test.cpp
+    image/depth_buffer_test.cpp
     image/image_io_test.cpp
     camera/viewport_test.cpp
     camera/camera_test.cpp

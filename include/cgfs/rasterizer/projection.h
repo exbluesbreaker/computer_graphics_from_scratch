@@ -15,6 +15,7 @@ namespace cgfs {
 /// truncated to a pixel with ToPixel, as the book's code does. This is the inverse of
 /// Viewport::CanvasToViewport, except for the truncation: a viewport point lands on the
 /// pixel that looks through it, and all the viewport points of one pixel land on it.
+/// A viewport point has no depth: the point's `inv_z` stays 0.
 [[nodiscard]] Point ViewportToCanvas(const Viewport& viewport, double x, double y);
 
 /// The canvas point where the vertex v appears: perspective projection.
@@ -27,6 +28,10 @@ namespace cgfs {
 /// (similar triangles: the point at depth v.z scales down by d / v.z), and that
 /// viewport point is converted to a pixel with ViewportToCanvas. Vertices on the same ray
 /// project to the same pixel; farther vertices land closer to the center.
+///
+/// The projection flattens the scene, and the pixel alone no longer says how far the
+/// vertex was. The point therefore takes `inv_z = 1 / v.z` along (see Point), which is
+/// what a depth buffer compares to tell which of two vertices on one ray is in front.
 ///
 /// Precondition: v.z > 0, strictly in front of the camera; asserted. The projection
 /// does not clip: a vertex outside the field of view projects to a point beyond the

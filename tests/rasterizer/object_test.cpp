@@ -1,6 +1,7 @@
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
+#include <cgfs/image/depth_buffer.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/object.h>
 #include <cgfs/rasterizer/point.h>
@@ -15,6 +16,7 @@
 #include "support/test_helpers.h"
 
 using cgfs::Canvas;
+using cgfs::DepthBuffer;
 using cgfs::DrawFilledTriangle;
 using cgfs::DrawShadedTriangle;
 using cgfs::DrawWireframeTriangle;
@@ -225,4 +227,81 @@ TEST_CASE("RenderObject: outlines and fills do not look at the intensities", "[r
     Canvas filled_plain(kSize, kSize, kBlack);
     RenderObject(filled_plain, TestViewport(), kSquare, plain, DrawFilledTriangle);
     CHECK(Bytes(filled_dim) == Bytes(filled_plain));
+}
+
+// --- With a depth buffer ---------------------------------------------------------------
+
+namespace {
+
+// Two triangles that both cover the middle of the canvas: a red one on the viewport
+// plane, z = 1, with corners at the pixels (-8, -8), (8, -8) and (0, 8), and a blue one
+// twice as far and twice as large in 3D, so that it lands on the same kind of pixels
+// turned upside down: (-8, 8), (8, 8) and (0, -8).
+const std::vector<Vec3> kNearAndFar = {
+    {-0.25, -0.25, 1.0}, {0.25, -0.25, 1.0}, {0.0, 0.25, 1.0},  // 0, 1, 2: the near one
+    {-0.5, 0.5, 2.0},    {0.5, 0.5, 2.0},    {0.0, -0.5, 2.0},  // 3, 4, 5: the far one
+};
+const Triangle kNearTriangle{{0, 1, 2}, kRed};
+const Triangle kFarTriangle{{3, 4, 5}, kBlue};
+
+}  // namespace
+
+TEST_CASE("RenderObject: with a depth buffer the nearer triangle shows, whatever the list order",
+          "[rasterizer]") {
+    const auto render = [](const std::vector<Triangle>& triangles, bool depth_buffered) {
+        Canvas canvas(kSize, kSize, kBlack);
+        DepthBuffer depth_buffer(canvas);
+        RenderObject(canvas, TestViewport(), kNearAndFar, triangles, DrawFilledTriangle,
+                     depth_buffered ? &depth_buffer : nullptr);
+        return canvas;
+    };
+
+    const Canvas near_first = render({kNearTriangle, kFarTriangle}, true);
+    CHECK(Bytes(near_first) == Bytes(render({kFarTriangle, kNearTriangle}, true)));
+    CHECK(near_first.GetPixel(0, 0) == Rgb8{255, 0, 0});   // both cover it: the near one
+    CHECK(near_first.GetPixel(-6, 7) == Rgb8{0, 0, 255});  // only the far one is here
+
+    // Without one the list order decides, as it always did.
+    CHECK(render({kNearTriangle, kFarTriangle}, false).GetPixel(0, 0) == Rgb8{0, 0, 255});
+    CHECK(Bytes(near_first) == Bytes(render({kFarTriangle, kNearTriangle}, false)));
+}
+
+TEST_CASE("RenderObject: the depths are those of the vertices, 1/z", "[rasterizer]") {
+    Canvas canvas(kSize, kSize, kBlack);
+    DepthBuffer depth_buffer(canvas);
+    RenderObject(canvas, TestViewport(), kNearAndFar, std::vector<Triangle>{kFarTriangle},
+                 DrawFilledTriangle, &depth_buffer);
+    CHECK(depth_buffer.InvZ(0, 0) == 0.5);      // z = 2
+    CHECK(depth_buffer.InvZ(-15, -15) == 0.0);  // nothing was drawn here
+}
+
+TEST_CASE("RenderObject: objects hide each other through the depth buffer they share",
+          "[rasterizer]") {
+    const std::vector<Triangle> near_object = {kNearTriangle};
+    const std::vector<Triangle> far_object = {kFarTriangle};
+
+    // One buffer for both calls: the far object, drawn second, stays behind the near one.
+    Canvas shared(kSize, kSize, kBlack);
+    DepthBuffer depth_buffer(shared);
+    RenderObject(shared, TestViewport(), kNearAndFar, near_object, DrawFilledTriangle,
+                 &depth_buffer);
+    RenderObject(shared, TestViewport(), kNearAndFar, far_object, DrawFilledTriangle,
+                 &depth_buffer);
+    CHECK(shared.GetPixel(0, 0) == Rgb8{255, 0, 0});
+
+    // A buffer each: neither object knows how deep the other is, and the later one shows.
+    Canvas separate(kSize, kSize, kBlack);
+    DepthBuffer first(separate);
+    DepthBuffer second(separate);
+    RenderObject(separate, TestViewport(), kNearAndFar, near_object, DrawFilledTriangle, &first);
+    RenderObject(separate, TestViewport(), kNearAndFar, far_object, DrawFilledTriangle, &second);
+    CHECK(separate.GetPixel(0, 0) == Rgb8{0, 0, 255});
+}
+
+TEST_CASE("RenderObject: a wireframe is drawn whole through a depth buffer", "[rasterizer]") {
+    Canvas canvas(kSize, kSize, kBlack);
+    DepthBuffer depth_buffer(canvas);
+    RenderObject(canvas, TestViewport(), kSquare, std::vector<Triangle>{{{0, 1, 2}, kRed}},
+                 DrawWireframeTriangle, &depth_buffer);
+    CHECK(Bytes(canvas) == Bytes(CanvasWithObject(kSquare, {{{0, 1, 2}, kRed}})));
 }

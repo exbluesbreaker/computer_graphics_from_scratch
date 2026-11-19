@@ -2,12 +2,18 @@
 
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
+#include <cgfs/image/depth_buffer.h>
 #include <cgfs/rasterizer/point.h>
 
 namespace cgfs {
 
 /// Draw the outline of the triangle p0 p1 p2: its three edges, with DrawLine.
-void DrawWireframeTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
+///
+/// `depth_buffer` is there because the three triangle primitives share a signature (see
+/// DrawTriangleFunction) and is ignored: an outline is drawn whole, it neither hides
+/// anything nor is hidden.
+void DrawWireframeTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color,
+                           DepthBuffer* depth_buffer = nullptr);
 
 /// Fill the triangle p0 p1 p2 with `color`, edges included.
 ///
@@ -24,7 +30,30 @@ void DrawWireframeTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color c
 ///
 /// The vertex order does not matter. Degenerate triangles whose vertices are collinear
 /// come out as (part of) a line. No clipping, as for DrawLine.
-void DrawFilledTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
+///
+/// With a `depth_buffer` the triangle is drawn only where it is the nearest thing so
+/// far, which is hidden-surface removal. Each vertex says how deep it is by its `inv_z`,
+/// 1/z (see Point), and that travels along with x: the sides get a 1/z per row from the
+/// same Interpolate calls over the same rows, every row interpolates it from its left
+/// end to its right end, and a pixel is set only if DepthBuffer::UpdateIfCloser accepts
+/// the triangle's 1/z there; the buffer then remembers it. The pixels considered are
+/// the same as without one.
+///
+/// It is 1/z that is interpolated, not z, because only 1/z changes by equal steps across
+/// the picture. The triangle lies in a plane A X + B Y + C Z + D = 0, and its point
+/// (X, Y, Z) is seen at x = X d / Z, y = Y d / Z on the viewport. Put X = x Z / d and
+/// Y = y Z / d into the plane's equation and divide by Z D:
+///
+///     1/Z = -(A x + B y + C d) / (D d)
+///
+/// which is linear in x and y, the kind of quantity Interpolate's running sum follows
+/// exactly. Z is the reciprocal of that and is not: halfway along the picture of an edge
+/// from z = 1 to z = 4 the depth is 1.6, not 2.5.
+///
+/// Without a depth buffer every pixel of the triangle is set, whatever was there.
+/// Precondition: the depth buffer, if there is one, has the canvas's size; asserted.
+void DrawFilledTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color,
+                        DepthBuffer* depth_buffer = nullptr);
 
 /// Fill the triangle p0 p1 p2 with `color` scaled by an intensity that varies smoothly
 /// over it: each vertex has its own intensity `h` (see Point), and every pixel gets
@@ -44,11 +73,19 @@ void DrawFilledTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color colo
 /// shaded triangles that share an edge agree on its pixels' intensities, because both
 /// interpolate the edge from the same two vertices. The product `color * h` is clamped
 /// only when it reaches the canvas. The vertex order does not matter; no clipping.
-void DrawShadedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
+///
+/// With a `depth_buffer` only the pixels where the triangle is the nearest thing so far
+/// are set, exactly as in DrawFilledTriangle: 1/z is a third quantity that travels along
+/// the sides and the rows with x and h. Without one every pixel is set. Precondition:
+/// the depth buffer, if there is one, has the canvas's size; asserted.
+void DrawShadedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color color,
+                        DepthBuffer* depth_buffer = nullptr);
 
 /// A way to draw a triangle: the signature the three primitives above share. Whoever
 /// draws many triangles (RenderObject, RenderScene) takes one of them as a parameter and
-/// so draws its objects as wireframes, filled or shaded without knowing which.
-using DrawTriangleFunction = void (*)(Canvas& canvas, Point p0, Point p1, Point p2, Color color);
+/// so draws its objects as wireframes, filled or shaded without knowing which, and
+/// passes on the depth buffer it was given, or none.
+using DrawTriangleFunction = void (*)(Canvas& canvas, Point p0, Point p1, Point p2, Color color,
+                                      DepthBuffer* depth_buffer);
 
 }  // namespace cgfs

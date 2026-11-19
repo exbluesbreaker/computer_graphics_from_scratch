@@ -11,7 +11,7 @@ namespace cgfs {
 
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
                  std::span<const Instance> instances, const Camera& camera,
-                 DrawTriangleFunction draw_triangle) {
+                 DrawTriangleFunction draw_triangle, DepthBuffer* depth_buffer) {
     // The model and camera transforms: every instance becomes geometry in the camera's
     // coordinates.
     const Mat4 camera_matrix = MakeCameraMatrix(camera.position, camera.orientation);
@@ -28,7 +28,8 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
 
     // The perspective projection and the triangles.
     for (const Model& instance : clipped_scene) {
-        RenderObject(canvas, viewport, instance.vertices, instance.triangles, draw_triangle);
+        RenderObject(canvas, viewport, instance.vertices, instance.triangles, draw_triangle,
+                     depth_buffer);
     }
 }
 

@@ -1,6 +1,7 @@
 #include <cgfs/rasterizer/triangle.h>
 
 #include <cgfs/image/canvas.h>
+#include <cgfs/image/depth_buffer.h>
 #include <cgfs/rasterizer/line.h>
 
 #include <catch2/catch_test_macros.hpp>
@@ -14,6 +15,7 @@
 
 using cgfs::Canvas;
 using cgfs::Color;
+using cgfs::DepthBuffer;
 using cgfs::DrawFilledTriangle;
 using cgfs::DrawLine;
 using cgfs::DrawShadedTriangle;
@@ -289,4 +291,233 @@ TEST_CASE("DrawShadedTriangle: the shaded color is clamped by the canvas only", 
 
     DrawShadedTriangle(canvas, {-2, -2, -1.0}, {2, -2, -1.0}, {0, 2, -1.0}, kWhite);
     CHECK(canvas.GetPixel(0, 0) == Rgb8{0, 0, 0});
+}
+
+// --- With a depth buffer ---------------------------------------------------------------
+
+namespace {
+
+// The same point at the depth z = 1 / inv_z.
+Point AtDepth(Point p, double inv_z) {
+    p.inv_z = inv_z;
+    return p;
+}
+
+// Two triangles that overlap around the origin: one pointing up, at z = 2, and one
+// pointing down, at z = 4.
+struct Flat {
+    Point a;
+    Point b;
+    Point c;
+    Color color;
+};
+const Flat kNear{AtDepth({-6, -6}, 0.5), AtDepth({6, -6}, 0.5), AtDepth({0, 6}, 0.5), kRed};
+const Flat kFar{AtDepth({-6, 6}, 0.25), AtDepth({6, 6}, 0.25), AtDepth({0, -6}, 0.25), kBlue};
+
+// A fresh black canvas with the triangles drawn in the order given: through one depth
+// buffer shared by all of them, or through none.
+Canvas CanvasWithFlats(const std::vector<Flat>& flats, bool depth_buffered) {
+    Canvas canvas(32, 32, kBlack);
+    DepthBuffer depth_buffer(canvas);
+    for (const Flat& flat : flats) {
+        DrawFilledTriangle(canvas, flat.a, flat.b, flat.c, flat.color,
+                           depth_buffered ? &depth_buffer : nullptr);
+    }
+    return canvas;
+}
+
+}  // namespace
+
+TEST_CASE("DrawFilledTriangle: with a depth buffer the nearer triangle shows, in either order",
+          "[rasterizer]") {
+    const Canvas near_then_far = CanvasWithFlats({kNear, kFar}, true);
+    const Canvas far_then_near = CanvasWithFlats({kFar, kNear}, true);
+    CHECK(Bytes(near_then_far) == Bytes(far_then_near));
+    CHECK(near_then_far.GetPixel(0, 0) == Rgb8{255, 0, 0});   // both cover it: the near one
+    CHECK(near_then_far.GetPixel(0, 5) == Rgb8{255, 0, 0});   // the near one's tip, on the far one
+    CHECK(near_then_far.GetPixel(-5, 6) == Rgb8{0, 0, 255});  // only the far one is here
+
+    // It is the picture a painter gets by drawing the far one first, and not the one he
+    // gets the other way around.
+    CHECK(Bytes(near_then_far) == Bytes(CanvasWithFlats({kFar, kNear}, false)));
+    CHECK(Bytes(near_then_far) != Bytes(CanvasWithFlats({kNear, kFar}, false)));
+}
+
+TEST_CASE("DrawFilledTriangle: without a depth buffer the later triangle shows", "[rasterizer]") {
+    const Canvas near_then_far = CanvasWithFlats({kNear, kFar}, false);
+    CHECK(near_then_far.GetPixel(0, 0) == Rgb8{0, 0, 255});
+    // The depths are not even looked at: the same picture without them.
+    Canvas flat(32, 32, kBlack);
+    DrawFilledTriangle(flat, {-6, -6}, {6, -6}, {0, 6}, kRed);
+    DrawFilledTriangle(flat, {-6, 6}, {6, 6}, {0, -6}, kBlue);
+    CHECK(Bytes(near_then_far) == Bytes(flat));
+}
+
+TEST_CASE("DrawFilledTriangle: an empty depth buffer hides nothing and remembers the triangle",
+          "[rasterizer]") {
+    Canvas plain(32, 32, kBlack);
+    DrawFilledTriangle(plain, kNear.a, kNear.b, kNear.c, kRed);
+
+    Canvas canvas(32, 32, kBlack);
+    DepthBuffer depth_buffer(canvas);
+    DrawFilledTriangle(canvas, kNear.a, kNear.b, kNear.c, kRed, &depth_buffer);
+    CHECK(Bytes(canvas) == Bytes(plain));
+
+    // And the buffer remembers its depth exactly there.
+    for (int x = -16; x < 16; ++x) {
+        for (int y = -16; y < 16; ++y) {
+            INFO("pixel (" << x << ", " << y << ")");
+            const bool lit = canvas.GetPixel(x, y) != Rgb8{0, 0, 0};
+            CHECK(depth_buffer.InvZ(x, y) == (lit ? 0.5 : 0.0));
+        }
+    }
+}
+
+TEST_CASE("DrawFilledTriangle: 1/z is interpolated along the sides and then along every row",
+          "[rasterizer]") {
+    // 1/z is 1 at the origin and falls by 3/32 per pixel to the right and by 2/32 per
+    // pixel upward; every running sum is exact in binary.
+    Canvas canvas(32, 32, kBlack);
+    DepthBuffer depth_buffer(canvas);
+    DrawFilledTriangle(canvas, AtDepth({0, 0}, 1.0), AtDepth({8, 0}, 0.25), AtDepth({0, 8}, 0.5),
+                       kWhite, &depth_buffer);
+
+    CHECK(depth_buffer.InvZ(0, 0) == 1.0);  // the vertices keep their own
+    CHECK(depth_buffer.InvZ(8, 0) == 0.25);
+    CHECK(depth_buffer.InvZ(0, 8) == 0.5);
+    CHECK(depth_buffer.InvZ(0, 4) == 0.75);    // halfway up the left side
+    CHECK(depth_buffer.InvZ(4, 4) == 0.375);   // halfway along the slanted side
+    CHECK(depth_buffer.InvZ(2, 2) == 0.6875);  // inside: 1 - 2 * 3/32 - 2 * 2/32
+    // Halfway along the bottom side, from z = 1 to z = 4, the depth is z = 1.6: the mean
+    // of 1 and 1/4 is 1/z. It is not z = 2.5, the mean of the depths, 1/z = 0.4.
+    CHECK(depth_buffer.InvZ(4, 0) == 0.625);
+}
+
+TEST_CASE("DrawFilledTriangle: two triangles that cross are sorted out pixel by pixel",
+          "[rasterizer]") {
+    // The same three pixels for both: one triangle tilted, from z = 1 at the origin to
+    // z = 4 on the right, the other facing the camera at z = 2. Along the bottom row the
+    // tilted one is in front as far as 1/z = 1 - 3x/32 > 1/2, that is up to x = 5.
+    // Had z been interpolated instead, 1 + 3x/8 < 2 would hold only up to x = 2.
+    const std::vector<Flat> tilted_then_facing = {
+        {AtDepth({0, 0}, 1.0), AtDepth({8, 0}, 0.25), AtDepth({0, 8}, 0.5), kRed},
+        {AtDepth({0, 0}, 0.5), AtDepth({8, 0}, 0.5), AtDepth({0, 8}, 0.5), kBlue},
+    };
+    const Canvas canvas = CanvasWithFlats(tilted_then_facing, true);
+    for (int x = 0; x <= 5; ++x) {
+        INFO("x = " << x);
+        CHECK(canvas.GetPixel(x, 0) == Rgb8{255, 0, 0});
+    }
+    for (int x = 6; x <= 8; ++x) {
+        INFO("x = " << x);
+        CHECK(canvas.GetPixel(x, 0) == Rgb8{0, 0, 255});
+    }
+    // Drawn the other way around the picture is the same, except on the line where the
+    // two are exactly equally deep, 3x + 2y = 16: there the one drawn first stays.
+    const std::vector<Flat> facing_then_tilted = {tilted_then_facing[1], tilted_then_facing[0]};
+    const Canvas other_way = CanvasWithFlats(facing_then_tilted, true);
+    for (int x = 0; x <= 8; ++x) {
+        for (int y = 0; x + y <= 8; ++y) {
+            INFO("pixel (" << x << ", " << y << ")");
+            if (3 * x + 2 * y == 16) {
+                CHECK(canvas.GetPixel(x, y) == Rgb8{255, 0, 0});
+                CHECK(other_way.GetPixel(x, y) == Rgb8{0, 0, 255});
+            } else {
+                CHECK(other_way.GetPixel(x, y) == canvas.GetPixel(x, y));
+            }
+        }
+    }
+}
+
+TEST_CASE("DrawFilledTriangle: of two triangles at the same depth the first drawn stays",
+          "[rasterizer]") {
+    const Flat again{kNear.a, kNear.b, kNear.c, kGreen};
+    CHECK(Bytes(CanvasWithFlats({kNear, again}, true)) == Bytes(CanvasWithFlats({kNear}, true)));
+}
+
+TEST_CASE("DrawFilledTriangle: a triangle without depth is behind everything", "[rasterizer]") {
+    // A point made in 2D has 1/z = 0, infinitely far, and nothing is farther than an
+    // empty pixel: through a depth buffer such a triangle is not drawn at all.
+    Canvas canvas(32, 32, kBlack);
+    DepthBuffer depth_buffer(canvas);
+    DrawFilledTriangle(canvas, {-6, -6}, {6, -6}, {0, 6}, kRed, &depth_buffer);
+    CHECK(LitPixels(canvas).empty());
+}
+
+TEST_CASE("DrawFilledTriangle: with a depth buffer a triangle may still reach beyond the canvas",
+          "[rasterizer]") {
+    Canvas plain(16, 16, kBlack);
+    DrawFilledTriangle(plain, {-20, -3}, {20, 0}, {0, 20}, kRed);
+
+    Canvas canvas(16, 16, kBlack);
+    DepthBuffer depth_buffer(canvas);
+    DrawFilledTriangle(canvas, AtDepth({-20, -3}, 0.5), AtDepth({20, 0}, 0.5),
+                       AtDepth({0, 20}, 0.5), kRed, &depth_buffer);
+    CHECK(Bytes(canvas) == Bytes(plain));
+    CHECK(LitPixels(canvas).size() > 50);
+}
+
+TEST_CASE("DrawShadedTriangle: with a depth buffer the nearer triangle shows, with its shading",
+          "[rasterizer]") {
+    // The triangles of the filled test, the near one fading from black at its base to
+    // the full color at its tip.
+    Point a = kNear.a;
+    Point b = kNear.b;
+    a.h = 0.0;
+    b.h = 0.0;
+    const auto draw = [&](bool near_first, bool depth_buffered) {
+        Canvas canvas(32, 32, kBlack);
+        DepthBuffer depth_buffer(canvas);
+        DepthBuffer* buffer = depth_buffered ? &depth_buffer : nullptr;
+        if (near_first) {
+            DrawShadedTriangle(canvas, a, b, kNear.c, kRed, buffer);
+        }
+        DrawShadedTriangle(canvas, kFar.a, kFar.b, kFar.c, kBlue, buffer);
+        if (!near_first) {
+            DrawShadedTriangle(canvas, a, b, kNear.c, kRed, buffer);
+        }
+        return canvas;
+    };
+
+    const Canvas near_then_far = draw(true, true);
+    CHECK(Bytes(near_then_far) == Bytes(draw(false, true)));
+    // The painter's picture with the far one first: the same pixels and the same shades.
+    CHECK(Bytes(near_then_far) == Bytes(draw(false, false)));
+    CHECK(near_then_far.GetPixel(0, 6) == Rgb8{255, 0, 0});  // the tip, h = 1
+    CHECK(near_then_far.GetPixel(0, 0) == Rgb8{127, 0, 0});  // halfway up, h = 1/2
+}
+
+TEST_CASE("DrawShadedTriangle: with a depth buffer and h = 1 it is the filled triangle",
+          "[rasterizer]") {
+    Canvas filled(32, 32, kBlack);
+    DepthBuffer filled_depths(filled);
+    Canvas shaded(32, 32, kBlack);
+    DepthBuffer shaded_depths(shaded);
+    for (const Flat& flat : {kNear, kFar}) {
+        DrawFilledTriangle(filled, flat.a, flat.b, flat.c, flat.color, &filled_depths);
+        DrawShadedTriangle(shaded, flat.a, flat.b, flat.c, flat.color, &shaded_depths);
+    }
+    CHECK(Bytes(shaded) == Bytes(filled));
+    for (int x = -16; x < 16; ++x) {
+        for (int y = -16; y < 16; ++y) {
+            CHECK(shaded_depths.InvZ(x, y) == filled_depths.InvZ(x, y));
+        }
+    }
+}
+
+TEST_CASE("DrawWireframeTriangle: takes a depth buffer and ignores it", "[rasterizer]") {
+    Canvas plain(32, 32, kBlack);
+    DrawWireframeTriangle(plain, kFar.a, kFar.b, kFar.c, kBlue);
+
+    // An outline at z = 4 drawn after a filled triangle at z = 2: nothing of it is
+    // hidden, and it leaves no depth behind.
+    Canvas canvas(32, 32, kBlack);
+    DepthBuffer depth_buffer(canvas);
+    DrawFilledTriangle(canvas, kNear.a, kNear.b, kNear.c, kRed, &depth_buffer);
+    DrawWireframeTriangle(canvas, kFar.a, kFar.b, kFar.c, kBlue, &depth_buffer);
+    for (const Point pixel : LitPixels(plain)) {
+        INFO("pixel (" << pixel.x << ", " << pixel.y << ")");
+        CHECK(canvas.GetPixel(pixel.x, pixel.y) == Rgb8{0, 0, 255});
+    }
+    CHECK(depth_buffer.InvZ(-5, 6) == 0.0);  // on the outline, outside the filled triangle
 }

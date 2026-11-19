@@ -65,7 +65,7 @@ template <>
 struct StringMaker<cgfs::Point> {
     static std::string convert(const cgfs::Point& p) {
         return "(" + std::to_string(p.x) + ", " + std::to_string(p.y) +
-               ", h=" + std::to_string(p.h) + ")";
+               ", h=" + std::to_string(p.h) + ", 1/z=" + std::to_string(p.inv_z) + ")";
     }
 };
 

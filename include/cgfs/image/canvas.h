@@ -17,8 +17,8 @@ namespace cgfs {
 ///
 ///     -width/2 <= x < width/2   and   -height/2 <= y < height/2   (integer division)
 ///
-/// Pixels are stored as 8-bit RGB, top row first. Colors are clamped to [0, 255] and
-/// truncated on the way in (see ToRgb8).
+/// Pixels are stored as 8-bit RGB, top row first (see PixelIndex for where a pixel is
+/// kept). Colors are clamped to [0, 255] and truncated on the way in (see ToRgb8).
 class Canvas {
 public:
     /// Throws std::invalid_argument when width or height is not positive.

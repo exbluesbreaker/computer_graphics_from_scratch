@@ -10,7 +10,8 @@ A software 3D renderer written from scratch in C++20, following Gabriel Gambetta
 *Computer Graphics from Scratch* chapter by chapter: a ray tracer (complete through
 reflections) and a rasterizer (lines, filled and shaded triangles, perspective
 projection, objects made of triangles, scenes of transformed instances seen from a
-movable camera, and clipping so far; no hidden-surface removal yet). It exists for
+movable camera, clipping, and hidden-surface removal by a depth buffer so far; no
+back-face culling yet). It exists for
 learning: every algorithm is written by hand, reads like the book's listing and is
 pinned by unit tests and golden images. No graphics libraries, no GPU.
 
@@ -93,7 +94,9 @@ reading the architecture:
 
 ```
 math/         vec3, mat4, plane, bounding_sphere              vector algebra and plain geometry; nothing above the numbers
-image/        color, canvas, image_io                         the picture: colors, the pixel buffer, file formats
+image/        color, pixel_index, canvas, depth_buffer, image_io
+                                                              the picture: colors, the pixel buffer and the depth
+                                                              buffer beside it, file formats
 camera/       viewport, camera, clipping_planes               how canvas pixels map into the world; shared by both renderers
 raytracer/    scene, raytracer                                the ray tracing renderer: spheres, lights, tracing
 rasterizer/   point, interpolate, line, triangle, projection, object, model, instance, clipping, scene
