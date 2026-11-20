@@ -76,6 +76,7 @@ add_library(cgfs STATIC
     src/rasterizer/object.cpp
     src/rasterizer/model.cpp
     src/rasterizer/instance.cpp
+    src/rasterizer/culling.cpp
     src/rasterizer/clipping.cpp
     src/rasterizer/scene.cpp)
 add_library(cgfs::cgfs ALIAS cgfs)

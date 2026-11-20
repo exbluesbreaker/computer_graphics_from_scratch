@@ -10,8 +10,8 @@ A software 3D renderer written from scratch in C++20, following Gabriel Gambetta
 *Computer Graphics from Scratch* chapter by chapter: a ray tracer (complete through
 reflections) and a rasterizer (lines, filled and shaded triangles, perspective
 projection, objects made of triangles, scenes of transformed instances seen from a
-movable camera, clipping, and hidden-surface removal by a depth buffer so far; no
-back-face culling yet). It exists for
+movable camera, clipping, and hidden-surface removal by back-face culling and a depth
+buffer so far). It exists for
 learning: every algorithm is written by hand, reads like the book's listing and is
 pinned by unit tests and golden images. No graphics libraries, no GPU.
 
@@ -99,11 +99,11 @@ image/        color, pixel_index, canvas, depth_buffer, image_io
                                                               buffer beside it, file formats
 camera/       viewport, camera, clipping_planes               how canvas pixels map into the world; shared by both renderers
 raytracer/    scene, raytracer                                the ray tracing renderer: spheres, lights, tracing
-rasterizer/   point, interpolate, line, triangle, projection, object, model, instance, clipping, scene
+rasterizer/   point, interpolate, line, triangle, projection, object, model, instance, culling, clipping, scene
                                                               the rasterizing renderer: 2D primitives, the
                                                               projection that feeds them, objects made of
-                                                              triangles, scenes of instances and their clipping,
-                                                              one per file
+                                                              triangles, scenes of instances, their back-face
+                                                              culling and their clipping, one per file
 demo/         raytracer_scenes, rasterizer_scenes             the demo pictures, built on everything above
 ```
 

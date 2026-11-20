@@ -311,12 +311,13 @@ rotation until the transforms step).
   list and a triangle list that indexes it) one level up; there is no scene type until a
   scene holds more than those two lists (section 14, decision 11).
   `RenderScene(viewport, models, instances, camera)` draws every instance in list order
-  as the camera sees it (3.10), clipped to the camera's clipping planes (3.11); with the
-  default camera the result is `RenderInstance`'s for each: the book's `RenderScene`.
+  as the camera sees it (3.10), without its back faces (3.12) and clipped to the camera's
+  clipping planes (3.11); with the default camera and the culling off the result is
+  `RenderInstance`'s for each: the book's `RenderScene`.
   Where two instances overlap, the later one shows, as for the triangles within an
   object, unless the scene is drawn through a depth buffer (3.12).
-- `RenderInstance` and `RenderModel` clip nothing, take no depth buffer and outline
-  their triangles: what they draw must stand entirely in front of the camera.
+- `RenderInstance` and `RenderModel` clip nothing, cull nothing, take no depth buffer
+  and outline their triangles: what they draw must stand entirely in front of the camera.
 
 ### 3.10 Rasterizer: model and camera transforms
 
@@ -362,18 +363,20 @@ stays outside the matrices (section 14, decision 12).
 - `RenderInstance(viewport, instance, models)` is
   `RenderModel(models[instance.model], MakeModelMatrix(instance))`: the camera at the
   origin. `RenderScene(viewport, models, instances, camera = Camera{},
-  draw_triangle = DrawWireframeTriangle, depth_buffer = none)` is the book's Listing
-  10-5 with the clipping step of the next chapter in it:
+  draw_triangle = DrawWireframeTriangle, depth_buffer = none,
+  back_face_culling = BackFaceCulling::kOn)` is the book's Listing 10-5 with the
+  clipping and culling steps of the next two chapters in it:
   `M_camera = MakeCameraMatrix(camera.position, camera.orientation)` once; then every
   instance `I` becomes `TransformModel(models[I.model], M_camera * MakeModelMatrix(I))`,
-  geometry in the camera's coordinates; then that list is clipped,
-  `ClipScene(scene, camera.clipping_planes)` (3.11); then every instance that is left is
-  drawn, in list order, with
+  geometry in the camera's coordinates; then, unless the culling is off, every instance
+  loses its back faces, `CullBackFaces(instance, origin)` (3.12); then that list is
+  clipped, `ClipScene(scene, camera.clipping_planes)` (3.11); then every instance that
+  is left is drawn, in list order, with
   `RenderObject(vertices, triangles, draw_triangle, depth_buffer)`. One
   matrix per instance takes a vertex from the model's coordinates through the world into
-  the camera's, the clipping works on the result in 3D, and the projection follows
-  vertex by vertex. A camera has no clipping planes unless it is given some, and
-  without them the middle step changes nothing.
+  the camera's, the culling and the clipping work on the result in 3D, and the
+  projection follows vertex by vertex. A camera has no clipping planes unless it is
+  given some, and without them the clipping changes nothing.
 - The projection is not a matrix, by the book's own choice: "for practical reasons we
   won't be using the full projection matrix". The model and camera transforms are
   applied as matrices, their result is converted back to Cartesian coordinates, and
@@ -518,7 +521,9 @@ Triangles are drawn one after another, and a pixel that several of them cover sh
 one drawn last (3.8). A depth buffer makes it show the nearest one instead, whatever the
 order: for every pixel of the canvas it remembers how near the nearest thing drawn there
 so far is, and a triangle sets a pixel only where it is nearer than that. This is the
-book's depth buffering; its back-face culling is not implemented yet (section 13).
+book's depth buffering, the first half of its chapter. The second half, back-face
+culling, removes the triangles that are turned away from the camera before they are
+drawn at all, and follows the depth buffer below.
 
 - The buffer stores `1/z`, not `z`, because `1/z` can be interpolated over the picture
   of a triangle and `z` cannot. A triangle lies in a plane `A X + B Y + C Z + D = 0` of
@@ -580,11 +585,84 @@ book's depth buffering; its back-face culling is not implemented yet (section 13
   cannot be told from a correct picture. Where one of the two is turned away from the
   camera its picture lies inside the other's, and the shared edge can show a line one
   pixel wide in the color of the hidden face. Removing the faces turned away, back-face
-  culling, removes those lines; coplanar surfaces that overlap would tie over their
-  whole area and have to be avoided in the scene.
+  culling (below), removes those lines; coplanar surfaces that overlap would tie over
+  their whole area and have to be avoided in the scene.
 - The depths are interpolated between vertices that were truncated to whole pixels
   (3.7), like `h`, so the depth at a pixel is that of a slightly moved triangle. The
   difference is far below the distance between two surfaces that do not touch.
+
+Back-face culling. A closed object, one whose surface has no opening, shows a camera
+outside it only its front faces, the triangles turned toward the camera, and those cover
+its back faces completely. The depth buffer finds that out pixel by pixel, after the
+back faces have been drawn; culling takes them out of the scene first, about half of its
+triangles.
+
+- A triangle with the corners `A`, `B`, `C`, in that order, is classified by the book's
+  test, with all the points in one coordinate system:
+
+  ```
+  N = (B - A) x (C - A)        the triangle's normal
+  V = camera - A               from a corner of the triangle to the camera
+  <N, V> >  0                  front-facing
+  <N, V> <= 0                  back-facing
+  ```
+
+  `<N, V> = |N| |V| cos(angle)` and the lengths are positive, so the sign of the dot
+  product is the sign of the cosine: front-facing means an angle of less than 90
+  degrees between the normal and the direction to the camera, and nothing is
+  normalized. `V` may start at any point of the triangle: `<N, camera - P>` is the same
+  for every `P` in its plane, the camera's distance from the plane times `|N|`. It is
+  the direction to the camera and not the direction the camera looks in: under
+  perspective a face turned partly away from the line of sight is still seen when it
+  stands to the side. A triangle seen exactly edge-on (`<N, V> = 0`) is back-facing,
+  the book's choice, and so is a triangle without area, whose `N` is zero. This is
+  `IsBackFacing(a, b, c, camera_position)`.
+- `N` points out of the object only if the model lists the corners of every triangle in
+  the right order: clockwise as seen from outside the object, the book's rule, in the
+  book's coordinates (X to the right, Y up, Z forward). The order is information the
+  model carries, one bit per triangle. It cannot be computed from the triangle: `ABC`
+  and `ACB` are the same three points, with opposite normals, and a flat triangle has no
+  outside of its own. `ABC`, `BCA` and `CAB` are one order and one normal. (For a whole
+  closed surface the order could be recovered: two triangles that share an edge must run
+  along it in opposite directions, which fixes all of them from one, and the sign of the
+  enclosed volume says which of the two consistent choices faces out. Nothing here does
+  that; the models are written in the right order and trusted.)
+- The order survives the pipeline. A rotation, a translation and a scaling by a positive
+  factor (3.10) turn and move the normal with the triangle, and `ClipTriangle` (3.11)
+  rotates the corners of its pieces and never swaps them. A negative scale would mirror
+  the model and turn every triangle inside out; it is not supported together with
+  culling.
+- `CullBackFaces(object, camera_position)` is the book's Listing 12-1: the object, a
+  `Model` whose vertices are in the same coordinates as the camera's position, without
+  the triangles that `IsBackFacing` says are turned away, the others as they were and in
+  their order. Only the triangle list changes. The vertex list stays, with the vertices
+  that only back faces named still in it, and the bounding sphere stays.
+- `RenderScene` (3.10) culls every instance after the transforms, in the camera's
+  coordinates, where the camera is the origin, and before the clipping, so that no
+  triangle is cut that would not be drawn. Every vertex that reaches `ProjectVertex`
+  still has `z > 0`: an instance that no plane cuts is inside the clipping volume with
+  all its vertices, named by a triangle or not, and an instance that a plane cuts loses
+  its unnamed vertices there (3.11). Without clipping planes the precondition was
+  already that every instance stands entirely in front of the camera.
+- Culling is `RenderScene`'s default and is turned off by its last parameter,
+  `BackFaceCulling::kOff`, with which every triangle is drawn. That is for a model that
+  is not closed (a single triangle, a floor that may be seen from below); for a look
+  into an object that the near plane has cut open, since from inside an object every
+  face is a back face and with culling the cut shows what stands behind the object
+  instead; and for a wireframe that is to show its far edges too. `RenderObject`,
+  `RenderModel` and `RenderInstance` do not cull.
+- With culling a closed convex object needs no depth buffer for itself: its front faces
+  do not overlap. Between objects, and within an object that is not convex, front faces
+  still hide each other and the depth buffer decides. The two are independent: either
+  can be used without the other.
+- Culling also settles the ties above along the edges of faces turned away: a face that
+  is not drawn wins nothing. The ties between two front faces remain, and cannot be
+  told from a correct picture.
+- In exact arithmetic culling does not change the picture of a closed object, it only
+  saves the work. Here it can change single pixels: the fill of 3.6 leaves the apex row
+  of a triangle short now and then (section 15), so a back face can reach one pixel
+  beyond the front faces that should cover it, and that pixel is no longer set. Section
+  15 has the counts for the demo pictures, and the time culling saves.
 
 ### 3.13 Numeric conventions
 
@@ -610,7 +688,7 @@ include/cgfs/             public headers: one folder per layer, one file per con
     camera/viewport.h  camera.h  clipping_planes.h
     raytracer/scene.h  raytracer.h
     rasterizer/point.h  interpolate.h  line.h  triangle.h  projection.h  object.h
-    rasterizer/model.h  instance.h  clipping.h  scene.h
+    rasterizer/model.h  instance.h  culling.h  clipping.h  scene.h
     demo/raytracer_scenes.h  rasterizer_scenes.h
                           the demo pictures shared by render_demo and the golden tests
 src/<layer>/              implementation files, mirroring include/cgfs/<layer>/
@@ -626,8 +704,8 @@ tests/
     camera/viewport_test.cpp  camera_test.cpp  clipping_planes_test.cpp
     raytracer/raytracer_test.cpp
     rasterizer/interpolate_test.cpp  line_test.cpp  triangle_test.cpp  projection_test.cpp
-    rasterizer/object_test.cpp  model_test.cpp  instance_test.cpp  clipping_test.cpp
-    rasterizer/scene_test.cpp
+    rasterizer/object_test.cpp  model_test.cpp  instance_test.cpp  culling_test.cpp
+    rasterizer/clipping_test.cpp  scene_test.cpp
     rasterizer/pixel_helpers.h
     demo/golden_test.cpp
     demo/golden/          reference renders of the demo pictures (PPM)
@@ -652,7 +730,7 @@ image        color, pixel_index, canvas, depth_buffer, image_io     colors, the 
 camera       viewport, camera, clipping_planes                      how canvas pixels map into the world
 raytracer    scene, raytracer                                       the ray tracing renderer
 rasterizer   point, interpolate, line, triangle, projection,        the rasterizing renderer
-             object, model, instance, clipping, scene
+             object, model, instance, culling, clipping, scene
 demo         raytracer_scenes, rasterizer_scenes                    the demo pictures
 ```
 
@@ -692,11 +770,13 @@ demo         raytracer_scenes, rasterizer_scenes                    the demo pic
   stored once, with a bounding sphere, `TransformModel`, the model under a transform,
   and `RenderModel`, which draws that through `RenderObject`. `rasterizer/instance`:
   `Instance`, a model index with a position, an orientation and a scale,
-  `MakeModelMatrix`, its model matrix, and `RenderInstance`. `rasterizer/clipping`:
+  `MakeModelMatrix`, its model matrix, and `RenderInstance`. `rasterizer/culling`:
+  `IsBackFacing`, `CullBackFaces` and the switch `BackFaceCulling`, an object without
+  the triangles that are turned away from the camera. `rasterizer/clipping`:
   `ClipScene`, `ClipInstance`, `ClipInstanceAgainstPlane`, `ClipTrianglesAgainstPlane`
   and `ClipTriangle`, what a list of planes leaves of a scene. `rasterizer/scene`:
   `RenderScene`, every instance of a model list and an instance list, in order, as a
-  camera sees them: transformed, clipped, projected and drawn.
+  camera sees them: transformed, culled, clipped, projected and drawn.
 - `demo/raytracer_scenes`: the ray-traced demo scenes, each a function returning a
   `Scene`. `demo/rasterizer_scenes`: the rasterized demo pictures, each a function that
   draws into a canvas. Either way the app and the golden tests render exactly the same
@@ -959,7 +1039,7 @@ The scene and viewport must outlive the tracer. `Hit::sphere` points into the sc
 sphere vector and is valid as long as that vector is not modified. `ClosestIntersection`,
 `TraceRay` and `ComputeLighting` are public so the tests can exercise them directly.
 
-### 5.8 `rasterizer/point.h`, `interpolate.h`, `line.h`, `triangle.h`, `projection.h`, `object.h`, `model.h`, `instance.h`, `clipping.h`, `scene.h`
+### 5.8 `rasterizer/point.h`, `interpolate.h`, `line.h`, `triangle.h`, `projection.h`, `object.h`, `model.h`, `instance.h`, `culling.h`, `clipping.h`, `scene.h`
 
 ```cpp
 // point.h
@@ -1032,6 +1112,14 @@ Mat4 MakeModelMatrix(const Instance& instance);  // T(position) * orientation * 
 void RenderInstance(Canvas& canvas, const Viewport& viewport, const Instance& instance,
                     std::span<const Model> models);  // RenderModel with the model matrix
 
+// culling.h (section 3.12)
+enum class BackFaceCulling { kOff, kOn };   // whether RenderScene removes back faces
+bool IsBackFacing(Vec3 a, Vec3 b, Vec3 c, Vec3 camera_position);
+// true when <(b - a) x (c - a), camera_position - a> <= 0; the normal points out of an
+// object whose triangles list their corners clockwise as seen from outside
+Model CullBackFaces(Model object, Vec3 camera_position);
+// the object without its back-facing triangles; vertices and bounding sphere unchanged
+
 // clipping.h (section 3.11); an "instance" is a Model in the camera's coordinates
 void ClipTriangle(const Triangle& triangle, const Plane& plane, std::vector<Vec3>& vertices,
                   std::vector<Triangle>& clipped_triangles);  // appends 0, 1 or 2 triangles
@@ -1045,9 +1133,11 @@ std::vector<Model> ClipScene(std::vector<Model> scene, std::span<const Plane> pl
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
                  std::span<const Instance> instances, const Camera& camera = Camera{},
                  DrawTriangleFunction draw_triangle = DrawWireframeTriangle,
-                 DepthBuffer* depth_buffer = nullptr);
-// every instance, in list order, as camera sees it: transformed, clipped, projected, drawn;
-// through the depth buffer, if there is one, the nearest surface shows whatever the order
+                 DepthBuffer* depth_buffer = nullptr,
+                 BackFaceCulling back_face_culling = BackFaceCulling::kOn);
+// every instance, in list order, as camera sees it: transformed, culled, clipped, projected,
+// drawn; through the depth buffer, if there is one, the nearest surface shows whatever the
+// order; with BackFaceCulling::kOff the back faces are drawn too
 ```
 
 One header per primitive. Free functions that take the canvas as their first parameter,
@@ -1068,6 +1158,13 @@ of the primitives, of `RenderObject` and of `RenderScene`, a pointer because "no
 the default and the buffer is the caller's, like the canvas. The one signature that
 changed outright is the function pointer type `DrawTriangleFunction`, which cannot
 have a default; whoever passes one of the three primitives by name is not affected.
+Back-face culling arrived as one more defaulted parameter of `RenderScene`, and is the
+first whose default changes what a call written before it draws: the default is on
+(section 14, decision 16), so a scene that needs its back faces now says so. The switch
+is a scoped enumeration rather than a `bool`, so that a call reads
+`..., &depth_buffer, BackFaceCulling::kOff)`. `CullBackFaces` takes its object by value
+and returns it, like the clipping functions, and takes the camera as a position, the one
+thing about a camera the test asks for.
 The clipping functions carry the book's names and take their instance, and `ClipScene`
 its scene, by value: an instance that needs no clipping is moved through untouched,
 which is what the pseudocode's "return instance" means, and the caller chooses between
@@ -1400,6 +1497,28 @@ Unit tests:
     `z > 0.999`, and projected by `ProjectVertex` to `-160 <= x <= 160`,
     `-90 <= y <= 90`; a cube well inside the volume is returned equal to itself, and
     cubes behind the camera or beyond a side leave nothing.
+  - Back-face culling (coordinates that are whole numbers and small binary fractions, so
+    every normal and every dot product is exact). `IsBackFacing`: a triangle in front of
+    a camera at the origin with its corners clockwise as the camera sees them is a front
+    face and the same corners the other way round a back face, from whichever corner
+    the list starts; the same triangle is a front face from one side of its plane and a
+    back face from the other, however far to the side the camera stands; seen edge-on,
+    from its own plane or from one of its corners, it is a back face in both orders, and
+    so is a triangle without area; a wall beside the camera whose normal `(-2, 0, 1)`
+    has the sign of the line of sight is a front face and its reverse a back face, so the
+    direction to the camera decides and not the direction it looks in; all three
+    rotations of the corners agree for cameras off the axis; moving the triangle and the
+    camera together changes nothing. `CullBackFaces` (the book's cube, an intensity per
+    corner): straight ahead of the camera it keeps the two triangles of the near face;
+    from beyond a corner three faces, from beyond the opposite corner the other three,
+    from beside an edge two, always in list order; a camera in the plane of a face does
+    not see that face; from inside nothing is left; the vertices and the bounding sphere
+    are unchanged and the triangles left are the cube's own, indices, color and
+    intensities; an object with nothing turned away, one without triangles and an empty
+    one are returned equal to themselves; for 27 cameras around the cube and in it the
+    faces left are exactly those whose plane the camera is beyond; the cube shrunk,
+    turned 35 degrees and moved keeps its front, left and top, the same triangles as the
+    cube itself culled from where the transform undone puts the camera.
   - `RenderScene`: three instances of one model, placed apart, give the three outlines,
     the canvas of three `RenderInstance` calls and as many pixels as the three drawn
     alone; two models of one shape in two colors at the same position show the color of
@@ -1433,7 +1552,22 @@ Unit tests:
     list orders and nothing of the farther is seen; to a camera turned 180 degrees
     the instance at z = -1 of the world hides the one at z = -2, the depth being the
     camera's; and what the plane `x = 0` leaves of a triangle hides an instance
-    behind it, in both orders.
+    behind it, in both orders. All of the above draw single triangles, which are not
+    closed objects, and so with `BackFaceCulling::kOff`. Back-face culling: by default a
+    triangle listed clockwise as the camera sees it is drawn and the same corners the
+    other way round leave the canvas empty, and with the culling off both are drawn; a
+    camera on the far side of a triangle, turned to look back at it, sees the one the
+    default camera does not, and what is drawn is drawn as without culling; an instance
+    turned half around its own origin shows its back, while a scale of 2 or 0.5 or a
+    place off the axis turns nothing; of a cube straight ahead only the front face is
+    drawn, so that painted in list order the left face no longer lies over the front and
+    the picture is that of the front face alone, filled, through a depth buffer and as an
+    outline, which has fewer pixels than the whole wireframe; a cube to the right of the
+    camera and below it is, through a depth buffer, the picture of its front, left and
+    top; a front face cut by a clipping plane is drawn as its pieces and a back face cut
+    the same way not at all; and to a camera at the center of a cube, with the clipping
+    planes of its viewport, the inside fills the canvas without culling and nothing is
+    drawn with it.
 
 Golden-image tests:
 
@@ -1453,7 +1587,7 @@ Golden-image tests:
   9): every pixel of them comes from `DrawLine`, `DrawFilledTriangle` or
   `DrawShadedTriangle`, the objects' through `RenderObject`, the instances', the camera
   scene's, the clipping scene's and the filled cubes' through `RenderScene`, the last
-  through a depth buffer as well. The 2D
+  through a depth buffer and with back-face culling as well. The 2D
   scenes compute their
   vertices with integer arithmetic and their colors and intensities without any `libm`
   call, and the projections of the cube, the objects, the instances and the filled
@@ -1481,8 +1615,13 @@ Golden-image tests:
   `instances` and `camera` pin the wireframes through the pipeline that now clips and
   can shade: they are byte for byte what they were before it could. `filled` pins
   hidden-surface removal: a scene whose list order painting gets wrong, drawn through
-  the depth buffer. Every other reference is drawn without a depth buffer and did not
-  change by a byte when it arrived.
+  the depth buffer and without its back faces. Every other reference is drawn without a
+  depth buffer and did not change by a byte when it arrived. Back-face culling changed
+  `filled` alone, on the 698 pixels where a face turned away had shown (section 15):
+  `instances`, `camera` and `clipping` are drawn with the culling off and are byte for
+  byte what they were. `filled` is also the one reference that would notice a triangle
+  listed the wrong way round, and only in the cube; the other models are drawn without
+  culling, and their winding was checked once, outside the tests (section 15).
 
 ## 9. Demo application
 
@@ -1528,7 +1667,9 @@ below the camera: a tower of three floors at x = 0, z = 20, and a house of one f
 each side of the street, at x = -3.5 and 3.5 and z = 14, 10 and 6, listed far to near so
 that the near edges show where buildings overlap. The houses shrink toward the tower,
 which is perspective, and the roofs' white base edges outline every eave, since the roof
-is drawn after the cube under it. The `camera` scene is the chapter's closing picture:
+is drawn after the cube under it. Every triangle is outlined, those turned away from the
+camera too: the picture is drawn with `BackFaceCulling::kOff`, and so is the next. The
+`camera` scene is the chapter's closing picture:
 `DrawCameraScene` stores the cube once and places two instances with a model transform
 each, the first scaled to 0.75 at (-1.5, 0, 7) and the second turned 195 degrees about Y
 at (1.25, 2.5, 7.5), the instances and the camera of the book's demo, and draws them with
@@ -1557,34 +1698,41 @@ scaled to a post 2.23 high with the obelisk scaled to 0.1 as its cap, has the ne
 corner of its cap cut off by the near plane, so that the inside of the cap shows. One
 high-rise stands behind the camera and is discarded whole by its bounding sphere.
 Without the clipping step the scene could not be drawn: `ProjectVertex` cannot take a
-vertex behind the camera. The scene is drawn without a depth buffer, painted in list
-order, so the picture is composed for it (section 14, decisions 14 and 15): every solid stands ahead of the camera and to
+vertex behind the camera. The scene is drawn without a depth buffer and without
+back-face culling, painted in list order with every face drawn, so the picture is
+composed for it (section 14, decisions 14, 15 and 16): every solid stands ahead of the camera and to
 its right in the world's X and Z, each model lists its faces in an order that is right
 from there (right, back, bottom, top, left, front), and the instances are listed from
 the farthest row to the nearest, each row from its far end, the lantern last and a roof
 after its house. The `filled` scene is the picture of hidden-surface removal:
 `DrawFilledCubesScene` draws fifteen instances of the cube of the objects scene, moved
 and nothing else, through the default camera and a `DepthBuffer` of the canvas's size,
-with `RenderScene(..., Camera{}, DrawFilledTriangle, &depth_buffer)`. It is composed so
-that painting it in list order gets it wrong, within every cube and between cubes, the
-opposite of the clipping scene, which is still painted. The cube lists its faces back
-(red), right (green), front (blue), left (yellow), top (purple), bottom (cyan), and
-every instance is drawn in that order whichever of its sides the camera sees. Nine of
-them form a wall of 3 x 3 facing the camera, at x and y = -3.5, 0 and 3.5 and z = 12:
-the same cube from nine directions. Each shows what a cube shows from outside, three
-faces at most: the front and, off the axis, the side and the top or bottom turned toward
-the camera, the cube straight ahead a plain blue square. Painted, the faces listed after
-the front would lie on top of it wherever they are turned away, the left as a yellow
-band on the cubes of the left and middle columns, the top as a purple one on the top and
-middle rows, the bottom as a cyan one on the middle and bottom rows; through the depth
-buffer they are refused, being farther than the front. On each side of the wall a row
-of three cubes leads away from the camera and outward, at (7, -2, 12), (12.5, -2, 18)
-and (18, -2, 24) on the right and mirrored on the left, each cube partly behind the one
+with `RenderScene(..., Camera{}, DrawFilledTriangle, &depth_buffer)` and so with
+back-face culling, the default. It is composed so that painting it in list order gets
+it wrong, within every cube and between cubes, the opposite of the clipping scene,
+which is still painted. The cube lists its faces back (red), right (green), front
+(blue), left (yellow), top (purple), bottom (cyan), and every instance is listed in
+that order whichever of its sides the camera sees. Nine of them form a wall of 3 x 3
+facing the camera, at x and y = -3.5, 0 and 3.5 and z = 12: the same cube from nine
+directions. Each shows what a cube shows from outside, three faces at most: the front
+and, off the axis, the side and the top or bottom turned toward the camera, the cube
+straight ahead a plain blue square. Painted, the faces listed after the front would lie
+on top of it wherever they are turned away, the left as a yellow band on the cubes of
+the left and middle columns, the top as a purple one on the top and middle rows, the
+bottom as a cyan one on the middle and bottom rows. They are back faces, and culling
+removes them before anything is drawn: of the wall's 54 faces 21 are left, three on a
+corner cube, two on a cube beside the axis and one on the cube straight ahead, and
+those do not overlap, a cube being convex. On each side of the wall a row of three
+cubes leads away from the camera and outward, at (7, -2, 12), (12.5, -2, 18) and
+(18, -2, 24) on the right and mirrored on the left, each cube partly behind the one
 before, and is listed from the nearest to the farthest: painted, every cube would cover
-the cube in front of it, and through the buffer each is hidden where the nearer one
-stands. What the picture still shows of the missing half of the chapter are the ties of
-3.12, lines one pixel wide along some edges in the color of a face turned away; section
-15 counts them. The
+the cube in front of it, front face over front face, which culling cannot help, and
+through the buffer each is hidden where the nearer one stands. Each of the six shows
+its front, its top and the side toward the wall. In all 78 of the 180 triangles are
+drawn, and the picture needs both halves of the chapter: culling for the faces within
+a cube, at half the work, and the depth buffer between the cubes. The ties of 3.12
+along the edges of faces turned away, lines one pixel wide that the depth buffer alone
+left in this picture, are gone with those faces; section 15 counts them. The
 `axes` scene draws the coordinate axes and corner dots; it exercises the canvas without
 ray tracing. For the ray-traced scenes, the cube, the objects, the instances, the camera
 scene, the clipping scene and the filled cubes the viewport width always matches the
@@ -1627,13 +1775,16 @@ row.
   per row of a triangle drawn through a depth buffer; the
   primitives can only throw if an allocation fails. `RenderScene` builds the scene in
   the camera's coordinates as a list of models, one per instance, and clipping returns
-  new lists; both allocate per instance, and neither throws otherwise.
+  new lists; both allocate per instance, and neither throws otherwise. Back-face
+  culling removes triangles from those lists in place and allocates nothing.
 - Programming errors inside the library (a non-unit normal, a dimension mismatch that
   slipped past the constructor check, a vertex index out of range, a depth buffer of
   another size than the canvas) are `assert`ed in
   Debug builds. A clipping plane whose normal is not a unit vector, a bounding sphere
   that does not contain its model and a transform that does not scale uniformly are
-  stated as preconditions and not checked.
+  stated as preconditions and not checked; neither is what back-face culling asks of a
+  model, that it is closed and lists the corners of every triangle clockwise as seen
+  from outside.
 
 ## 12. Performance
 
@@ -1651,7 +1802,7 @@ Targets apply to Release builds on a single core. Debug builds have no targets.
 | camera demo (2 transformed instances, 24 triangles)| 1920 x 1080 | under 10 ms; 1 to 2 ms measured                  |
 | clipping demo (47 instances, 1626 triangles, shaded)| 1920 x 1080 | under 150 ms; about 50 ms measured               |
 | clipping demo                                    | 320 x 180   | under 20 ms; about 2 ms measured                 |
-| filled demo (15 instances, 180 triangles, depth buffer)| 1920 x 1080 | under 60 ms; about 20 ms measured          |
+| filled demo (15 instances, 78 of 180 triangles drawn, depth buffer)| 1920 x 1080 | under 60 ms; about 16 ms measured |
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
@@ -1682,12 +1833,12 @@ section 4 is meant to absorb these steps as additions:
   the transforms and the projection (which is why the projection is not a matrix):
   `Plane`, `BoundingSphere`, the clipping planes of a viewport and `ClipScene` down to
   `ClipTriangle`, with objects drawn filled or shaded from an intensity per triangle
-  corner; and the first half of hidden-surface removal, the depth buffer: `DepthBuffer`,
+  corner; and hidden-surface removal, both halves: the depth buffer, `DepthBuffer`,
   a `1/z` per pixel, through which the filled and the shaded triangle set only the
   pixels where they are nearest, so that a scene no longer has to be listed back to
-  front. Next, in the book's order: the other half, back-face
-  culling (for which the clipped triangles already keep their winding, and which
-  removes the ties of 3.12 along the edges of faces turned away), shading (which
+  front, and back-face culling, `CullBackFaces`, which takes the triangles turned away
+  from the camera out of every instance before it is clipped and drawn, on by default
+  in `RenderScene`. Next, in the book's order: shading (which
   computes the corner intensities from lights and normals instead of storing them) and
   textures (which need perspective-correct interpolation, and with it the intensities
   of a clipped triangle will stop depending on where it was cut). Rotations about X and
@@ -1850,8 +2001,50 @@ The judgment calls behind this design, so they are not relitigated by accident.
     - The filled and the shaded triangle each got the same few lines, in the shape of
       their listings, rather than a routine in common. The wireframe takes the parameter
       because the three share a signature, and ignores it.
-    - Back-face culling, the other half of the book's chapter, is not here yet. The
-      `filled` demo is drawn without it and shows the ties that it would remove.
+    - Back-face culling, the other half of the book's chapter, came after the buffer and
+      apart from it (decision 16). Until then the `filled` demo was drawn without it and
+      showed the ties that it removes.
+16. Back-face culling is a step of `RenderScene`, between the transforms and the
+    clipping, and it is on unless the caller turns it off.
+    - On by default, the opposite of the depth buffer (decision 15). The models of the
+      book are closed and listed the right way round, a scene of such models loses
+      nothing by it, and it is the cheaper half of hidden-surface removal: it takes
+      about half the triangles away for one cross product and one dot product each. A
+      caller who needs the back faces says so.
+    - It is therefore the first addition that changes what an existing call draws, and
+      the three earlier pictures that go through `RenderScene` turn it off, each for a
+      reason of its own: `instances` and `camera` are wireframes that show every edge,
+      the pictures of their chapters, and `clipping` shows the inside of the lantern's
+      cap through the cut the near plane makes, which is made of back faces. All three
+      are byte for byte what they were. `filled`, the picture of this chapter, is the
+      one that changed.
+    - The switch is a scoped enumeration, `BackFaceCulling::kOff` and `kOn`, and not a
+      `bool`. It is the eighth parameter of `RenderScene` and follows a pointer:
+      `..., nullptr, false)` says nothing at the call, and
+      `..., nullptr, BackFaceCulling::kOff)` says what it does.
+    - The test is the book's, with the book's formulas and the book's `<=`, in
+      `IsBackFacing`; the normal is computed from the corners where it is needed, by a
+      helper private to `culling.cpp` until shading asks for normals too.
+    - `CullBackFaces(object, camera_position)` is the book's
+      `CullBackFaces(object, camera)` and takes a position rather than a `Camera`: the
+      position is all the test asks for, and it is in whatever coordinates the object
+      is in. `RenderScene` calls it in the camera's coordinates and passes the origin,
+      which is simpler than taking the camera into every model's coordinates.
+    - Before the clipping. The book's text does not say where the step goes, and its
+      demo tests each triangle as it is about to be drawn, after the clipping. Both
+      orders remove the same triangles, since the pieces of a clipped triangle keep its
+      winding and its plane (3.11). Before, the back faces are not clipped at all, and
+      the test reads the model's own vertices rather than crossing points, so all the
+      pieces of a triangle share one verdict by construction.
+    - `CullBackFaces` removes triangles and nothing else, as the book's listing does. The
+      vertices that only back faces named stay in the list and are projected to no
+      effect when the instance is not clipped; they are in front of the camera wherever
+      the instance is (3.12), and removing them would cost about what projecting them
+      does.
+    - The winding rule is the book's, clockwise as seen from outside, and a model is
+      trusted to follow it; a check would need the whole mesh and an assumption that
+      it is closed (3.12). The rule was not needed before this step and one model did
+      not follow it (section 15).
 
 ## 15. Implementation notes
 
@@ -1859,8 +2052,8 @@ Measurements and known behaviours of the implementation, recorded 2026-11-02, up
 2026-11-03 with shadows and reflections, 2026-11-04 with the rasterizer's lines and
 filled triangles and the reorganisation into layers, 2026-11-05 with shaded triangles,
 the perspective projection and objects made of triangles, 2026-11-09 with models,
-instances and scenes and, the same day, with model and camera transforms, and
-2026-11-16 with clipping and shaded objects.
+instances and scenes and, the same day, with model and camera transforms,
+2026-11-16 with clipping and shaded objects, and 2026-11-20 with back-face culling.
 
 - Catch2 is pinned to v3.16.1.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
@@ -2022,9 +2215,10 @@ instances and scenes and, the same day, with model and camera transforms, and
   distances 0.3 to 2, wide and tall). The two agreed on every covered sample; with the
   list reversed they disagreed on four out of five. The argument that makes it so is in
   section 9; nothing in the renderer enforces it.
-- The filled demo (15 instances of one model, 180 triangles) draws in about 20 ms at
-  1920 x 1080 through its depth buffer, and in 7 to 8 ms painted without one: every
-  pixel of every triangle is now compared before it is set. It has no rotation and the
+- The filled demo (15 instances of one model, 180 triangles) drew in about 20 ms at
+  1920 x 1080 through its depth buffer while every triangle was drawn, and in 7 to 8 ms
+  painted without one: every pixel of every triangle is compared before it is set. With
+  back-face culling it draws in about 16 ms (below). It has no rotation and the
   default camera, so no `libm`: like the instances demo its vertices are exact sums and
   its projections and depths a few IEEE operations. Its coordinates are still kept off
   the pixel boundaries, which is why the wall stands at z = 12 rather than at 10 (a face
@@ -2042,7 +2236,58 @@ instances and scenes and, the same day, with model and camera transforms, and
   running sum. On 698 of those the face that shows is one turned away from the camera,
   the lines of 3.12: the red of a back face along the far edge of a side, the green of
   a hidden right face down the right edge of a front. They are deterministic, the
-  arithmetic being what it is, and back-face culling will remove them.
+  arithmetic being what it is, and back-face culling removed them (below).
+- Back-face culling leaves 78 of the filled demo's 180 triangles to draw: 21 of the
+  wall's 54 faces (three on each corner cube, two on each cube beside the axis, one on
+  the cube straight ahead) and 18 of the rows' 36 (the front, the top and the side
+  toward the wall of each cube). The classification is exact there: the cubes are
+  moved by whole and half numbers, the default camera is the origin, and the camera is
+  at least 1 away from the plane of every face, so no `<N, V>` is near zero.
+- Culling changed `filled_320x180.ppm` on 698 pixels, exactly the 698 of the note above:
+  a pixel can change only where the face that showed was one that is no longer drawn,
+  since taking away triangles that lose a pixel does not change who wins it. On 695 of
+  them a face turned toward the camera shows now. The other 3 show the background:
+  at the far corner of three wall cubes the back or the bottom face reached one pixel
+  beyond the sides in front of it, a row that the running sums leave short (the apex
+  rows above), and nothing else covers that pixel. The cubes cover 16837 pixels instead
+  of 16840. At 1920 x 1080 the two pictures differ on 4092 pixels of 2073600.
+- What culling saves was measured on 2026-11-20 by a benchmark outside the repository:
+  the demo source compiled with its culling switch as a variable, each picture drawn
+  150 to 3000 times, alternately with and without, into the same canvas, Release, one
+  pinned core; the figures are medians and the minima are within 2% of them. The
+  filled demo at 1920 x 1080 takes 12.7 ms without culling and 8.2 ms with it, 1.54
+  times as fast; 2.6 ms of either are clearing the canvas and making the depth buffer,
+  which culling does not touch, so the drawing itself falls from 10.1 ms to 5.6, by
+  44%. At 320 x 180 it is 0.44 ms against 0.26, 1.7 times as fast. That is what the
+  geometry promises: the back faces of a convex object cover the same pixels as its
+  front faces, so about half of the pixel work goes, for a test per triangle that does
+  not show in the timings. A single `render_demo` run at 1920 x 1080, which also pays
+  for touching the canvas and the buffer for the first time, printed 20 to 22 ms before
+  culling and prints 15 to 17 ms with it.
+- The clipping demo is drawn without culling (decision 16). In the same benchmark, with
+  culling turned on, it took 28.5 ms instead of 48.5 at 1920 x 1080 and 1.31 ms instead
+  of 2.13 at 320 x 180, 1.7 and 1.6 times as fast: 849 triangles reach the primitive
+  instead of 1144 (854 instead of 1149 at 320 x 180). None of the floor's are among the
+  ones removed, every one of them facing up at a camera above it; of the solids' about
+  three in five are. The two pictures differ on 475 of the 57600 pixels at 320 x 180:
+  471 in one piece, the cut in the lantern's cap, through which the high-rise behind it
+  and the top of its own post show instead of the cap's inside, and 4 single pixels at
+  corners of solids, where a face turned away reached one pixel beyond the faces in
+  front of it, as in the filled demo.
+- The winding of the demo models was checked on 2026-11-20, in the same scratch
+  program: for every triangle of every solid, whether its normal `(B - A) x (C - A)`
+  points away from the middle of the solid, and for the floor's, whether it points up.
+  The cube, the shaded box at its five heights, the shaded pyramid at its two and the
+  floor follow the rule. The pyramid of the objects and instances pictures did not: its
+  base was right and its four sides were listed counter-clockwise as seen from
+  outside. They are listed clockwise now. An outline does not depend on the order of
+  its corners (`DrawLine` draws the same pixels in either direction), so no picture
+  changed. Nothing in the test suite pins this for any model but the cube, whose
+  winding the `filled` reference depends on: the others are drawn without culling.
+- Back-face culling changed one reference, `filled`. The other thirteen are byte for
+  byte what they were, and so are the 1920 x 1080 renders of the lines, triangles,
+  shaded, cube, objects, instances, camera and clipping demos, compared with those of
+  the build before it.
 - The depth buffer changed no picture that is drawn without one: the thirteen other
   references, and the 1920 x 1080 renders of the triangles, shaded, objects, instances,
   camera and clipping demos, are byte for byte what they were. Without a buffer the

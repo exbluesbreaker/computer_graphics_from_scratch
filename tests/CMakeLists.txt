@@ -32,6 +32,7 @@ add_executable(cgfs_tests
     rasterizer/object_test.cpp
     rasterizer/model_test.cpp
     rasterizer/instance_test.cpp
+    rasterizer/culling_test.cpp
     rasterizer/clipping_test.cpp
     rasterizer/scene_test.cpp
     demo/golden_test.cpp)

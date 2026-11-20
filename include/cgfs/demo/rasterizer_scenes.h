@@ -62,9 +62,9 @@ void DrawObjectsScene(Canvas& canvas, const Viewport& viewport);
 /// z = 14, 10 and 6, listed far to near so that where buildings overlap the near edges
 /// show. The houses shrink toward the tower, which is perspective, and the roofs' white
 /// base edges outline every eave, since an edge shared by two triangles shows the color
-/// of the one drawn later. Wireframes with nothing hidden, like the objects picture.
-/// Clears the canvas to a dark background first; depends on the viewport, so
-/// render_demo's --distance zooms it.
+/// of the one drawn later. Wireframes with nothing hidden, like the objects picture:
+/// drawn without back-face culling. Clears the canvas to a dark background first; depends
+/// on the viewport, so render_demo's --distance zooms it.
 void DrawInstancesScene(Canvas& canvas, const Viewport& viewport);
 
 /// The chapter's closing picture, two cubes seen through a camera that has moved and
@@ -75,8 +75,9 @@ void DrawInstancesScene(Canvas& canvas, const Viewport& viewport);
 /// first, and is turned -30 degrees about Y, that is 30 degrees to its right, toward
 /// them. Every vertex goes through one matrix, the camera matrix times the instance's
 /// model matrix, and then through ProjectVertex as before; the projection is not part of
-/// the matrix. Wireframes with nothing hidden; clears the canvas to a dark background
-/// first; depends on the viewport, so render_demo's --distance zooms it.
+/// the matrix. Wireframes with nothing hidden, drawn without back-face culling; clears
+/// the canvas to a dark background first; depends on the viewport, so render_demo's
+/// --distance zooms it.
 void DrawCameraScene(Canvas& canvas, const Viewport& viewport);
 
 /// The picture of the clipping chapter, and the first with shaded solids: a city of
@@ -95,38 +96,44 @@ void DrawCameraScene(Canvas& canvas, const Viewport& viewport);
 /// of the models' triangles: a shade per face, darker toward the ground, and a floor
 /// that fades with distance. A cut triangle gets the intensity of its new corners by
 /// the same interpolation as their position. The scene is painted in list order,
-/// without a depth buffer, so the picture is composed for it: every solid stands ahead
-/// of the camera and to its right, lists the faces turned away from there first, and the
-/// instances are listed from far to near. Clears the canvas to a dark background first;
-/// depends on the viewport, so render_demo's --distance zooms it, and moves the near
-/// plane out with the viewport.
+/// without a depth buffer and without back-face culling, so the picture is composed for
+/// it: every solid stands ahead of the camera and to its right, lists the faces turned
+/// away from there first, and the instances are listed from far to near. The back faces
+/// are what shows inside the lantern's cap. Clears the canvas to a dark background
+/// first; depends on the viewport, so render_demo's --distance zooms it, and moves the
+/// near plane out with the viewport.
 void DrawClippingScene(Canvas& canvas, const Viewport& viewport);
 
 /// The picture of hidden-surface removal: fifteen instances of the cube of the objects
 /// picture, six faces in six colors, drawn with RenderScene and DrawFilledTriangle
-/// through a DepthBuffer. The scene is composed so that painting it in list order gets
-/// it wrong, within every cube and between cubes; the depth buffer, which lets a pixel
-/// be set only by something nearer than what it shows, makes the order irrelevant.
+/// through a DepthBuffer, with the back faces culled. The scene is composed so that
+/// painting it in list order gets it wrong, within every cube and between cubes; the two
+/// halves of the chapter make the order irrelevant, back-face culling within a cube and
+/// the depth buffer, which lets a pixel be set only by something nearer than what it
+/// shows, everywhere.
 ///
 /// In the middle a wall of 3 x 3 cubes faces the camera, 3.5 apart at z = 12: the same
-/// cube from nine directions, each drawn back, right, front, left, top, bottom. Every
+/// cube from nine directions, each listed back, right, front, left, top, bottom. Every
 /// one shows what a cube shows from outside, three faces at most: the blue front and,
 /// off the axis, the side and the top or bottom turned toward the camera, the cube
 /// straight ahead a plain blue square. The left, the top and the bottom are listed
 /// after the front and, where they are turned away, would be painted over it as a
-/// yellow, a purple and a cyan band; they are farther than the front and are refused.
+/// yellow, a purple and a cyan band. They are back faces and are not drawn at all: of
+/// the wall's 54 faces 21 are, and they do not overlap, a cube being convex.
 ///
 /// On each side of the wall a row of three cubes leads away from the camera and
 /// outward, from (7, -2, 12) in steps of (5.5, 0, 6), mirrored on the left, and is
 /// listed from the nearest cube to the farthest. Painted in that order every cube would
-/// cover the one in front of it; here each is hidden where the nearer one stands. That
-/// is the same fault between objects instead of within one, and the reason the buffer
-/// belongs to the picture and not to an object.
+/// cover the one in front of it, front face over front face, which culling cannot help;
+/// through the depth buffer each is hidden where the nearer one stands. That is the
+/// fault between objects instead of within one, and the reason the buffer belongs to
+/// the picture and not to an object.
 ///
-/// One thing the depth buffer leaves open: two faces that share an edge are equally
-/// deep along it, and a face turned away can win the edge's pixels from the face in
-/// front of it, a line one pixel wide in the wrong color (the spec says where). Back-face
-/// culling is what removes those.
+/// Culling leaves 78 of the 180 triangles to draw. It also settles what the depth buffer
+/// alone left open: two faces that share an edge are equally deep along it, and a face
+/// turned away could win the edge's pixels from the face in front of it, a line one
+/// pixel wide in the wrong color (the spec says where). A face that is not drawn wins
+/// nothing.
 ///
 /// The default camera and no rotation: plain arithmetic, no trigonometry. Clears the
 /// canvas to a dark background first; depends on the viewport, so render_demo's

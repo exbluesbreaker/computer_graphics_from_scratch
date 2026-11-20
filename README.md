@@ -20,7 +20,9 @@ and look any way. The transforms are 4 x 4 matrices; the projection, as in the b
 deliberately is not, and between the two the scene is clipped in 3D against the planes
 that bound what the camera can see, so the camera may stand in the middle of a scene.
 A depth buffer, which keeps 1/z for every pixel, removes hidden surfaces: through it a
-pixel shows the nearest triangle, in whatever order the scene is listed.
+pixel shows the nearest triangle, in whatever order the scene is listed. Before that,
+back-face culling removes the triangles that are turned away from the camera, about half
+of a scene, without drawing them.
 `docs/SPEC.md` describes the design, the architecture and the roadmap.
 
 ## Requirements
@@ -87,19 +89,29 @@ the transforms and the projection), `filled` (the picture of hidden-surface remo
 fifteen copies of the book's six-colored cube drawn with `DrawFilledTriangle` through a
 `DepthBuffer`, a wall of 3 x 3 and a row on each side, listed so that painting them in
 order would put the back of every cube over its front and every cube over the one in
-front of it; through the depth buffer each cube shows the three faces it should),
+front of it; back-face culling removes the faces a cube turns away, 102 of the 180
+triangles, and through the depth buffer each cube shows the three faces it should),
 `axes` (the coordinate axes and corner dots, no ray tracing). A larger `--distance`
 narrows the field of view of the ray-traced scenes, the cube, the objects, the
 instances, the camera scene, the clipping scene and the filled cubes.
 
-Hidden-surface removal is a depth buffer that a scene asks for: `RenderScene` and
-`RenderObject` take a `DepthBuffer` of the canvas's size as their last argument, and
-without one triangles are painted in list order, as before. The `filled` scene uses
-it. The wireframes show everything either way, and the `clipping` scene is still
-painted, composed so that its list order is its depth order; `docs/SPEC.md`, sections
-3.12 and 9, has the details. Back-face culling, the other half of the book's chapter,
-is not implemented yet: along some edges of the `filled` picture a line one pixel wide
-shows a face that is turned away, where two faces are equally deep.
+Hidden-surface removal has two halves. The depth buffer is something a scene asks for:
+`RenderScene` and `RenderObject` take a `DepthBuffer` of the canvas's size, and without
+one triangles are painted in list order, as before. Back-face culling is something
+`RenderScene` does unless it is told not to: every triangle that is turned away from the
+camera is removed after the transforms and before the clipping, and
+`BackFaceCulling::kOff` as the last argument draws them all. The `filled` scene uses
+both. On that picture culling saves about a third of the time at 1920 x 1080, 44% of
+the drawing itself (`docs/SPEC.md`, section 15, has the measurements).
+
+Culling needs two things of a model: that it is closed, and that every triangle lists
+its corners clockwise as seen from outside, which is how the triangle's normal
+`(B - A) x (C - A)` comes to point out of the object. The order is part of the model and
+is not computed. The wireframe scenes (`instances`, `camera`) and the `clipping` scene
+turn culling off: the first two show every edge, and the third shows the inside of a
+lantern that the near plane has cut open, which is made of back faces; it is still
+painted without a depth buffer too, composed so that its list order is its depth order.
+`docs/SPEC.md`, sections 3.12, 9 and 14, has the details.
 
 ## Layout
 
@@ -142,12 +154,14 @@ include/cgfs/   public headers: one folder per layer, one file per concept
                                 model under a transform matrix, and its wireframe
                 instance.h      Instance (a model index, position, orientation and scale),
                                 MakeModelMatrix and RenderInstance
+                culling.h       IsBackFacing, CullBackFaces and the switch BackFaceCulling:
+                                an object without the triangles turned away from the camera
                 clipping.h      ClipScene, ClipInstance, ClipInstanceAgainstPlane,
                                 ClipTrianglesAgainstPlane and ClipTriangle: what a list of
                                 planes leaves of a scene
                 scene.h         RenderScene: every instance of a model list and an instance
-                                list, in order, as a Camera sees them: transformed, clipped,
-                                projected and drawn
+                                list, in order, as a Camera sees them: transformed, culled,
+                                clipped, projected and drawn
   demo/         raytracer_scenes.h, rasterizer_scenes.h
                                 the pictures shared by render_demo and the golden tests
 src/<layer>/    implementations, mirroring include/cgfs/<layer>/

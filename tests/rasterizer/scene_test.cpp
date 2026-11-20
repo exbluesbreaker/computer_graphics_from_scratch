@@ -4,11 +4,14 @@
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/math/bounding_sphere.h>
 #include <cgfs/math/mat4.h>
 #include <cgfs/math/plane.h>
 #include <cgfs/math/vec3.h>
+#include <cgfs/rasterizer/culling.h>
 #include <cgfs/rasterizer/instance.h>
 #include <cgfs/rasterizer/model.h>
+#include <cgfs/rasterizer/object.h>
 #include <cgfs/rasterizer/point.h>
 #include <cgfs/rasterizer/scene.h>
 #include <cgfs/rasterizer/triangle.h>
@@ -17,11 +20,13 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "rasterizer/pixel_helpers.h"
 #include "support/test_helpers.h"
 
+using cgfs::BackFaceCulling;
 using cgfs::Camera;
 using cgfs::Canvas;
 using cgfs::DepthBuffer;
@@ -53,11 +58,17 @@ constexpr int kSize = 32;
 Viewport TestViewport() { return Viewport(kSize, kSize); }
 
 // A fresh black canvas with the scene rendered on it, as `camera` sees it.
+//
+// Without back-face culling unless a test asks for it. The models of most tests here are
+// single triangles, which are not closed objects and are looked at from whichever side
+// the test puts its camera on; the tests of the culling itself come last and turn it on.
 Canvas CanvasWithScene(const std::vector<Model>& models, const std::vector<Instance>& instances,
                        const Camera& camera = Camera{},
-                       DrawTriangleFunction draw_triangle = DrawWireframeTriangle) {
+                       DrawTriangleFunction draw_triangle = DrawWireframeTriangle,
+                       BackFaceCulling back_face_culling = BackFaceCulling::kOff) {
     Canvas canvas(kSize, kSize, kBlack);
-    RenderScene(canvas, TestViewport(), models, instances, camera, draw_triangle);
+    RenderScene(canvas, TestViewport(), models, instances, camera, draw_triangle, nullptr,
+                back_face_culling);
     return canvas;
 }
 
@@ -182,7 +193,8 @@ TEST_CASE("RenderScene: the model and instance lists may be any contiguous range
     const std::array<Model, 1> models = {SmallTriangle(kWhite)};
     const Instance instances[] = {{.model = 0, .position = {0.0, 0.0, 1.0}}};
     Canvas canvas(kSize, kSize, kBlack);
-    RenderScene(canvas, TestViewport(), models, instances);
+    RenderScene(canvas, TestViewport(), models, instances, Camera{}, DrawWireframeTriangle, nullptr,
+                BackFaceCulling::kOff);
     CHECK(Bytes(canvas) == Bytes(CanvasWithOutlines({SmallOutline(0, 0)})));
 }
 
@@ -394,14 +406,16 @@ TEST_CASE("RenderScene: the clipping planes are in the camera's coordinates", "[
 
 namespace {
 
-// A fresh black canvas with the scene drawn filled, through a depth buffer of its own.
+// A fresh black canvas with the scene drawn filled, through a depth buffer of its own;
+// without back-face culling unless a test asks for it, like CanvasWithScene.
 Canvas CanvasWithDepthBufferedScene(const std::vector<Model>& models,
                                     const std::vector<Instance>& instances,
-                                    const Camera& camera = Camera{}) {
+                                    const Camera& camera = Camera{},
+                                    BackFaceCulling back_face_culling = BackFaceCulling::kOff) {
     Canvas canvas(kSize, kSize, kBlack);
     DepthBuffer depth_buffer(canvas);
     RenderScene(canvas, TestViewport(), models, instances, camera, DrawFilledTriangle,
-                &depth_buffer);
+                &depth_buffer, back_face_culling);
     return canvas;
 }
 
@@ -459,4 +473,219 @@ TEST_CASE("RenderScene: what a clipping plane leaves of a triangle keeps its dep
     CHECK(Bytes(cut_first) == Bytes(CanvasWithDepthBufferedScene(models, {behind, cut}, camera)));
     CHECK(cut_first.GetPixel(7, -7) == Rgb8{255, 255, 255});  // inside both: the nearer, white
     CHECK(cut_first.GetPixel(-4, -7) == Rgb8{0, 0, 0});       // cut away, and nothing behind it
+}
+
+// --- Back-face culling -----------------------------------------------------------------
+
+namespace {
+
+// `model` with the corners of its one triangle listed the other way round: the same
+// triangle in space, turned inside out. The intensities follow their corners.
+Model TurnedInsideOut(Model model) {
+    cgfs::Triangle& triangle = model.triangles[0];
+    std::swap(triangle.v[1], triangle.v[2]);
+    std::swap(triangle.h[1], triangle.h[2]);
+    return model;
+}
+
+// SmallTriangle lists its corners top right, top left, bottom: counter-clockwise to a
+// camera that looks at it along +Z, which therefore sees its back. This is the same
+// triangle with its front to that camera, and its outline around the pixel (cx, cy).
+Model FrontTriangle(cgfs::Color color) { return TurnedInsideOut(SmallTriangle(color)); }
+Outline FrontOutline(int cx, int cy, cgfs::Color color = kWhite) {
+    return {{cx + 4, cy + 4}, {cx, cy - 4}, {cx - 4, cy + 4}, color};
+}
+
+// The book's cube, corners at x, y, z = ±1, one color per face where the tests look:
+// the back red, the right green, the front blue, the left yellow, the top and the
+// bottom white. The front is the face at z = -1, toward a camera that looks along +Z.
+Model Cube() {
+    Model cube;
+    cube.vertices = {{1.0, 1.0, 1.0},  {-1.0, 1.0, 1.0},  {-1.0, -1.0, 1.0},  {1.0, -1.0, 1.0},
+                     {1.0, 1.0, -1.0}, {-1.0, 1.0, -1.0}, {-1.0, -1.0, -1.0}, {1.0, -1.0, -1.0}};
+    cube.triangles = {
+        {{0, 1, 2}, kRed},   {{0, 2, 3}, kRed},   {{4, 0, 3}, kGreen},  {{4, 3, 7}, kGreen},
+        {{5, 4, 7}, kBlue},  {{5, 7, 6}, kBlue},  {{1, 5, 6}, kYellow}, {{1, 6, 2}, kYellow},
+        {{4, 5, 1}, kWhite}, {{4, 1, 0}, kWhite}, {{2, 6, 7}, kWhite},  {{2, 7, 3}, kWhite},
+    };
+    cube.bounding_sphere = cgfs::MakeBoundingSphere(cube.vertices);
+    return cube;
+}
+
+// The cube's front face alone: the two triangles of z = -1 on the same eight vertices.
+Model FrontOfCube() {
+    Model front = Cube();
+    front.triangles = {front.triangles[4], front.triangles[5]};
+    return front;
+}
+
+}  // namespace
+
+TEST_CASE("RenderScene: a triangle turned away from the camera is not drawn, by default",
+          "[rasterizer][culling]") {
+    const std::vector<Model> models = {FrontTriangle(kWhite), SmallTriangle(kWhite)};
+    const std::vector<Instance> front = {{.model = 0, .position = {0.0, 0.0, 1.0}}};
+    const std::vector<Instance> back = {{.model = 1, .position = {0.0, 0.0, 1.0}}};
+
+    // Listed clockwise as the camera sees it, the triangle is drawn; listed the other
+    // way round, the same three corners leave the canvas empty.
+    Canvas front_canvas(kSize, kSize, kBlack);
+    RenderScene(front_canvas, TestViewport(), models, front);
+    CHECK(Bytes(front_canvas) == Bytes(CanvasWithOutlines({FrontOutline(0, 0)})));
+    Canvas back_canvas(kSize, kSize, kBlack);
+    RenderScene(back_canvas, TestViewport(), models, back);
+    CHECK(LitPixels(back_canvas).empty());
+
+    // The default is BackFaceCulling::kOn.
+    CHECK(Bytes(CanvasWithScene(models, front, Camera{}, DrawWireframeTriangle,
+                                BackFaceCulling::kOn)) ==
+          Bytes(CanvasWithOutlines({FrontOutline(0, 0)})));
+    CHECK(LitPixels(
+              CanvasWithScene(models, back, Camera{}, DrawWireframeTriangle, BackFaceCulling::kOn))
+              .empty());
+
+    // With the culling off both are drawn.
+    CHECK(Bytes(CanvasWithScene(models, front, Camera{}, DrawWireframeTriangle,
+                                BackFaceCulling::kOff)) ==
+          Bytes(CanvasWithOutlines({FrontOutline(0, 0)})));
+    CHECK(Bytes(CanvasWithScene(models, back, Camera{}, DrawWireframeTriangle,
+                                BackFaceCulling::kOff)) ==
+          Bytes(CanvasWithOutlines({SmallOutline(0, 0)})));
+}
+
+TEST_CASE("RenderScene: which side of a triangle the camera stands on decides",
+          "[rasterizer][culling]") {
+    // A triangle at z = 1 of the world with its front toward the origin, and the same
+    // one inside out. The default camera sees the first. A camera on the far side, at
+    // z = 2 and turned half around to look back at them, sees the second.
+    const std::vector<Model> models = {TurnedInsideOut(OffGridTriangle(kWhite)),
+                                       OffGridTriangle(kWhite)};
+    const std::vector<Instance> facing_origin = {{.model = 0, .position = {0.0, 0.0, 1.0}}};
+    const std::vector<Instance> facing_away = {{.model = 1, .position = {0.0, 0.0, 1.0}}};
+    const Camera beyond{.position = {0.0, 0.0, 2.0}, .orientation = MakeOYRotationMatrix(180.0)};
+    const auto culled = [&](const std::vector<Instance>& instances, const Camera& camera) {
+        return CanvasWithScene(models, instances, camera, DrawWireframeTriangle,
+                               BackFaceCulling::kOn);
+    };
+
+    CHECK_FALSE(LitPixels(culled(facing_origin, Camera{})).empty());
+    CHECK(LitPixels(culled(facing_away, Camera{})).empty());
+    CHECK(LitPixels(culled(facing_origin, beyond)).empty());
+    CHECK_FALSE(LitPixels(culled(facing_away, beyond)).empty());
+
+    // What is drawn is drawn as without the culling.
+    CHECK(Bytes(culled(facing_origin, Camera{})) ==
+          Bytes(CanvasWithScene(models, facing_origin, Camera{})));
+    CHECK(Bytes(culled(facing_away, beyond)) ==
+          Bytes(CanvasWithScene(models, facing_away, beyond)));
+}
+
+TEST_CASE("RenderScene: an instance's transform turns a face toward the camera or away",
+          "[rasterizer][culling]") {
+    const std::vector<Model> models = {TurnedInsideOut(OffGridTriangle(kWhite))};
+    const auto culled = [&](const Instance& instance) {
+        return CanvasWithScene(models, {instance}, Camera{}, DrawWireframeTriangle,
+                               BackFaceCulling::kOn);
+    };
+    const Vec3 ahead{0.0, 0.0, 1.0};
+
+    // As it stands the triangle faces the camera. Turned half around its own origin it
+    // is in the same place and shows its back.
+    CHECK_FALSE(LitPixels(culled({.model = 0, .position = ahead})).empty());
+    CHECK(LitPixels(
+              culled({.model = 0, .position = ahead, .orientation = MakeOYRotationMatrix(180.0)}))
+              .empty());
+
+    // A scale, larger or smaller, turns nothing: the front stays the front.
+    CHECK_FALSE(LitPixels(culled({.model = 0, .position = ahead, .scale = 2.0})).empty());
+    CHECK_FALSE(LitPixels(culled({.model = 0, .position = ahead, .scale = 0.5})).empty());
+
+    // Neither does moving it across the picture, though the camera then sees it at an
+    // angle: it is the direction to the camera that counts.
+    CHECK_FALSE(LitPixels(culled({.model = 0, .position = {0.25, -0.25, 1.0}})).empty());
+}
+
+TEST_CASE("RenderScene: of a cube straight ahead only the front face is drawn",
+          "[rasterizer][culling]") {
+    // The cube 4 ahead on the camera's axis: its front face, at z = 3, covers the pixels
+    // from -10 to 10, and its back face, at z = 5, those from -6 to 6. The four sides
+    // run between the two and are all turned away from a camera on the axis.
+    const std::vector<Model> models = {Cube(), FrontOfCube()};
+    const std::vector<Instance> cube = {{.model = 0, .position = {0.0, 0.0, 4.0}}};
+    const std::vector<Instance> front = {{.model = 1, .position = {0.0, 0.0, 4.0}}};
+
+    // Painted in list order without the culling, the left face, listed after the front,
+    // lies over it.
+    const Canvas painted = CanvasWithScene(models, cube, Camera{}, DrawFilledTriangle);
+    CHECK(painted.GetPixel(-8, 0) == Rgb8{255, 255, 0});
+
+    // With it the picture is that of the front face alone, even painted in list order:
+    // the front faces of a convex object do not overlap.
+    const Canvas culled =
+        CanvasWithScene(models, cube, Camera{}, DrawFilledTriangle, BackFaceCulling::kOn);
+    CHECK(culled.GetPixel(-8, 0) == Rgb8{0, 0, 255});
+    CHECK(culled.GetPixel(0, 0) == Rgb8{0, 0, 255});
+    CHECK(Bytes(culled) == Bytes(CanvasWithScene(models, front, Camera{}, DrawFilledTriangle)));
+
+    // Through a depth buffer too, where the back faces would have been drawn and hidden.
+    CHECK(Bytes(CanvasWithDepthBufferedScene(models, cube, Camera{}, BackFaceCulling::kOn)) ==
+          Bytes(CanvasWithDepthBufferedScene(models, front)));
+
+    // An outline is culled like a filled face: the wireframe loses its far edges.
+    CHECK(Bytes(CanvasWithScene(models, cube, Camera{}, DrawWireframeTriangle,
+                                BackFaceCulling::kOn)) == Bytes(CanvasWithScene(models, front)));
+    CHECK(LitPixels(CanvasWithScene(models, cube)).size() >
+          LitPixels(CanvasWithScene(models, front)).size());
+}
+
+TEST_CASE("RenderScene: a cube seen from a corner shows three faces", "[rasterizer][culling]") {
+    // The cube 6 ahead, to the camera's right and below it: the camera sees its front,
+    // its left side and its top. Drawn filled through a depth buffer, the three faces
+    // alone give the picture of the whole cube without its back faces.
+    Model three_faces = Cube();
+    three_faces.triangles = {three_faces.triangles[4], three_faces.triangles[5],   // front
+                             three_faces.triangles[6], three_faces.triangles[7],   // left
+                             three_faces.triangles[8], three_faces.triangles[9]};  // top
+    const std::vector<Model> models = {Cube(), three_faces};
+    const Vec3 position{1.5, -1.5, 6.0};
+
+    const Canvas culled = CanvasWithDepthBufferedScene(models, {{.model = 0, .position = position}},
+                                                       Camera{}, BackFaceCulling::kOn);
+    CHECK(Bytes(culled) ==
+          Bytes(CanvasWithDepthBufferedScene(models, {{.model = 1, .position = position}})));
+    CHECK_FALSE(LitPixels(culled).empty());
+}
+
+TEST_CASE("RenderScene: the pieces of a clipped triangle are culled as the triangle is",
+          "[rasterizer][culling]") {
+    // RightTriangle shows the default camera its back. Cut by the plane x = 0, the two
+    // pieces of the triangle are drawn when its front is to the camera and neither is
+    // when its back is.
+    const std::vector<Model> models = {TurnedInsideOut(RightTriangle()), RightTriangle()};
+    const std::vector<Instance> front = {{.model = 0, .position = {0.0, 0.0, 1.0}}};
+    const std::vector<Instance> back = {{.model = 1, .position = {0.0, 0.0, 1.0}}};
+    const Camera camera{.clipping_planes = {kRightHalf}};
+
+    const Canvas culled =
+        CanvasWithScene(models, front, camera, DrawShadedTriangle, BackFaceCulling::kOn);
+    CHECK_FALSE(LitPixels(culled).empty());
+    CHECK(Bytes(culled) == Bytes(CanvasWithScene(models, front, camera, DrawShadedTriangle)));
+    CHECK(LitPixels(CanvasWithScene(models, back, camera, DrawShadedTriangle, BackFaceCulling::kOn))
+              .empty());
+}
+
+TEST_CASE("RenderScene: from inside an object every face is a back face", "[rasterizer][culling]") {
+    // The camera at the center of the cube, with the clipping planes of its viewport.
+    // Without the culling the inside of the cube fills the canvas. With it nothing is
+    // drawn: all six faces are turned away from a camera inside, which is why a closed
+    // object cut open by the near plane shows what is behind it and not its own inside.
+    const std::vector<Model> models = {Cube()};
+    const std::vector<Instance> around_the_camera = {{.model = 0}};
+    const Camera camera{.clipping_planes = MakeClippingPlanes(TestViewport())};
+
+    CHECK_FALSE(
+        LitPixels(CanvasWithScene(models, around_the_camera, camera, DrawFilledTriangle)).empty());
+    CHECK(LitPixels(CanvasWithScene(models, around_the_camera, camera, DrawFilledTriangle,
+                                    BackFaceCulling::kOn))
+              .empty());
 }

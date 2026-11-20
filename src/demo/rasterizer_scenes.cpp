@@ -7,6 +7,7 @@
 #include <cgfs/math/bounding_sphere.h>
 #include <cgfs/math/mat4.h>
 #include <cgfs/math/vec3.h>
+#include <cgfs/rasterizer/culling.h>
 #include <cgfs/rasterizer/instance.h>
 #include <cgfs/rasterizer/line.h>
 #include <cgfs/rasterizer/model.h>
@@ -119,7 +120,10 @@ Model Cube() {
 
 /// A square pyramid of the cube's height: the apex above the center of a base that is the
 /// bottom face of the same cube. The base comes first so that every side owns its base
-/// edge: an edge shared by two triangles shows the color of the one drawn later.
+/// edge: an edge shared by two triangles shows the color of the one drawn later. Every
+/// triangle lists its corners clockwise as seen from outside, like the cube's: a side
+/// names the apex and then its two base corners from the right to the left of someone
+/// who faces it.
 Model Pyramid() {
     Model pyramid;
     pyramid.vertices = {
@@ -131,10 +135,10 @@ Model Pyramid() {
     };
     pyramid.triangles = {
         {{1, 2, 3}, colors::kWhite}, {{1, 3, 4}, colors::kWhite},  // the base, y = -1
-        {{0, 1, 2}, kOrange},                                      // front, z = -1
-        {{0, 2, 3}, kLime},                                        // right, x = 1
-        {{0, 3, 4}, kSky},                                         // back, z = 1
-        {{0, 4, 1}, kPink},                                        // left, x = -1
+        {{0, 2, 1}, kOrange},                                      // front, z = -1
+        {{0, 3, 2}, kLime},                                        // right, x = 1
+        {{0, 4, 3}, kSky},                                         // back, z = 1
+        {{0, 1, 4}, kPink},                                        // left, x = -1
     };
     return pyramid;
 }
@@ -530,7 +534,10 @@ void DrawInstancesScene(Canvas& canvas, const Viewport& viewport) {
         building(3.5, z, 1);
     }
 
-    RenderScene(canvas, viewport, models, instances);
+    // A wireframe with nothing hidden, the picture of its chapter: the back faces are
+    // outlined like the others.
+    RenderScene(canvas, viewport, models, instances, Camera{}, DrawWireframeTriangle, nullptr,
+                BackFaceCulling::kOff);
 }
 
 void DrawCameraScene(Canvas& canvas, const Viewport& viewport) {
@@ -552,7 +559,9 @@ void DrawCameraScene(Canvas& canvas, const Viewport& viewport) {
     // nothing enforces: this camera has no clipping planes. The clipping picture's has.
     const Camera camera{.position = {-3.0, 1.0, 2.0}, .orientation = MakeOYRotationMatrix(-30.0)};
 
-    RenderScene(canvas, viewport, models, instances, camera);
+    // A wireframe with nothing hidden, like the instances picture: no back-face culling.
+    RenderScene(canvas, viewport, models, instances, camera, DrawWireframeTriangle, nullptr,
+                BackFaceCulling::kOff);
 }
 
 void DrawClippingScene(Canvas& canvas, const Viewport& viewport) {
@@ -672,7 +681,11 @@ void DrawClippingScene(Canvas& canvas, const Viewport& viewport) {
                         .orientation = MakeOYRotationMatrix(-42.0),
                         .clipping_planes = MakeClippingPlanes(viewport)};
 
-    RenderScene(canvas, viewport, models, instances, camera, DrawShadedTriangle);
+    // Painted in list order with every face drawn, the way the picture was composed.
+    // Without its back faces it would be the same city but for the lantern: through the
+    // cut in its cap what stands behind it would show instead of the cap's own inside.
+    RenderScene(canvas, viewport, models, instances, camera, DrawShadedTriangle, nullptr,
+                BackFaceCulling::kOff);
 }
 
 void DrawFilledCubesScene(Canvas& canvas, const Viewport& viewport) {
@@ -684,8 +697,9 @@ void DrawFilledCubesScene(Canvas& canvas, const Viewport& viewport) {
     // right, front, left, top, bottom. Every instance is that cube as it stands, moved
     // and nothing else, and the camera is the default one, so every cube is drawn in
     // that one order whichever of its sides the camera sees. The scene is composed so
-    // that the order is wrong almost everywhere; the depth buffer is what makes it not
-    // matter.
+    // that the order is wrong almost everywhere. The two halves of hidden-surface
+    // removal make it not matter: back-face culling takes away the faces a cube turns
+    // away from the camera, and the depth buffer settles what is left.
     const std::vector<Model> models = {Cube()};
     constexpr std::size_t kCube = 0;
     std::vector<Instance> instances;
@@ -693,9 +707,10 @@ void DrawFilledCubesScene(Canvas& canvas, const Viewport& viewport) {
     // The cube from nine directions: a wall of 3 x 3 cubes facing the camera, the middle
     // one straight ahead. From outside a cube shows three faces at most: here the blue
     // front and, off the axis, the side and the top or bottom turned toward the camera.
-    // The faces turned away are drawn all the same, and those listed after the front
-    // (the left, the top and the bottom) would be painted over it; they are farther
-    // away than the front, so the depth buffer turns them down.
+    // Painted in list order the faces turned away would be drawn all the same, and those
+    // listed after the front (the left, the top and the bottom) over it. They are back
+    // faces, and RenderScene removes them before anything is drawn: 21 faces of the
+    // wall's 54 are left.
     constexpr double kWallSpacing = 3.5;
     constexpr double kWallDistance = 12.0;
     for (const double y : {kWallSpacing, 0.0, -kWallSpacing}) {
@@ -708,7 +723,8 @@ void DrawFilledCubesScene(Canvas& canvas, const Viewport& viewport) {
     // and outward, a little below it, so that each cube stands partly behind the one
     // before. The rows are listed from the nearest cube to the farthest, the wrong way
     // around for painting in list order, which would put every cube over the cube in
-    // front of it. Through the depth buffer the nearer cube keeps its pixels.
+    // front of it. Culling does not help here: the faces that overlap are front faces of
+    // different cubes. Through the depth buffer the nearer cube keeps its pixels.
     constexpr Vec3 kRowStart{7.0, -2.0, 12.0};
     constexpr Vec3 kRowStep{5.5, 0.0, 6.0};
     for (const double side : {-1.0, 1.0}) {
@@ -718,7 +734,8 @@ void DrawFilledCubesScene(Canvas& canvas, const Viewport& viewport) {
         }
     }
 
-    // One depth buffer for the picture, shared by all the cubes.
+    // One depth buffer for the picture, shared by all the cubes. Back-face culling is
+    // RenderScene's default: of the 180 triangles 78 are drawn.
     DepthBuffer depth_buffer(canvas);
     RenderScene(canvas, viewport, models, instances, Camera{}, DrawFilledTriangle, &depth_buffer);
 }

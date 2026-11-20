@@ -4,6 +4,7 @@
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/rasterizer/culling.h>
 #include <cgfs/rasterizer/instance.h>
 #include <cgfs/rasterizer/model.h>
 #include <cgfs/rasterizer/triangle.h>
@@ -13,22 +14,36 @@
 namespace cgfs {
 
 /// Draw a scene as `camera` sees it: every instance in `instances`, in order; the book's
-/// RenderScene, in three steps:
+/// RenderScene, in four steps:
 ///
 ///     M_camera = MakeCameraMatrix(camera.position, camera.orientation)
 ///     scene    = for each instance I:
 ///                    TransformModel(models[I.model], M_camera * MakeModelMatrix(I))
-///     clipped  = ClipScene(scene, camera.clipping_planes)
+///     culled   = for each instance S of scene:
+///                    CullBackFaces(S, the origin)
+///     clipped  = ClipScene(culled, camera.clipping_planes)
 ///     for each instance C of clipped:
 ///                    RenderObject(C.vertices, C.triangles, draw_triangle, depth_buffer)
 ///
 /// First the transforms: one matrix per instance takes its vertices from the model's
 /// coordinates through the world into the camera's, and the instance becomes geometry
-/// placed in the scene. Then the clipping, which is done in 3D and so must come after
-/// the transforms and before the projection: what the camera's clipping planes leave of
-/// every instance (see ClipScene). Last the perspective projection, vertex by vertex
-/// inside RenderObject and kept out of the matrix on purpose (see Mat4), which is what
-/// leaves room for the middle step.
+/// placed in the scene. Then the back faces go: in the camera's coordinates the camera
+/// is at the origin, and every triangle turned away from it is removed (see
+/// CullBackFaces), before the clipping, so that nothing is cut that would not be drawn.
+/// Then the clipping, which is done in 3D and so must come after the transforms and
+/// before the projection: what the camera's clipping planes leave of every instance (see
+/// ClipScene). Last the perspective projection, vertex by vertex inside RenderObject and
+/// kept out of the matrix on purpose (see Mat4), which is what leaves room for the two
+/// steps in the middle.
+///
+/// Back-face culling is on unless `back_face_culling` is BackFaceCulling::kOff, with
+/// which the second step is left out and every triangle is drawn. It takes the models to
+/// be closed, with their triangles listed clockwise as seen from outside (see
+/// culling.h). Then the picture of filled or shaded faces through a depth buffer is the
+/// same with it and without, give or take a pixel on an outline, for about half the
+/// work. Turn it off for a model that is not closed, for a view into an object that a
+/// clipping plane has cut open, where the inside would otherwise be missing, and for a
+/// wireframe that is to show the edges at the back as well.
 ///
 /// The default camera is at the origin looking along +Z and has no clipping planes, so
 /// a scene drawn without one is drawn as before. `draw_triangle` is how every triangle
@@ -48,12 +63,14 @@ namespace cgfs {
 /// nearest there, in any order: hidden-surface removal (see DepthBuffer).
 ///
 /// Preconditions: every `instance.model` is less than `models.size()`, asserted; after
-/// the clipping every vertex has z > 0, asserted by ProjectVertex. The planes of
-/// MakeClippingPlanes guarantee the second for any scene; a camera without clipping
-/// planes must have every instance entirely in front of it.
+/// the clipping every vertex has z > 0, asserted by ProjectVertex, the vertices of the
+/// back faces that were removed included, since they stay in their instance's list. The
+/// planes of MakeClippingPlanes guarantee the second for any scene; a camera without
+/// clipping planes must have every instance entirely in front of it.
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
                  std::span<const Instance> instances, const Camera& camera = Camera{},
                  DrawTriangleFunction draw_triangle = DrawWireframeTriangle,
-                 DepthBuffer* depth_buffer = nullptr);
+                 DepthBuffer* depth_buffer = nullptr,
+                 BackFaceCulling back_face_culling = BackFaceCulling::kOn);
 
 }  // namespace cgfs
