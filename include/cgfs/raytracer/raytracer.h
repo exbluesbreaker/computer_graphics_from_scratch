@@ -88,7 +88,9 @@ public:
     ///   i += I * <N, L> / (|N| |L|)          diffuse, when <N, L> > 0
     ///   i += I * (<R, V> / (|R| |V|))^s      specular, when s != kMatte and <R, V> > 0,
     ///                                        with R = 2 N <N, L> - L the mirror of L
-    /// plus the intensity of every ambient light.
+    /// plus the intensity of every ambient light. The two terms are DiffuseReflection and
+    /// SpecularReflection of the lighting layer (see illumination.h), which the rasterizer
+    /// sums as well; the shadows are the ray tracer's own.
     ///
     /// A light is blocked, and the point is in its shadow, when a sphere lies on the
     /// segment from the point toward it: ClosestIntersection(P, L, kShadowEpsilon, t_max)

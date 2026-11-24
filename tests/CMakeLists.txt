@@ -24,6 +24,7 @@ add_executable(cgfs_tests
     camera/viewport_test.cpp
     camera/camera_test.cpp
     camera/clipping_planes_test.cpp
+    lighting/illumination_test.cpp
     raytracer/raytracer_test.cpp
     rasterizer/interpolate_test.cpp
     rasterizer/line_test.cpp

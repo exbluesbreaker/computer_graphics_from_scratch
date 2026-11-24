@@ -61,11 +61,13 @@ functions rather than to class hierarchies.
 
 And the rest of the usual discipline:
 
-- **Separation of concerns, in layers.** Math, image, camera, the two renderers and the
-  demo content are separate layers (next section). A layer never reaches up.
+- **Separation of concerns, in layers.** Math, image, camera, lighting, the two
+  renderers and the demo content are separate layers (next section). A layer never
+  reaches up.
 - **Don't repeat yourself.** One definition per fact: the demo pictures are defined once
   and shared by the app and the golden tests; the scene table drives the usage text,
-  the default and the dispatch; the pixel conversion rule is one function (`ToPixel`).
+  the default and the dispatch; the pixel conversion rule is one function (`ToPixel`);
+  the terms of the illumination equation are one function each, summed by both renderers.
 - **Keep it simple; you aren't gonna need it.** Implement the chapter at hand in the
   book's shape and nothing speculative. Prefer a free function to a class without
   state, a `std::variant` to a hierarchy, a value to a pointer, a `struct` with public
@@ -98,7 +100,8 @@ image/        color, pixel_index, canvas, depth_buffer, image_io
                                                               the picture: colors, the pixel buffer and the depth
                                                               buffer beside it, file formats
 camera/       viewport, camera, clipping_planes               how canvas pixels map into the world; shared by both renderers
-raytracer/    scene, raytracer                                the ray tracing renderer: spheres, lights, tracing
+lighting/     light, illumination                             the lights and the illumination equation; shared by both renderers
+raytracer/    scene, raytracer                                the ray tracing renderer: spheres, tracing, shadows
 rasterizer/   point, interpolate, line, triangle, projection, object, model, instance, culling, clipping, scene
                                                               the rasterizing renderer: 2D primitives, the
                                                               projection that feeds them, objects made of

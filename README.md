@@ -132,8 +132,12 @@ include/cgfs/   public headers: one folder per layer, one file per concept
                 camera.h        Camera (position, orientation and clipping planes) and
                                 MakeCameraMatrix
                 clipping_planes.h  MakeClippingPlanes: the five planes of what a viewport shows
-  raytracer/    scene.h         Sphere (with its specular exponent and reflectivity), the
-                                lights (a std::variant) and Scene
+  lighting/     light.h         AmbientLight, PointLight, DirectionalLight and Light, the
+                                std::variant of the three
+                illumination.h  the illumination equation, term by term: DiffuseReflection,
+                                SpecularReflection, and kMatte for a surface without a highlight
+  raytracer/    scene.h         Sphere (with its specular exponent and reflectivity) and Scene,
+                                the spheres and the lights
                 raytracer.h     IntersectRaySphere and RayTracer: Render, ClosestIntersection,
                                 TraceRay (recursive, for reflections), ComputeLighting (shadows)
   rasterizer/   point.h         Point (x, y, the intensity h and the depth 1/z), and ToPixel

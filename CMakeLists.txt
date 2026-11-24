@@ -56,7 +56,7 @@ add_subdirectory(third_party)
 
 # --- The library ----------------------------------------------------------------------
 # One folder per layer, listed in dependency order (CLAUDE.md explains the layers). The
-# math layer is header-only.
+# math and lighting layers are header-only.
 add_library(cgfs STATIC
     # image: colors, the pixel buffer, file formats
     src/image/canvas.cpp

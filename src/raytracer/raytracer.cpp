@@ -1,5 +1,8 @@
 #include <cgfs/raytracer/raytracer.h>
 
+#include <cgfs/lighting/illumination.h>
+#include <cgfs/lighting/light.h>
+
 #include <cassert>
 #include <cmath>
 #include <stdexcept>
@@ -14,29 +17,6 @@ template <class... Ts>
 struct Overloaded : Ts... {
     using Ts::operator()...;
 };
-
-/// The diffuse contribution of one light of intensity `light_intensity` arriving along
-/// `to_light` at a surface with normal `normal`. Zero when the light is behind the surface.
-double Diffuse(double light_intensity, Vec3 normal, Vec3 to_light) {
-    const double n_dot_l = Dot(normal, to_light);
-    if (n_dot_l <= 0) {
-        return 0.0;
-    }
-    return light_intensity * n_dot_l / (Length(normal) * Length(to_light));
-}
-
-/// The specular contribution of the same light seen from `view`: the light bounces off
-/// in the mirror direction R = 2 N <N, L> - L, and the highlight fades with the angle
-/// between R and V as cos^exponent. Zero when the viewer is not on the reflected side.
-double Specular(double light_intensity, Vec3 normal, Vec3 to_light, Vec3 view,
-                double exponent) {
-    const Vec3 reflected = Reflect(to_light, normal);
-    const double r_dot_v = Dot(reflected, view);
-    if (r_dot_v <= 0) {
-        return 0.0;
-    }
-    return light_intensity * std::pow(r_dot_v / (Length(reflected) * Length(view)), exponent);
-}
 
 }  // namespace
 
@@ -133,9 +113,9 @@ double RayTracer::ComputeLighting(Vec3 point, Vec3 normal, Vec3 view, double spe
         if (blocker.sphere != nullptr) {
             return 0.0;
         }
-        double i = Diffuse(light_intensity, normal, to_light);
+        double i = DiffuseReflection(light_intensity, normal, to_light);
         if (specular != kMatte) {
-            i += Specular(light_intensity, normal, to_light, view, specular);
+            i += SpecularReflection(light_intensity, normal, to_light, view, specular);
         }
         return i;
     };

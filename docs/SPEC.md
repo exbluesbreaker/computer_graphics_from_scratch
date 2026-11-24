@@ -124,6 +124,10 @@ For a ray `P(t) = O + t * D` and a sphere with center `C` and radius `r`, let
 
 ### 3.5 Lighting
 
+The lights and the two terms of the illumination equation are a layer of their own,
+`lighting/`, below both renderers (section 14, decision 17): the ray tracer sums the
+terms here, with shadows.
+
 Three light types, each with an `intensity`:
 
 - Ambient: adds `intensity` to every point.
@@ -158,6 +162,12 @@ strongest when the viewer sits exactly where the light bounces to, and falls off
 As in the book, the specular term is not gated on `<N, L> > 0`; only the diffuse term is.
 `N` is unit length by construction; the division by `|N|` is kept so the code reads like
 the formula.
+
+The two terms of one light are `DiffuseReflection(I, N, L)` and
+`SpecularReflection(I, N, L, V, s)` of `lighting/illumination.h`, exactly the two lines
+of the sum above, each returning 0 where its line is skipped for the sign of its dot
+product. `ComputeLighting` adds them for every light that is not blocked, the specular
+one only when `s` is not `kMatte`.
 
 ### 3.6 Rasterizer: lines and triangles
 
@@ -686,6 +696,7 @@ include/cgfs/             public headers: one folder per layer, one file per con
     math/vec3.h  mat4.h  plane.h  bounding_sphere.h
     image/color.h  pixel_index.h  canvas.h  depth_buffer.h  image_io.h
     camera/viewport.h  camera.h  clipping_planes.h
+    lighting/light.h  illumination.h
     raytracer/scene.h  raytracer.h
     rasterizer/point.h  interpolate.h  line.h  triangle.h  projection.h  object.h
     rasterizer/model.h  instance.h  culling.h  clipping.h  scene.h
@@ -702,6 +713,7 @@ tests/
     image/color_test.cpp  pixel_index_test.cpp  canvas_test.cpp  depth_buffer_test.cpp
     image/image_io_test.cpp
     camera/viewport_test.cpp  camera_test.cpp  clipping_planes_test.cpp
+    lighting/illumination_test.cpp
     raytracer/raytracer_test.cpp
     rasterizer/interpolate_test.cpp  line_test.cpp  triangle_test.cpp  projection_test.cpp
     rasterizer/object_test.cpp  model_test.cpp  instance_test.cpp  culling_test.cpp
@@ -728,6 +740,7 @@ on the ones below it:
 math         vec3, mat4, plane, bounding_sphere                     vector algebra and plain geometry
 image        color, pixel_index, canvas, depth_buffer, image_io     colors, the pixel buffer, the depth buffer, file formats
 camera       viewport, camera, clipping_planes                      how canvas pixels map into the world
+lighting     light, illumination                                    the lights and the illumination equation
 raytracer    scene, raytracer                                       the ray tracing renderer
 rasterizer   point, interpolate, line, triangle, projection,        the rasterizing renderer
              object, model, instance, culling, clipping, scene
@@ -752,8 +765,14 @@ demo         raytracer_scenes, rasterizer_scenes                    the demo pic
   whichever renderer moves its camera, the rasterizer today.
   `camera/clipping_planes`: `MakeClippingPlanes`, the five planes of what a viewport
   shows.
-- `raytracer/scene`: plain data: spheres, lights, background color.
-  `raytracer/raytracer`: intersection, lighting, the render loop.
+- `lighting/light`: the three kinds of light and `Light`, the variant of them; plain
+  data. `lighting/illumination`: the illumination equation term by term,
+  `DiffuseReflection` and `SpecularReflection`, and `kMatte`, the specular exponent of a
+  surface without a highlight. Header-only, and a layer of its own because both
+  renderers light their scenes with it and neither may know the other.
+- `raytracer/scene`: plain data: spheres, the lights of the lighting layer, background
+  color. `raytracer/raytracer`: intersection, the lighting of a point with its shadows,
+  the render loop.
 - `rasterizer/point`: `Point`, with its intensity `h` and its depth `inv_z`, and
   `ToPixel`, the one conversion
   from interpolated coordinates to pixels. `rasterizer/interpolate`: `Interpolate`, the
@@ -783,7 +802,7 @@ demo         raytracer_scenes, rasterizer_scenes                    the demo pic
   thing.
 
 The canvas knows nothing about 3D, and the depth buffer nothing about triangles. The
-viewport knows nothing about spheres. The tracer
+viewport knows nothing about spheres, and a light nothing about what it lights. The tracer
 and the rasterizer write to the canvas only through `PutPixel`, and neither knows the
 other exists. `CLAUDE.md` states the design principles and the rules that keep the tree
 in this shape: a new layer is a new folder under `include/cgfs/`, `src/` and `tests/`
@@ -862,7 +881,7 @@ BoundingSphere MakeBoundingSphere(std::span<const Vec3> points);  // average; fa
 ```
 
 Plain geometry on `Vec3`, header-only like the rest of the layer. The ray tracer's
-`Sphere` (5.6) is a thing to be drawn, with a color and a finish; a `BoundingSphere` is
+`Sphere` (5.7) is a thing to be drawn, with a color and a finish; a `BoundingSphere` is
 only a bound, and shares nothing with it but the two fields.
 
 ### 5.2 `image/color.h`
@@ -981,35 +1000,50 @@ in the book's demo, because they are given in its coordinates and move with it;
 `MakeClippingPlanes` derives them from the viewport that the same camera looks through,
 and the caller keeps the two together.
 
-### 5.6 `raytracer/scene.h`
+### 5.6 `lighting/light.h`, `lighting/illumination.h`
 
 ```cpp
+// light.h
+struct AmbientLight     { double intensity = 0; };
+struct PointLight       { double intensity = 0; Vec3 position; };
+struct DirectionalLight { double intensity = 0; Vec3 direction; };   // points toward the light
+using Light = std::variant<AmbientLight, PointLight, DirectionalLight>;
+
+// illumination.h (section 3.5)
 inline constexpr double kMatte = -1.0;    // the specular value of a surface with no highlight
+double DiffuseReflection(double light_intensity, Vec3 normal, Vec3 to_light);
+// I <N, L> / (|N| |L|), or 0 when <N, L> <= 0
+double SpecularReflection(double light_intensity, Vec3 normal, Vec3 to_light, Vec3 view,
+                          double exponent);
+// I (<R, V> / (|R| |V|))^s with R = Reflect(L, N), or 0 when <R, V> <= 0; |normal| = 1
+```
+
+`std::variant` instead of a class hierarchy: lights are a small closed set, value
+semantics keep scenes copyable and trivially testable, and `std::visit` dispatches on
+the light type. The two terms are inline functions in the header, so the ray tracer's
+inner loop is the code it was when they were private to it.
+
+### 5.7 `raytracer/scene.h`
+
+```cpp
 struct Sphere {
     Vec3 center; double radius = 1.0; Color color;
     double specular = kMatte;     // shininess exponent
     double reflective = 0.0;      // 0: no reflection .. 1: a perfect mirror
 };
 
-struct AmbientLight     { double intensity = 0; };
-struct PointLight       { double intensity = 0; Vec3 position; };
-struct DirectionalLight { double intensity = 0; Vec3 direction; };   // points toward the light
-using Light = std::variant<AmbientLight, PointLight, DirectionalLight>;
-
 struct Scene {
     std::vector<Sphere> spheres;
-    std::vector<Light>  lights;
+    std::vector<Light>  lights;                 // lighting/light.h
     Color background_color = colors::kWhite;
 };
 ```
 
-`std::variant` instead of a class hierarchy: lights are a small closed set, value
-semantics keep scenes copyable and trivially testable, and `std::visit` dispatches on
-the light type. `Sphere` grew its `specular` and `reflective` fields one chapter at a
-time; aggregate initialization with designated initializers and default member values
-kept the existing scene code compiling each time.
+`Sphere` grew its `specular` and `reflective` fields one chapter at a time; aggregate
+initialization with designated initializers and default member values kept the existing
+scene code compiling each time.
 
-### 5.7 `raytracer/raytracer.h`
+### 5.8 `raytracer/raytracer.h`
 
 ```cpp
 inline constexpr double kInfinity = std::numeric_limits<double>::infinity();
@@ -1039,7 +1073,7 @@ The scene and viewport must outlive the tracer. `Hit::sphere` points into the sc
 sphere vector and is valid as long as that vector is not modified. `ClosestIntersection`,
 `TraceRay` and `ComputeLighting` are public so the tests can exercise them directly.
 
-### 5.8 `rasterizer/point.h`, `interpolate.h`, `line.h`, `triangle.h`, `projection.h`, `object.h`, `model.h`, `instance.h`, `culling.h`, `clipping.h`, `scene.h`
+### 5.9 `rasterizer/point.h`, `interpolate.h`, `line.h`, `triangle.h`, `projection.h`, `object.h`, `model.h`, `instance.h`, `culling.h`, `clipping.h`, `scene.h`
 
 ```cpp
 // point.h
@@ -1314,6 +1348,15 @@ Unit tests:
   and is no nearer than it, each side plane rejecting only its own side, and a point
   behind the camera on the rays of a point in view is out; a viewport at distance 2
   narrows the volume and moves the near plane.
+- `lighting`: `kMatte` is -1. `DiffuseReflection`: a light straight above the surface
+  arrives at full intensity; the intensity follows the cosine of the angle (0.5 at 60
+  degrees, `1 / sqrt(2)` at 45, within `1e-12`); a light behind the surface, or grazing
+  it, adds exactly nothing; neither vector has to be normalized. `SpecularReflection`:
+  the full intensity is seen in the mirror direction, for any exponent; it fades as
+  `cos^s` away from it (s = 2 and s = 10 at 45 degrees) and a larger exponent leaves
+  less; nothing is seen from more than 90 degrees off the mirror direction, or at 90
+  exactly; the lengths of `L` and `V` do not matter; the term is not gated on the light
+  being in front of the surface.
 - `raytracer`:
   - `IntersectRaySphere`: miss gives two infinite roots; hit gives two finite roots in
     the right order; tangent gives equal roots; origin inside the sphere gives one
@@ -1859,7 +1902,8 @@ The judgment calls behind this design, so they are not relitigated by accident.
 2. `double` everywhere. `float` would be the usual choice for a software renderer, but
    the cost is irrelevant at this scale and `double` keeps the golden images stable
    across compilers.
-3. Lights are a `std::variant`, not a class hierarchy.
+3. Lights are a `std::variant`, not a class hierarchy. Since the rasterizer needs them
+   too they are a layer of their own (decision 17).
 4. PNG output through the vendored single-header `stb_image_write`; PPM is the
    dependency-free fallback and the golden-image format.
 5. Catch2 v3 via `FetchContent` for tests. doctest or GoogleTest would work equally; the
@@ -2045,6 +2089,26 @@ The judgment calls behind this design, so they are not relitigated by accident.
       trusted to follow it; a check would need the whole mesh and an assumption that
       it is closed (3.12). The rule was not needed before this step and one model did
       not follow it (section 15).
+17. The lights and the illumination equation are a layer of their own, `lighting/`, below
+    both renderers.
+    - They were the ray tracer's: the light types in `raytracer/scene.h`, and the two
+      terms of the equation private to `raytracer.cpp`. The rasterizer's Shading chapter
+      lights its triangles with the same lights by the same equation, and the two
+      renderers do not know of each other, so what both need moved below both. One
+      definition per fact: a second set of light types, or a second copy of the
+      formulas, would be free to drift from the first.
+    - A layer rather than two more files in `math/`, where the rule of decision 13 would
+      put them, since they need nothing but `Vec3`. `math/` is vector algebra and plain
+      geometry; a light with an intensity, and the rule for how much of it a surface
+      sends on, are neither, and a folder of their own says what they are. It sits
+      beside `camera/`, the other layer the two renderers share.
+    - What moved is the two terms, not the sum. `ComputeLighting` keeps its loop over
+      the lights, because that loop is where the ray tracer's shadows are decided: a
+      light that a sphere blocks is left out of it.
+    - The terms are inline functions in the header. They were in an anonymous namespace
+      next to their only caller and compiled into its loop, and they still are: the
+      ray-traced pictures are byte for byte what they were and take as long (section
+      15).
 
 ## 15. Implementation notes
 
@@ -2053,7 +2117,8 @@ Measurements and known behaviours of the implementation, recorded 2026-11-02, up
 filled triangles and the reorganisation into layers, 2026-11-05 with shaded triangles,
 the perspective projection and objects made of triangles, 2026-11-09 with models,
 instances and scenes and, the same day, with model and camera transforms,
-2026-11-16 with clipping and shaded objects, and 2026-11-20 with back-face culling.
+2026-11-16 with clipping and shaded objects, 2026-11-20 with back-face culling, and
+2026-11-24 with the lighting layer.
 
 - Catch2 is pinned to v3.16.1.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
@@ -2313,6 +2378,13 @@ instances and scenes and, the same day, with model and camera transforms,
   refactor changed no output: all eight pictures at 320 x 180 and four of them at
   321 x 181, a zoomed render, the usage text and two error messages were compared byte
   for byte before and after.
+- On 2026-11-24 the light types and the two terms of the illumination equation moved out
+  of the ray tracer into the `lighting/` layer (decision 17). The refactor changed no
+  output: the fifteen pictures at 640 x 360 and at 321 x 181 and the fourteen references
+  were compared byte for byte before and after. Nor did it cost time: the reflective
+  scene at 1920 x 1080, run alternately from the build before and the build after,
+  printed 249 to 264 ms before and 241 to 248 ms after, the same within the noise of a
+  single run.
 - The `.clang-format` file is in place and clang-format 18 is now installed on the
   development machine, but the sources were formatted by hand to its rules and
   `clang-format --dry-run` still reports a handful of differences in older files. A
