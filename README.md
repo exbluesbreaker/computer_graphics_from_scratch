@@ -65,13 +65,19 @@ Use `--preset release` for an optimized build in `build/release`. Then:
 ./build/release/apps/render_demo --help
 ```
 
-Every run prints what it drew, how long the drawing took and where it went:
-`rendered 'filled' at 1920x1080 in 16.95 ms -> filled.png`. The time is the render
-alone, without writing the file, to a hundredth of a millisecond; it is a single run, so
-compare several before trusting a small difference. For the `shading` scene the line
-names the shading model too, `rendered 'shading' (phong shading) at ...`, so the three
-can be compared by their lines: at 1920 x 1080 they take about 22 ms (flat), 27 ms
-(Gouraud) and 61 ms (Phong) on the development machine.
+Every run prints what it drew and where it went, and on a line of its own how long the
+drawing took:
+
+```
+rendered 'shading' (gouraud shading) at 1920x1080 -> gouraud.png
+render time: 23.67 ms
+```
+
+The time is the render alone, without writing the file, to a hundredth of a
+millisecond; it is a single run, so compare several before trusting a small difference.
+The first line names the shading model for the `shading` scene, the one picture it
+changes, so the three can be told apart: at 1920 x 1080 they take about 22 ms (flat),
+27 ms (Gouraud) and 61 ms (Phong) on the development machine.
 
 Scenes: `reflective` (three shiny spheres on a shiny yellow floor with ambient, point and
 directional lights; the lights show up as highlights, the spheres cast shadows and mirror

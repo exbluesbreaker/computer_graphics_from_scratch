@@ -2196,12 +2196,24 @@ and `--distance` zooms them (in the clipping scene and the shading scene it move
 near plane out with the viewport as well); it has no effect on the 2D pictures.
 `--shading` has an effect on the shading scene alone, the one picture under the
 rasterizer's lights. The output format follows
-the extension. After every render the program prints one line with the picture's name,
-its size, the render time and the file it was saved to,
-`rendered 'filled' at 1920x1080 in 16.95 ms -> filled.png`, and for a picture under
-lights the shading model after its name,
-`rendered 'shading' (gouraud shading) at 1920x1080 in 26.88 ms -> gouraud.png`, so that
-three runs can be told apart by their lines. The time is that of the
+the extension. After every render the program prints two lines: what it drew, at what
+size and into which file, and under it the render time, on a line of its own, where it
+is easy to find and to compare between runs:
+
+```
+rendered 'filled' at 1920x1080 -> filled.png
+render time: 16.55 ms
+```
+
+For a picture under lights the first line names the shading model after the picture,
+so that three runs can be told apart:
+
+```
+rendered 'shading' (gouraud shading) at 1920x1080 -> gouraud.png
+render time: 23.67 ms
+```
+
+The time is that of the
 drawing alone, from the canvas that already exists to the canvas that is not yet saved,
 in milliseconds to two decimals: most of the rasterized pictures take a few
 milliseconds or less, and in whole milliseconds they all took "0 ms" or "1 ms". It is

@@ -295,7 +295,8 @@ int main(int argc, char** argv) {
 
         // The render time is that of the drawing alone: the canvas exists before the
         // clock starts and the file is written after it stops. In hundredths of a
-        // millisecond, since most of the rasterized pictures take only a few.
+        // millisecond, since most of the rasterized pictures take only a few, and on a
+        // line of its own, where it is easy to find and to compare between runs.
         cgfs::Canvas canvas(options->width, options->height);
         const auto start = std::chrono::steady_clock::now();
         scene->draw(canvas, options->settings);
@@ -308,9 +309,10 @@ int main(int argc, char** argv) {
             std::cout << " (" << FindShadingChoice(options->settings.shading_model).name
                       << " shading)";
         }
-        std::cout << " at " << canvas.width() << "x" << canvas.height() << " in " << std::fixed
-                  << std::setprecision(2) << elapsed.count() << " ms -> " << options->output
-                  << "\n";
+        std::cout << " at " << canvas.width() << "x" << canvas.height() << " -> " << options->output
+                  << "\n"
+                  << "render time: " << std::fixed << std::setprecision(2) << elapsed.count()
+                  << " ms\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         std::cerr << "render_demo: " << error.what() << "\n" << Usage();
