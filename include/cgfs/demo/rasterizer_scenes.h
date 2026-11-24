@@ -144,8 +144,9 @@ void DrawFilledCubesScene(Canvas& canvas, const Viewport& viewport);
 /// The picture of the Shading chapter, the first under lights: a floor with a cube, a
 /// matte ball and a shiny ball standing on it, lit by a little ambient light, a sun and a
 /// lamp close above the floor, drawn with RenderScene through a depth buffer and shaded
-/// with `shading_model`. It is one scene to be drawn three times, and it is composed so
-/// that each shading model gets more of it right than the one before:
+/// with `shading_model`. It is one scene to be drawn four times, the four pictures of
+/// the book's chapter, and it is composed so that each shading model gets more of it
+/// right than the one before:
 ///
 /// - Flat shading gets the cube nearly right and nothing else. The cube's faces are
 ///   flat, and one light value per triangle is what a flat face lit from far away has;
@@ -153,12 +154,18 @@ void DrawFilledCubesScene(Canvas& canvas, const Viewport& viewport);
 ///   apart and a faint seam shows, the one in the book's own figure. Both balls are
 ///   faceted, each triangle in its own shade. The floor, one face of two triangles, is
 ///   two flat tones with a seam from corner to corner.
+/// - Faceted Gouraud shading, the light at the corners of every triangle with the
+///   triangle's own normal, gets the cube right: the two triangles of a face agree on
+///   the light at the corners they share, and the seam is gone. So is the floor's,
+///   which is now evenly dull: the lamp's light arrives at its four far corners at a
+///   grazing angle, and nothing is computed in between. The balls are as faceted as
+///   before, each triangle lit by its own normal, with a slight gradient across it.
 /// - Gouraud shading gets the cube and the matte ball right. The balls' triangles carry
-///   the normals of a sphere at their corners, the light computed there runs smoothly
-///   across the edges, and the matte ball is round. The shiny ball is round too and has
-///   lost its highlights: they are smaller than its triangles, and what the corners
-///   catch of them is a dim smear. The floor is evenly dull: the lamp's light arrives
-///   at its four far corners at a grazing angle, and nothing is computed in between.
+///   the normals of a sphere at their corners, the light computed with those runs
+///   smoothly across the edges, and the matte ball is round. The shiny ball is round
+///   too and has lost its highlights: they are smaller than its triangles, and what the
+///   corners catch of them is a dim smear. The cube and the floor, which state no
+///   normals, are what they were.
 /// - Phong shading gets all of it right: two highlights on the shiny ball, the lamp's
 ///   and the sun's, round and sharp, and a pool of light on the floor under the lamp.
 ///   What stays wrong is what no shading can mend, the corners in the balls' outlines.

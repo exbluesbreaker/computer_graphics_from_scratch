@@ -25,7 +25,8 @@ back-face culling removes the triangles that are turned away from the camera, ab
 of a scene, without drawing them. And a scene can be lit: by the same lights and the same
 illumination equation as the ray tracer's spheres, with the light computed once per
 triangle (flat shading), at the corners of every triangle and interpolated (Gouraud
-shading) or at every pixel from interpolated normals (Phong shading).
+shading, with each triangle's own normal or with the normals of the model's surface) or
+at every pixel from interpolated normals (Phong shading).
 `docs/SPEC.md` describes the design, the architecture and the roadmap.
 
 ## Requirements
@@ -60,8 +61,9 @@ Use `--preset release` for an optimized build in `build/release`. Then:
 ./build/release/apps/render_demo --scene clipping --output clipping.png   # clipping, shaded solids
 ./build/release/apps/render_demo --scene filled --output filled.png   # hidden-surface removal
 ./build/release/apps/render_demo --scene shading --shading flat --output flat.png   # shading:
-./build/release/apps/render_demo --scene shading --shading gouraud --output gouraud.png   # one scene,
-./build/release/apps/render_demo --scene shading --shading phong --output phong.png   # three ways
+./build/release/apps/render_demo --scene shading --shading gouraud-faceted --output faceted.png   # one
+./build/release/apps/render_demo --scene shading --shading gouraud --output gouraud.png   # scene,
+./build/release/apps/render_demo --scene shading --shading phong --output phong.png   # four ways
 ./build/release/apps/render_demo --help
 ```
 
@@ -69,15 +71,15 @@ Every run prints what it drew and where it went, and on a line of its own how lo
 drawing took:
 
 ```
-rendered 'shading' (gouraud shading) at 1920x1080 -> gouraud.png
-render time: 23.67 ms
+rendered 'shading' (gouraud-faceted shading) at 1920x1080 -> faceted.png
+render time: 23.17 ms
 ```
 
 The time is the render alone, without writing the file, to a hundredth of a
 millisecond; it is a single run, so compare several before trusting a small difference.
 The first line names the shading model for the `shading` scene, the one picture it
-changes, so the three can be told apart: at 1920 x 1080 they take about 22 ms (flat),
-27 ms (Gouraud) and 61 ms (Phong) on the development machine.
+changes, so the four can be told apart: at 1920 x 1080 they take about 21 ms (flat),
+25 ms (Gouraud, in either form) and 57 ms (Phong) on the development machine.
 
 Scenes: `reflective` (three shiny spheres on a shiny yellow floor with ambient, point and
 directional lights; the lights show up as highlights, the spheres cast shadows and mirror
@@ -116,10 +118,12 @@ triangles, and through the depth buffer each cube shows the three faces it shoul
 narrows the field of view of the ray-traced scenes, the cube, the objects, the
 instances, the camera scene, the clipping scene, the filled cubes and the shading scene.
 
-### Shading: one scene, three ways
+### Shading: one scene, four ways
 
-`--shading flat|gouraud|phong` chooses how the `shading` scene is lit (Phong when it is
-not given; the other scenes do not read it). The scene is a floor with a blue cube, a
+`--shading flat|gouraud-faceted|gouraud|phong` chooses how the `shading` scene is lit
+(Phong when it is not given; the other scenes do not read it). These are the four
+pictures of the book's chapter, in its order: flat shading, Gouraud shading before the
+model has normals, Gouraud shading with them, and Phong shading. The scene is a floor with a blue cube, a
 matte green ball and a shiny red ball on it, under a little ambient light, a sun and a
 lamp that hangs low over the floor in front of the shiny ball; a small yellow ball marks
 the lamp. It is composed so that every object is right from one shading model on and
@@ -128,11 +132,18 @@ wrong before it, and each step up leaves fewer of them looking wrong:
 | | cube | matte ball | shiny ball | floor under the lamp |
 |---|---|---|---|---|
 | `flat`: the light once per triangle | nearly right: a faint seam across each lit face | faceted | faceted | two flat tones, a seam from corner to corner |
-| `gouraud`: the light at the corners, interpolated | right | right | round, but the highlights are a dim smear | evenly dull, no light under the lamp |
+| `gouraud-faceted`: the light at the corners, interpolated; every corner has its own triangle's normal | right | still faceted | still faceted | evenly dull, no light under the lamp |
+| `gouraud`: the same with the normals of the model's surface at the corners | right | right | round, but the highlights are a dim smear | evenly dull, no light under the lamp |
 | `phong`: the normals interpolated, the light at every pixel | right | right | right: two sharp highlights | right: a pool of light under the lamp |
 
-What stays wrong under all three is the outline of the balls, which shows the corners of
+What stays wrong under all four is the outline of the balls, which shows the corners of
 their triangles: shading changes how a surface is lit, not its shape.
+
+The two Gouraud rows are one algorithm with two answers to "which normal does a corner
+have". Faceted Gouraud shading gives every corner the normal of its own triangle, so the
+triangles that meet at a vertex of a ball each light it differently and the facets stay.
+Gouraud shading reads the normals the model states, and a ball states those of a sphere.
+For a model that states none, like the cube and the floor, the two are the same picture.
 
 In code, a scene is lit by handing `RenderScene` a list of lights and a `ShadingModel`
 in place of a triangle primitive:
@@ -151,7 +162,8 @@ cgfs::RenderScene(canvas, viewport, models, instances, camera, lights,
 The lights are in the world's coordinates. A model's triangles may state a normal at
 each corner, the normal of the curved surface they stand for, which is what lets Gouraud
 and Phong shading show a ball as round; a triangle that states none is lit as the flat
-face it is. `Model::specular` is the exponent of the model's highlight (`kMatte`, the
+face it is, and `ShadingModel::kGouraudFaceted` lights every triangle that way whatever
+it states. `Model::specular` is the exponent of the model's highlight (`kMatte`, the
 default, for none). The rasterizer casts no shadows. `docs/SPEC.md`, section 3.13, has
 the formulas, and section 14, decision 18, the choices.
 
@@ -230,9 +242,10 @@ include/cgfs/   public headers: one folder per layer, one file per concept
                 clipping.h      ClipScene, ClipInstance, ClipInstanceAgainstPlane,
                                 ClipTrianglesAgainstPlane and ClipTriangle: what a list of
                                 planes leaves of a scene
-                shading.h       ShadingModel (flat, Gouraud, Phong) and RenderObject under
-                                lights: an object's triangles in their colors times the light
-                                computed per triangle, per corner or per pixel
+                shading.h       ShadingModel (flat, faceted Gouraud, Gouraud, Phong) and
+                                RenderObject under lights: an object's triangles in their
+                                colors times the light computed per triangle, per corner or
+                                per pixel
                 scene.h         RenderScene: every instance of a model list and an instance
                                 list, in order, as a Camera sees them: transformed, culled,
                                 clipped, projected and drawn, with a triangle primitive or
@@ -275,6 +288,7 @@ committing:
 ./build/release/apps/render_demo --scene clipping --width 320 --height 180 --output tests/demo/golden/clipping_320x180.ppm
 ./build/release/apps/render_demo --scene filled --width 320 --height 180 --output tests/demo/golden/filled_320x180.ppm
 ./build/release/apps/render_demo --scene shading --shading flat --width 320 --height 180 --output tests/demo/golden/shading_flat_320x180.ppm
+./build/release/apps/render_demo --scene shading --shading gouraud-faceted --width 320 --height 180 --output tests/demo/golden/shading_gouraud_faceted_320x180.ppm
 ./build/release/apps/render_demo --scene shading --shading gouraud --width 320 --height 180 --output tests/demo/golden/shading_gouraud_320x180.ppm
 ./build/release/apps/render_demo --scene shading --shading phong --width 320 --height 180 --output tests/demo/golden/shading_phong_320x180.ppm
 ```

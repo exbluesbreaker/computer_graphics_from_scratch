@@ -705,8 +705,8 @@ TEST_CASE("RenderScene: from inside an object every face is a back face", "[rast
 
 namespace {
 
-constexpr ShadingModel kEveryShadingModel[] = {ShadingModel::kFlat, ShadingModel::kGouraud,
-                                               ShadingModel::kPhong};
+constexpr ShadingModel kEveryShadingModel[] = {ShadingModel::kFlat, ShadingModel::kGouraudFaceted,
+                                               ShadingModel::kGouraud, ShadingModel::kPhong};
 
 // A triangle in its own plane z = 0 that faces a camera looking at it along +Z: its
 // corners are listed clockwise as that camera sees them, top, bottom right, bottom left,
@@ -795,6 +795,9 @@ TEST_CASE("RenderScene under lights: the shading model is the caller's choice, P
     // Only Phong shading finds the point in front of the lamp: 255 * (0.125 + 0.75).
     CHECK(phong.GetPixel(4, 0) == Rgb8{223, 223, 223});
     CHECK(int{gouraud.GetPixel(4, 0)->r} < 175);
+    // The model states no normals, so the two forms of Gouraud shading are one picture.
+    CHECK(Bytes(CanvasWithLitScene(models, {kAhead}, kLampAhead, ShadingModel::kGouraudFaceted)) ==
+          Bytes(gouraud));
 
     Canvas by_default(kSize, kSize, kBlack);
     RenderScene(by_default, TestViewport(), models, std::vector<Instance>{kAhead}, Camera{},
@@ -900,13 +903,15 @@ TEST_CASE("RenderScene under lights: an instance's orientation turns its normals
         CHECK(EveryLitPixelIs(swung, Rgb8{191, 191, 191}));
     }
 
-    // Flat shading goes by the triangle's own normal, which the sun grazes as the model
-    // stands and reaches at 45 degrees once it is turned.
-    CHECK(LitPixels(CanvasWithLitScene(models, {kAhead}, sun, ShadingModel::kFlat)).empty());
+    // Flat shading and faceted Gouraud shading go by the triangle's own normal, which
+    // the sun grazes as the model stands and reaches at 45 degrees once it is turned.
     const Instance turned{
         .model = 0, .position = {0.0, 0.0, 1.0}, .orientation = MakeOYRotationMatrix(45.0)};
-    CHECK(EveryLitPixelIs(CanvasWithLitScene(models, {turned}, sun, ShadingModel::kFlat),
-                          Rgb8{135, 135, 135}));
+    for (const ShadingModel shading_model : {ShadingModel::kFlat, ShadingModel::kGouraudFaceted}) {
+        CHECK(LitPixels(CanvasWithLitScene(models, {kAhead}, sun, shading_model)).empty());
+        CHECK(EveryLitPixelIs(CanvasWithLitScene(models, {turned}, sun, shading_model),
+                              Rgb8{135, 135, 135}));
+    }
 }
 
 TEST_CASE(
@@ -1031,10 +1036,12 @@ TEST_CASE("RenderScene under lights: a triangle cut by a clipping plane is lit a
     CHECK(cut_gouraud.GetPixel(0, -8) == Rgb8{135, 135, 135});  // 255 * 0.75 / sqrt(2)
     CHECK(cut_gouraud.GetPixel(8, -8) == Rgb8{191, 191, 191});
 
-    // Flat shading lights each piece at its own center, with the triangle's own normal,
-    // which the pieces share: under a sun they are one shade, the whole triangle's.
-    const Canvas cut_flat =
-        CanvasWithLitScene({model}, {kAhead}, sun, ShadingModel::kFlat, cutting);
-    CHECK(LitPixels(cut_flat).size() == kept);
-    CHECK(EveryLitPixelIs(cut_flat, Rgb8{191, 191, 191}));
+    // Flat shading lights each piece at its own center and faceted Gouraud shading at
+    // its own corners, both with the triangle's own normal, which the pieces share:
+    // under a sun they are one shade, the whole triangle's.
+    for (const ShadingModel shading_model : {ShadingModel::kFlat, ShadingModel::kGouraudFaceted}) {
+        const Canvas cut_plain = CanvasWithLitScene({model}, {kAhead}, sun, shading_model, cutting);
+        CHECK(LitPixels(cut_plain).size() == kept);
+        CHECK(EveryLitPixelIs(cut_plain, Rgb8{191, 191, 191}));
+    }
 }

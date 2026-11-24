@@ -32,7 +32,7 @@ double Illumination(Vec3 point, Vec3 normal, double specular, std::span<const Li
 }
 
 /// Draw one triangle of the object under the lights: the book's RenderTriangle of the
-/// Shading chapter, with its three branches.
+/// Shading chapter, with a branch for each of its pictures.
 void RenderTriangle(Canvas& canvas, const Viewport& viewport, const Triangle& triangle,
                     std::span<const Vec3> vertices, std::span<const Point> projected,
                     double specular, std::span<const Light> lights, ShadingModel shading_model,
@@ -60,9 +60,19 @@ void RenderTriangle(Canvas& canvas, const Viewport& viewport, const Triangle& tr
             DrawFilledTriangle(canvas, p[0], p[1], p[2], triangle.color * intensity, depth_buffer);
             break;
         }
+        case ShadingModel::kGouraudFaceted: {
+            // Gouraud shading as the chapter first shows it: compute the light at the
+            // corners, each with the triangle's own normal, and interpolate it.
+            for (std::size_t k = 0; k < 3; ++k) {
+                p[k].h = Illumination(v[k], triangle_normal, specular, lights);
+            }
+            DrawShadedTriangle(canvas, p[0], p[1], p[2], triangle.color, depth_buffer);
+            break;
+        }
         case ShadingModel::kGouraud: {
-            // Gouraud shading: compute the light at the corners, and interpolate it. A
-            // corner that the clipping made has a normal shorter than 1.
+            // Gouraud shading with the model's normals: the same, each corner with the
+            // normal of the surface there. A corner that the clipping made has a normal
+            // shorter than 1.
             for (std::size_t k = 0; k < 3; ++k) {
                 const Vec3 corner_normal = Normalized(CornerNormal(triangle, k, triangle_normal));
                 p[k].h = Illumination(v[k], corner_normal, specular, lights);

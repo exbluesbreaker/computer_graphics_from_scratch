@@ -53,8 +53,8 @@ constexpr int kSize = 32;
 
 Viewport TestViewport() { return Viewport(kSize, kSize); }
 
-constexpr ShadingModel kEveryShadingModel[] = {ShadingModel::kFlat, ShadingModel::kGouraud,
-                                               ShadingModel::kPhong};
+constexpr ShadingModel kEveryShadingModel[] = {ShadingModel::kFlat, ShadingModel::kGouraudFaceted,
+                                               ShadingModel::kGouraud, ShadingModel::kPhong};
 
 // The direction from a surface that faces the camera back to the camera.
 constexpr Vec3 kTowardCamera{0.0, 0.0, -1.0};
@@ -197,6 +197,77 @@ TEST_CASE(
     // Three corners, three values.
     CHECK(top.h != right.h);
     CHECK(right.h != left.h);
+}
+
+TEST_CASE(
+    "RenderObject under lights: faceted Gouraud shading lights every corner with the "
+    "triangle's own normal",
+    "[shading]") {
+    const std::vector<Light> lights = {
+        AmbientLight{.intensity = 0.1},
+        PointLight{.intensity = 0.8, .position = {0.125, 0.0, 0.75}},
+    };
+    // The face with the normals of a curved surface at its corners, and without them.
+    Model plain = Face(kGreen);
+    plain.specular = 20.0;
+    Model smooth = plain;
+    smooth.triangles[0].normals = {Vec3{0.0, 0.6, -0.8}, Vec3{0.6, 0.0, -0.8},
+                                   Vec3{-0.6, 0.0, -0.8}};
+
+    // DrawShadedTriangle on the projected corners, each with the light of its vertex
+    // under the triangle's own normal, whatever normal the triangle states there.
+    Point top = kTop;
+    Point right = kRight;
+    Point left = kLeft;
+    top.h = LightAt(kCorners[0], kTowardCamera, lights, 20.0);
+    right.h = LightAt(kCorners[1], kTowardCamera, lights, 20.0);
+    left.h = LightAt(kCorners[2], kTowardCamera, lights, 20.0);
+    Canvas expected(kSize, kSize, kBlack);
+    DrawShadedTriangle(expected, top, right, left, kGreen);
+    const Canvas faceted = Lit(smooth, lights, ShadingModel::kGouraudFaceted);
+    CHECK(Bytes(faceted) == Bytes(expected));
+
+    // That is what Gouraud shading draws of the model without its normals, so for a
+    // model that states none the two are one picture, and for one that states them two.
+    CHECK(Bytes(faceted) == Bytes(Lit(plain, lights, ShadingModel::kGouraud)));
+    CHECK(Bytes(Lit(plain, lights, ShadingModel::kGouraudFaceted)) == Bytes(faceted));
+    CHECK(Bytes(faceted) != Bytes(Lit(smooth, lights, ShadingModel::kGouraud)));
+    // Three corners, three values: it is not flat shading either.
+    CHECK(Bytes(faceted) != Bytes(Lit(smooth, lights, ShadingModel::kFlat)));
+}
+
+TEST_CASE(
+    "RenderObject under lights: faceted Gouraud shading closes the seam flat shading "
+    "leaves across a face",
+    "[shading]") {
+    // A square face of two triangles that share the diagonal from the pixel (-8, 8) to
+    // (8, -8), and a lamp a quarter of a unit in front of its upper right half.
+    const std::vector<Light> lights = {
+        PointLight{.intensity = 1.0, .position = {0.125, 0.125, 0.75}}};
+    const Model square{
+        .vertices = {{-0.25, 0.25, 1.0},
+                     {0.25, 0.25, 1.0},
+                     {0.25, -0.25, 1.0},
+                     {-0.25, -0.25, 1.0}},
+        .triangles = {{{0, 1, 2}, kWhite}, {{0, 2, 3}, kWhite}},
+    };
+
+    // Flat shading gives each triangle the light of its own center, 0.973 and 0.647 of
+    // the lamp: a step across the diagonal.
+    const Canvas flat = Lit(square, lights, ShadingModel::kFlat);
+    CHECK(Red(flat, 1, 1) == 248);
+    CHECK(Red(flat, -1, -1) == 164);
+
+    // Lit at their corners, the two triangles have the same normal and so the same light
+    // at the two corners they share, 0.53 at both ends of the diagonal: the light runs
+    // on across it.
+    const Canvas faceted = Lit(square, lights, ShadingModel::kGouraudFaceted);
+    CHECK(Red(faceted, 0, 0) == 136);
+    CHECK(Red(faceted, 1, 1) > 136);
+    CHECK(Red(faceted, -1, -1) < 136);
+    CHECK(Red(faceted, 1, 1) - Red(faceted, -1, -1) < 25);
+    // The square states no normals, so this is Gouraud shading's picture of it too.
+    CHECK(Bytes(faceted) == Bytes(Lit(square, lights, ShadingModel::kGouraud)));
 }
 
 TEST_CASE(
@@ -362,8 +433,12 @@ TEST_CASE(
         CHECK(Red(smooth, 2, 0) < 180);
         CHECK(Red(smooth, -2, 0) - Red(smooth, 2, 0) < 50);
     }
-    // Flat shading is the same with the normals as without.
+    // Flat shading is the same with the normals as without, and so is faceted Gouraud
+    // shading, which does not read them: every corner of a triangle gets the light of
+    // the triangle's own normal, under a sun the same at all three, and the fold shows
+    // as it does under flat shading.
     CHECK(Bytes(Lit(folded, lights, ShadingModel::kFlat)) == Bytes(flat));
+    CHECK(Bytes(Lit(folded, lights, ShadingModel::kGouraudFaceted)) == Bytes(flat));
 }
 
 TEST_CASE("RenderObject under lights: the intensities stored in the triangles are not read",

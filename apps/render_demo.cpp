@@ -141,10 +141,13 @@ struct ShadingChoice {
     std::string_view description;
 };
 
-/// From the cheapest to the best.
+/// In the order of the book's chapter, each right where the one before it is not.
 constexpr ShadingChoice kShadingChoices[] = {
     {"flat", cgfs::ShadingModel::kFlat, "one light value per triangle"},
-    {"gouraud", cgfs::ShadingModel::kGouraud, "the light at the corners, interpolated"},
+    {"gouraud-faceted", cgfs::ShadingModel::kGouraudFaceted,
+     "the light at the corners, interpolated; every corner has its triangle's normal"},
+    {"gouraud", cgfs::ShadingModel::kGouraud,
+     "the same with the model's normals at the corners: curved surfaces look curved"},
     {"phong", cgfs::ShadingModel::kPhong, "the normals interpolated, the light per pixel"},
 };
 
@@ -195,7 +198,7 @@ std::string Usage() {
         << defaults.settings.distance << ")\n";
     label = "  --shading   ";
     for (const ShadingChoice& choice : kShadingChoices) {
-        out << label << std::left << std::setw(12) << (std::string(choice.name) + ":")
+        out << label << std::left << std::setw(17) << (std::string(choice.name) + ":")
             << choice.description << "\n";
         label = "              ";
     }

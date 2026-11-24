@@ -161,7 +161,7 @@ TEST_CASE("filled cubes scene matches the reference drawing", "[golden]") {
         "filled_320x180.ppm");
 }
 
-// The shading scene is one scene and three pictures, one per shading model.
+// The shading scene is one scene and four pictures, one per shading model.
 
 TEST_CASE("shading scene matches the reference drawing under flat shading", "[golden]") {
     CheckDrawingMatchesGolden(
@@ -170,6 +170,15 @@ TEST_CASE("shading scene matches the reference drawing under flat shading", "[go
                                          cgfs::ShadingModel::kFlat);
         },
         "shading_flat_320x180.ppm");
+}
+
+TEST_CASE("shading scene matches the reference drawing under faceted Gouraud shading", "[golden]") {
+    CheckDrawingMatchesGolden(
+        [](cgfs::Canvas& canvas) {
+            cgfs::demo::DrawShadingScene(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas),
+                                         cgfs::ShadingModel::kGouraudFaceted);
+        },
+        "shading_gouraud_faceted_320x180.ppm");
 }
 
 TEST_CASE("shading scene matches the reference drawing under Gouraud shading", "[golden]") {

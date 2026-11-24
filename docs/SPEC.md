@@ -19,8 +19,9 @@ projection of vertices, objects made of triangles, drawn as wireframes, filled o
 shaded, and scenes of instances of models, each with a model transform, seen from a
 movable camera, clipped in 3D to what that camera can see and, where asked, drawn
 through a depth buffer that removes the hidden surfaces and lit by the same lights and
-the same equation as the ray tracer's spheres, with flat, Gouraud or Phong shading;
-section 13 lists what comes next.
+the same equation as the ray tracer's spheres, with flat, Gouraud or Phong shading,
+Gouraud shading in both of the forms the book shows it in; section 13 lists what comes
+next.
 
 ## 2. Goals and non-goals
 
@@ -695,7 +696,9 @@ computed, by the illumination equation of 3.5: the lights and the equation are t
 tracer's, and the code is the same (`lighting/`). The equation gives the light at one
 point. Shading, the book's word, is how light computed at points is spread over a
 triangle, and the book's Shading chapter has three ways to do it, each computing more
-than the one before.
+than the one before. It shows the second of them, Gouraud shading, in two forms, before
+the model has normals and after, so the chapter has four pictures of one scene, and
+`ShadingModel` has a value for each.
 
 The light at a point:
 
@@ -753,7 +756,8 @@ Normals:
   normals over the whole triangle has at that point, so interpolating between the
   corners of a piece continues the interpolation over the whole triangle.
 
-The shading models. `ShadingModel` is `kFlat`, `kGouraud` or `kPhong`.
+The shading models. `ShadingModel` is `kFlat`, `kGouraudFaceted`, `kGouraud` or
+`kPhong`, in the chapter's order.
 `RenderObject(viewport, object, lights, shading_model = kPhong, depth_buffer = none)`
 draws an object under lights, the book's `RenderModel` of this chapter: `object` is a
 `Model` in the camera's coordinates and `lights` are the lights in the same
@@ -769,13 +773,26 @@ its corners, `Pk` their projections, `N = Normalized(TriangleNormal(V0, V1, V2))
   directional light has one value at every point, and flat shading is exact for it.
   Under a point light the two triangles of a face get values a little apart and a seam
   shows between them, and a curved surface shows every triangle in a shade of its own.
-- Gouraud shading computes the light at the three corners,
-  `hk = ComputeIllumination(Vk, Normalized(Nk), -Vk, s, lights)`, and draws
-  `DrawShadedTriangle` (3.6) through the `Pk` with those intensities. With the
-  triangle's own normal at every corner that removes the seam. With the normals of the
-  surface at the corners, all the triangles around a vertex compute the same light
-  there, the intensity runs on continuously across their edges, and a sphere looks
-  round. What it cannot show is what the light does between the corners: a highlight
+- Gouraud shading computes the light at the three corners and draws
+  `DrawShadedTriangle` (3.6) through the `Pk` with those as the intensities. It has two
+  forms, which differ in the normal a corner is lit with and in nothing else.
+  - Faceted Gouraud shading, `kGouraudFaceted`, is the chapter's first:
+    `hk = ComputeIllumination(Vk, N, -Vk, s, lights)`, every corner with the triangle's
+    own normal, whatever normals the model states. The two triangles of a flat face
+    have the same `N` and share two corners, so they compute the same light there and
+    the seam of flat shading is gone. On a curved surface the triangles that meet at a
+    vertex each light it with a normal of their own, their intensities do not meet
+    there, and every triangle still shows, with a slight gradient across it where flat
+    shading had one shade: the sphere that "still looks faceted" in the book.
+  - Gouraud shading, `kGouraud`, is the chapter's second, with the normals of the
+    model: `hk = ComputeIllumination(Vk, Normalized(Nk), -Vk, s, lights)`. With the
+    normals of the surface at the corners, all the triangles around a vertex compute
+    the same light there, the intensity runs on continuously across their edges, and a
+    sphere looks round. For a triangle that states no normals `Nk = N` and the two forms
+    are one: faceted Gouraud shading is the picture Gouraud shading draws of the same
+    model with its normals taken out.
+
+  What neither can show is what the light does between the corners: a highlight
   smaller than a triangle is missed or caught at one corner and smeared, and a lamp
   close to a large face leaves the face dim, the dimmer the closer it comes, since its
   light reaches the far corners at a grazing angle (the book's Figure 13-7).
@@ -806,7 +823,7 @@ its corners, `Pk` their projections, `N = Normalized(TriangleNormal(V0, V1, V2))
   `z = 1 / inv_z`, it returns `(Vx z / d, Vy z / d, z)`: the projection of 3.7 solved
   for the vertex. It inverts `ProjectVertex` up to that function's truncation.
   Precondition: `inv_z > 0`, asserted.
-- None of the three reads the intensities stored in the triangles (`h`); under lights
+- None of the four reads the intensities stored in the triangles (`h`); under lights
   they are computed. A triangle without area has no normal and is not drawn. The normals
   are taken as they are: unit vectors as `TransformModel` leaves them, or interpolated
   between unit vectors as the clipping leaves them. Gouraud shading normalizes one to
@@ -967,7 +984,7 @@ demo         raytracer_scenes, rasterizer_scenes                    the demo pic
   the triangles that are turned away from the camera. `rasterizer/clipping`:
   `ClipScene`, `ClipInstance`, `ClipInstanceAgainstPlane`, `ClipTrianglesAgainstPlane`
   and `ClipTriangle`, what a list of planes leaves of a scene. `rasterizer/shading`:
-  `ShadingModel`, flat, Gouraud or Phong, and `RenderObject` under lights, which draws
+  `ShadingModel`, flat, Gouraud in two forms or Phong, and `RenderObject` under lights, which draws
   an object's triangles in their colors times the light computed for them.
   `rasterizer/scene`: `RenderScene`, every instance of a model list and an instance
   list, in order, as a camera sees them: transformed, culled, clipped, projected and
@@ -1365,7 +1382,8 @@ std::optional<Model> ClipInstance(Model instance, std::span<const Plane> planes)
 std::vector<Model> ClipScene(std::vector<Model> scene, std::span<const Plane> planes);
 
 // shading.h (section 3.13)
-enum class ShadingModel { kFlat, kGouraud, kPhong };
+enum class ShadingModel { kFlat, kGouraudFaceted, kGouraud, kPhong };
+// kGouraudFaceted: Gouraud shading with the triangle's own normal at every corner
 void RenderObject(Canvas& canvas, const Viewport& viewport, const Model& object,
                   std::span<const Light> lights,
                   ShadingModel shading_model = ShadingModel::kPhong,
@@ -1433,9 +1451,10 @@ second `RenderObject`, overloads that take a list of lights and a `ShadingModel`
 the first take a triangle primitive: the book keeps the names and adds the lights to
 the parameters, and so does this. The two `RenderObject`s are in two headers, the first
 with `Triangle` and the second with the shading it does. The shading model is a scoped
-enumeration with the book's three names and defaults to Phong, the book's demo's
-default and the one of the three that is right everywhere; a caller who wants a cheaper
-one says so. `DrawPhongTriangle` does not have the signature the other three primitives
+enumeration with the book's three names, and a fourth for the form of Gouraud shading
+that the chapter shows before its models have normals; it defaults to Phong, the
+book's demo's default and the one of them that is right everywhere, and a caller who
+wants a cheaper one says so. `DrawPhongTriangle` does not have the signature the other three primitives
 share and is not a `DrawTriangleFunction`: it needs the viewport, to find the point a
 pixel shows, and the lights.
 
@@ -1910,17 +1929,18 @@ Unit tests:
     drawn with it. Under lights (a triangle listed clockwise as the camera sees it, its
     corners 0.26 from its center, off the pixel boundaries, drawn through a depth
     buffer): an instance scaled and placed off the axis is, for each shading model, the
-    canvas of `RenderObject` under lights on its placed model; the three models light
-    the same pixels differently, Phong shading alone reaching 223 in front of a lamp,
-    and Phong is the default; the camera, the instance and the lamp moved together by
+    canvas of `RenderObject` under lights on its placed model; flat, Gouraud and Phong
+    shading light the same pixels differently, Phong shading alone reaching 223 in front
+    of a lamp, the two forms of Gouraud shading give one canvas for a model without
+    normals, and Phong is the default; the camera, the instance and the lamp moved together by
     one vector give the same canvas to the bit, and the lamp left behind another; to a
     camera turned 90 degrees a sun in the world's +X lights a triangle that faces it at
     191 on every pixel, the canvas of the default camera with the sun behind it, a sun
     in the world's -Z leaves the triangle dark, and a lamp a quarter of a unit in front
     of the triangle gives the default camera's picture within one level; an instance
     turned 45 degrees turns its stated normals from 45 degrees off the sun, 135, to
-    straight at it, 191, and its own normal, for flat shading, from across the sun to 45
-    degrees off it; a model twice as large with normals of three other lengths, placed
+    straight at it, 191, and its own normal, for flat and faceted Gouraud shading, from
+    across the sun to 45 degrees off it; a model twice as large with normals of three other lengths, placed
     at half the scale, is the same canvas; a triangle listed the other way round is not
     drawn, and with the culling off is lit by the ambient light alone, 63, where the
     front face has 191; of two instances on the axis the nearer shows in either order
@@ -1928,7 +1948,7 @@ Unit tests:
     corner and along it at two, cut by the plane `x = 0`, is under Phong shading the
     whole one with everything behind the plane removed, within one level, 135 on the
     cut, under Gouraud shading 135 on the cut where the whole triangle has 95, and under
-    flat shading one shade over the same pixels.
+    flat and faceted Gouraud shading one shade over the same pixels.
   - Shading, `RenderObject` under lights (one triangle on the viewport plane that faces
     the camera, its corners on the pixels (0, 12), (12, -12) and (-12, -12) and its
     center on (0, -4)): Phong shading by default; under ambient light alone every
@@ -1936,10 +1956,18 @@ Unit tests:
     light at the angle of the 3-4-5 triangle every model draws it in `0.525` of the
     color, one value being all a flat face lit from far away has; flat shading draws the
     filled triangle in the color times the light at the center, which is not the light
-    under the lamp, and draws the same whatever normals the triangle states, while the
-    other two change; Gouraud shading draws `DrawShadedTriangle` through the projected
-    corners with `ComputeIllumination` at each vertex, the model's exponent included,
-    three different values; with normals leaning by the 3-4-5 angle at the two lower
+    under the lamp, and draws the same whatever normals the triangle states, while
+    Gouraud and Phong shading change; faceted Gouraud shading draws `DrawShadedTriangle`
+    through the projected corners with `ComputeIllumination` at each vertex under the
+    triangle's own normal, whatever normals the triangle states, which is the canvas of
+    Gouraud shading on the same triangle without its normals and neither that of Gouraud
+    shading with them nor that of flat shading; on a square face of two triangles with a
+    lamp a quarter of a unit in front of its upper right half flat shading reads 248 and
+    164 either side of the diagonal, and faceted Gouraud shading 136 on the diagonal,
+    more above it and less below, less than 25 apart, the canvas of Gouraud shading for
+    a face that states no normals; Gouraud shading draws `DrawShadedTriangle` through
+    the projected corners with `ComputeIllumination` at each vertex, the model's
+    exponent included, three different values; with normals leaning by the 3-4-5 angle at the two lower
     corners those corners read 204 and the top more than 250 under a light from the
     camera, and normals half as long give the same canvases; a corner without a normal
     is lit as the flat face's while the corner with one leans away; Phong shading draws
@@ -1953,11 +1981,12 @@ Unit tests:
     is brighter all over by what its center caught; two triangles folded along a shared
     side read 241 and 80 under flat shading, and with the surface's normals at their
     corners 180 on the fold from both sides under Gouraud and Phong shading, less than
-    50 apart two pixels either side of it; the stored intensities are not read; the
+    50 apart two pixels either side of it, while faceted Gouraud shading, which does not
+    read them, draws the canvas of flat shading; the stored intensities are not read; the
     same corners the other way round are lit by the ambient light alone; three corners
     on a line, or two at one place, draw nothing, nor does an empty object; every
     triangle is lit in its own color; and through a depth buffer the nearer of two
-    triangles shows under all three, where painted in list order the later one does.
+    triangles shows under all four, where painted in list order the later one does.
 
 Golden-image tests:
 
@@ -1973,8 +2002,9 @@ Golden-image tests:
   and mirror ball references show reflections. `lines_320x180.ppm`,
   `triangles_320x180.ppm`, `shaded_320x180.ppm`, `cube_320x180.ppm`,
   `objects_320x180.ppm`, `instances_320x180.ppm`, `camera_320x180.ppm`,
-  `clipping_320x180.ppm`, `filled_320x180.ppm` and the three of the shading scene,
-  `shading_flat_320x180.ppm`, `shading_gouraud_320x180.ppm` and
+  `clipping_320x180.ppm`, `filled_320x180.ppm` and the four of the shading scene,
+  `shading_flat_320x180.ppm`, `shading_gouraud_faceted_320x180.ppm`,
+  `shading_gouraud_320x180.ppm` and
   `shading_phong_320x180.ppm`, are the rasterizer's demos (section
   9): every pixel of them comes from `DrawLine`, `DrawFilledTriangle`,
   `DrawShadedTriangle` or `DrawPhongTriangle`, the objects' through `RenderObject`, the
@@ -1995,7 +2025,7 @@ Golden-image tests:
   pixel boundaries to get one. The shading scene, though its camera is turned and two
   of its models are spheres, calls neither: its vertices come from additions,
   multiplications, divisions and square roots, all of which IEEE arithmetic rounds one
-  way (section 9 says how). What differs between platforms in its three references is
+  way (section 9 says how). What differs between platforms in its four references is
   `pow`, in the specular term of the shiny ball, by an amount far inside the test's
   tolerance.
 - `golden_test.cpp` renders the same scenes and compares every channel of every pixel
@@ -2006,8 +2036,9 @@ Golden-image tests:
   golden test, so the app and the test cannot drift apart.
 - The references are regenerated only when rendering behaviour changes on purpose, with
   `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|filled> --width 320 --height 180 --output tests/demo/golden/...`
-  and `render_demo --scene shading --shading <flat|gouraud|phong> ...` for the three of
-  the shading scene,
+  and `render_demo --scene shading --shading <flat|gouraud-faceted|gouraud|phong> ...`
+  for the four of the shading scene, the second into
+  `shading_gouraud_faceted_320x180.ppm`,
   from a Release build, and the pictures are reviewed before they are committed. The
   `flat` reference doubles as a regression test: neither the specular nor the shadow code
   path may change the output of an ambient-only scene, `diffuse` pins the shadows of
@@ -2022,8 +2053,8 @@ Golden-image tests:
   `instances`, `camera` and `clipping` are drawn with the culling off and are byte for
   byte what they were. `filled` is also the one reference that would notice a triangle
   listed the wrong way round, and only in the cube; the other models are drawn without
-  culling, and their winding was checked once, outside the tests (section 15). The three
-  shading references pin one scene under the three shading models: the same 26216
+  culling, and their winding was checked once, outside the tests (section 15). The four
+  shading references pin one scene under the four shading models: the same 26216
   pixels are covered in each, and what differs is the light. They are drawn with
   culling, so they would notice a triangle of the sphere or of the floor listed the
   wrong way round. Shading changed no other reference: the fourteen from before it are
@@ -2034,7 +2065,7 @@ Golden-image tests:
 `render_demo` renders one of the demo pictures to a file:
 
 ```
-render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|filled|shading|axes] [--width N] [--height N] [--distance D] [--shading flat|gouraud|phong] [--output PATH]
+render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|filled|shading|axes] [--width N] [--height N] [--distance D] [--shading flat|gouraud-faceted|gouraud|phong] [--output PATH]
 ```
 
 Defaults: `reflective`, 1920 x 1080, distance 1, Phong shading, `render.png`. The `mirrorball` scene is
@@ -2142,10 +2173,11 @@ left in this picture, are gone with those faces; section 15 counts them. The `sh
 scene is the picture of the Shading chapter and the first under lights:
 `DrawShadingScene(canvas, viewport, shading_model)` draws five instances of five models
 with `RenderScene(..., camera, lights, shading_model, &depth_buffer)`, and
-`--shading flat|gouraud|phong` chooses the shading model, Phong when it is not given.
-It is one scene made to be drawn three times: every object in it is right from one
-shading model on and wrong before it, so that from flat to Gouraud to Phong fewer and
-fewer of them look wrong. The stage is a floor in the plane y = 0, 10 x 8 around the
+`--shading flat|gouraud-faceted|gouraud|phong` chooses the shading model, Phong when it
+is not given. It is one scene made to be drawn four times, the chapter's four pictures:
+every object in it is right from one shading model on and wrong before it, so that from
+flat to faceted Gouraud to Gouraud to Phong each step leaves fewer of them looking
+wrong. The stage is a floor in the plane y = 0, 10 x 8 around the
 world's origin, one face of two triangles. On it stand, from left to right, a blue cube
 at (-3.6, 1, 2.2), the cube of the objects scene in one color; a matte green ball of
 radius 1.2 at (-0.5, 1.2, 1.5); and a shiny red ball of the same size at
@@ -2166,9 +2198,17 @@ and 8 levels of 255 apart, a faint seam across the face, the one in the book's o
 figure. The balls show their 288 triangles each, every one in a shade of its own, one
 of the shiny ball's bright with what its center caught of a highlight. The floor is two
 flat tones, (191, 183, 167) and (105, 101, 92) at 1920 x 1080, with a seam from corner
-to corner. Under Gouraud shading the cube has no seams and the matte ball is round, the
-light running on smoothly across its triangles' edges; both are as good as they get.
-The shiny ball is round too and has lost its highlights, which are smaller than its
+to corner. Under faceted Gouraud shading, with the light at the corners of every
+triangle and the triangle's own normal there, the cube has no seams and is as good as
+it gets: the two triangles of a face agree on the light at the corners they share. The
+floor has lost its seam the same way and is evenly dull, between (93, 90, 81) and
+(108, 104, 94), as it stays until Phong shading. The balls are as faceted as they
+were: 288 triangles each, now with a slight gradient across every one. This is the
+picture the book reaches first and finds wanting, the sphere that still looks faceted.
+Under Gouraud shading, which lights the same corners with the normals the balls state
+there, the matte ball is round, the light running on smoothly across its triangles'
+edges, and nothing else has changed: the cube and the floor state no normals and are
+pixel for pixel what they were. The shiny ball is round too and has lost its highlights, which are smaller than its
 triangles: a dim smear is what the corners catch of them. The floor is evenly dull: the
 lamp's light reaches its four corners at a grazing angle, and nothing is computed in
 between. Under Phong shading the shiny ball has its two highlights, the lamp's and the
@@ -2195,7 +2235,8 @@ always matches the canvas aspect ratio,
 and `--distance` zooms them (in the clipping scene and the shading scene it moves the
 near plane out with the viewport as well); it has no effect on the 2D pictures.
 `--shading` has an effect on the shading scene alone, the one picture under the
-rasterizer's lights. The output format follows
+rasterizer's lights; its four values are `flat`, `gouraud-faceted`, `gouraud` and
+`phong`. The output format follows
 the extension. After every render the program prints two lines: what it drew, at what
 size and into which file, and under it the render time, on a line of its own, where it
 is easy to find and to compare between runs:
@@ -2209,8 +2250,8 @@ For a picture under lights the first line names the shading model after the pict
 so that three runs can be told apart:
 
 ```
-rendered 'shading' (gouraud shading) at 1920x1080 -> gouraud.png
-render time: 23.67 ms
+rendered 'shading' (gouraud-faceted shading) at 1920x1080 -> faceted.png
+render time: 23.17 ms
 ```
 
 The time is that of the
@@ -2293,10 +2334,10 @@ Targets apply to Release builds on a single core. Debug builds have no targets.
 | clipping demo (47 instances, 1626 triangles, shaded)| 1920 x 1080 | under 150 ms; about 50 ms measured               |
 | clipping demo                                    | 320 x 180   | under 20 ms; about 2 ms measured                 |
 | filled demo (15 instances, 78 of 180 triangles drawn, depth buffer)| 1920 x 1080 | under 60 ms; about 16 ms measured |
-| shading demo, flat (5 instances, 322 of 718 triangles drawn, depth buffer) | 1920 x 1080 | under 70 ms; about 22 ms measured |
-| shading demo, Gouraud                            | 1920 x 1080 | under 80 ms; about 27 ms measured                |
-| shading demo, Phong (the light at 950565 pixels and more) | 1920 x 1080 | under 200 ms; about 61 ms measured      |
-| shading demo, each of the three                  | 320 x 180   | under 10 ms; 1.1, 1.4 and 2.5 ms measured        |
+| shading demo, flat (5 instances, 322 of 718 triangles drawn, depth buffer) | 1920 x 1080 | under 70 ms; about 21 ms measured |
+| shading demo, Gouraud, faceted or with the model's normals | 1920 x 1080 | under 80 ms; about 25 ms measured      |
+| shading demo, Phong (the light at 950565 pixels and more) | 1920 x 1080 | under 200 ms; about 57 ms measured      |
+| shading demo, each of the four                   | 320 x 180   | under 10 ms; 1.1, 1.3, 1.2 and 2.6 ms measured   |
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
@@ -2335,7 +2376,9 @@ section 4 is meant to absorb these steps as additions:
   in `RenderScene`; and shading: the lights and the illumination equation shared with
   the ray tracer, normals at the corners of a model's triangles, and `RenderScene` and
   `RenderObject` under lights with the book's three shading models, flat, Gouraud and
-  Phong, the last through `DrawPhongTriangle`, which lights every pixel. Next, in the
+  Phong, Gouraud in both the forms the chapter shows it in, with the triangles' own
+  normals and with the model's, and Phong through `DrawPhongTriangle`, which lights
+  every pixel. Next, in the
   book's order: textures (which need perspective-correct interpolation, and with it the
   intensities and the normals of a triangle will be interpolated over the triangle in
   space rather than over its picture, and those of a clipped triangle will stop
@@ -2583,12 +2626,25 @@ The judgment calls behind this design, so they are not relitigated by accident.
     - The shading model is a parameter, a scoped enumeration, where the book's demo has
       a global `ShadingModel`. Its default is Phong, the demo's default and the one
       model that is right for every surface.
-    - The three models are three calls of three primitives, not three branches inside
+    - It has four values for the book's three models, because the chapter has four
+      pictures: Gouraud shading appears first with the triangles' own normals, where the
+      sphere "still looks faceted", and then with the normals of the model.
+      `kGouraudFaceted` is the first of the two, so that any scene can be drawn in all
+      four stages and the step that the model's normals make can be seen on its own.
+      The demo gets the same picture from a second global switch, `UseVertexNormals`,
+      which applies to Phong shading as well; here the choice of normals belongs to the
+      model (below), and the one combination the chapter draws a picture of is a value of
+      the enumeration instead of a second parameter. It is no new algorithm: it is
+      `kGouraud` on a model that states no normals, and the code is three lines that
+      say so. Phong shading with the triangles' own normals, the demo's sixth
+      combination, has no value; the chapter does not show it, and a model without
+      normals gives it.
+    - The models are calls of primitives, not branches inside
       one fill loop as in the demo's `RenderTriangle`: flat shading is
-      `DrawFilledTriangle` in the color times the light, Gouraud shading is
-      `DrawShadedTriangle` with the light at the corners as its intensities, which is
-      what the chapter's text says to do, and Phong shading is a fourth primitive,
-      `DrawPhongTriangle`. The first two were there and are used as they are.
+      `DrawFilledTriangle` in the color times the light, Gouraud shading in both its
+      forms is `DrawShadedTriangle` with the light at the corners as its intensities,
+      which is what the chapter's text says to do, and Phong shading is a fourth
+      primitive, `DrawPhongTriangle`. The first two were there and are used as they are.
     - `DrawPhongTriangle` lives in `triangle.h` with the other three and shares their
       helpers. It is the first primitive that needs more than canvas points: the
       viewport, to take a pixel back to the point it shows, and the lights. What it
@@ -2617,7 +2673,9 @@ The judgment calls behind this design, so they are not relitigated by accident.
       transforms to a zero vector.
     - Flat shading uses the triangle's own normal whatever the model states. The demo,
       with vertex normals on, uses the normal of whichever corner sorts lowest on the
-      canvas. One value per triangle wants the one normal the triangle has.
+      canvas. One value per triangle wants the one normal the triangle has. Faceted
+      Gouraud shading ignores the model's normals by definition; the other two shading
+      models are the ones that read them.
     - `TransformModel` returns the normals at unit length, and after that nothing
       normalizes them until the light is computed: the clipping interpolates them as
       they are and leaves the result as short as it comes out, and Phong shading
@@ -2922,21 +2980,30 @@ instances and scenes and, the same day, with model and camera transforms,
   spheres of the floor and of the cube reach across a plane, which costs a look at their
   triangles and no more. It covers 26216 of the 57600 pixels at 320 x 180 and 950565 of
   2073600 at 1920 x 1080, the same pixels under each shading model.
-- Render times of the shading demo, as `render_demo` prints them, nine runs of each on
-  2026-11-24, Release, the smallest, the median and the largest: at 1920 x 1080 flat
-  shading 20.6, 22.4 and 24.5 ms, Gouraud 25.1, 26.9 and 28.1 ms, Phong 59.6, 61.1 and
-  69.0 ms; at 320 x 180 flat 1.04, 1.12 and 1.22 ms, Gouraud 1.28, 1.38 and 1.44 ms,
-  Phong 2.35, 2.52 and 2.68 ms. Flat and Gouraud shading compute the light 322 and 966
-  times a picture and differ by what `DrawShadedTriangle` costs over
-  `DrawFilledTriangle`, a list of intensities per row. Phong shading computes it at
-  every pixel it sets, three lights and for the shiny ball up to two `pow` calls each
-  time, and allocates four lists per row: about 39 ms more than flat shading for the
-  950565 pixels covered, some 40 ns a pixel. Much of what is left of the flat figure is not shading:
-  clearing the canvas and making a depth buffer of 16.6 MB, as in the filled demo.
-- The three shading references differ from one another on nearly every covered pixel,
-  if often by little: flat and Gouraud on 25475 of the 26216, by more than 8 levels on
-  21829; Gouraud and Phong on 24457, by more than 8 levels on 14995, the pool of light
-  on the floor and the highlights.
+- Render times of the shading demo, as `render_demo` prints them, nine runs of each of
+  the four in one session on 2026-11-24, Release, the smallest, the median and the
+  largest: at 1920 x 1080 flat shading 20.3, 20.9 and 24.0 ms, faceted Gouraud 23.6,
+  25.2 and 26.6 ms, Gouraud 23.7, 24.8 and 27.6 ms, Phong 56.6, 57.1 and 61.2 ms; at
+  320 x 180 flat 0.88, 1.10 and 1.23 ms, faceted Gouraud 1.05, 1.27 and 1.49 ms,
+  Gouraud 0.99, 1.15 and 1.60 ms, Phong 2.38, 2.55 and 3.05 ms. (A session earlier the
+  same day gave medians of 22.4, 26.9 and 61.1 ms for flat, Gouraud and Phong at
+  1920 x 1080: the machine's state moves these by a few milliseconds, and figures are
+  to be compared within one session.) Flat shading computes the light 322 times a
+  picture and both forms of Gouraud shading 966 times; they differ by what
+  `DrawShadedTriangle` costs over `DrawFilledTriangle`, a list of intensities per row,
+  and the two forms of Gouraud shading do not differ measurably. Phong shading computes
+  the light at every pixel it sets, three lights and for the shiny ball up to two `pow`
+  calls each time, and allocates four lists per row: about 36 ms more than flat shading
+  for the 950565 pixels covered, some 38 ns a pixel. Much of what is left of the flat
+  figure is not shading: clearing the canvas and making a depth buffer of 16.6 MB, as
+  in the filled demo.
+- How the four shading references differ, of the 26216 pixels they all cover: flat and
+  faceted Gouraud on 24061, by more than 8 levels on 20630, most of them the floor,
+  which goes from two tones to one dull one; faceted Gouraud and Gouraud on 3423, by
+  more than 8 levels on 1043, all of them on the two balls but 44 in the blue of the
+  bulb, which has normals too, the cube and the floor being pixel for pixel the same;
+  Gouraud and Phong on 24457, by more than 8 levels on
+  14995, the pool of light on the floor and the highlights.
 - The shading demo's geometry calls neither `cos` nor `sin` (section 9), so the margins
   that the camera and clipping demos needed are not what keeps it reproducible. They
   were measured all the same, in a scratch program that included the demo source: no

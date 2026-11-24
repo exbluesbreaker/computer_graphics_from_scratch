@@ -99,8 +99,9 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
 /// per corner or per pixel as `shading_model` says: flat, Gouraud or Phong shading (see
 /// shading.h, where RenderObject with lights does the work). A model's `specular` is how
 /// shiny its instances are, and the normals at the corners of its triangles are what
-/// lets Gouraud and Phong shading show a curved surface as one. The intensities stored
-/// in the triangles are not read. Nothing casts a shadow.
+/// lets Gouraud and Phong shading show a curved surface as one; faceted Gouraud shading
+/// is Gouraud shading that does not read them. The intensities stored in the triangles
+/// are not read. Nothing casts a shadow.
 ///
 /// Lit faces are solid, so a scene wants a `depth_buffer` here, a buffer of the canvas's
 /// size, unless it is listed from the back to the front; without one the instances and

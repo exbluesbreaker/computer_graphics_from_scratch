@@ -15,8 +15,9 @@ namespace cgfs {
 // The illumination equation (see illumination.h) says how bright one point of a surface
 // is, given the point, the normal of the surface there and the lights. A triangle covers
 // many pixels, and shading, the book's word, is how light computed at points is spread
-// over all of them. The book has three ways. Each computes more than the one before it,
-// and each is right in cases where the one before it is not.
+// over all of them. The book has three ways, and shows the second of them in two forms,
+// before the model has normals and after: four pictures of one scene. Each is right in
+// cases where the one before it is not.
 //
 // Flat shading computes the light once per triangle, at its center and with the
 // triangle's own normal, and fills the triangle with its color times that. A flat face
@@ -26,16 +27,26 @@ namespace cgfs {
 // shade, and the facets show.
 //
 // Gouraud shading computes the light at the three corners and has DrawShadedTriangle
-// interpolate it over the triangle. With the triangle's own normal at every corner that
-// removes the seams and little else. The gain comes with the normals of the model: when
-// the corners of a triangle carry the normals of the curved surface the triangle stands
-// for (see Triangle), all the triangles around a vertex compute the same light there,
-// the shade runs on smoothly across their edges, and the sphere looks round. What cannot
-// show is anything the light does between the corners. A highlight that falls inside a
-// triangle is missed, or caught at one corner and smeared over the triangle. A lamp
-// close to a large face leaves the face dim, and dimmer the closer it comes: at the
-// far-away corners its light arrives at a grazing angle, and the bright spot in front of
-// the lamp is nowhere computed.
+// interpolate it over the triangle. The chapter comes to it in two steps.
+//
+// First with nothing but the triangles to go by: every corner is lit with the normal of
+// its own triangle. This is "faceted" Gouraud shading here, for what it leaves of a
+// sphere. It mends the cube: the two triangles of a face have the same normal and share
+// two corners, so they compute the same light there, and the seam between them is gone.
+// It does not mend the sphere. The triangles that meet at a vertex of a curved surface
+// each light that vertex with a normal of their own, their shades do not meet there, and
+// every triangle still shows, now with a slight gradient across it.
+//
+// Then with the normals of the model: when the corners of a triangle carry the normals
+// of the curved surface the triangle stands for (see Triangle), all the triangles around
+// a vertex compute the same light there, the shade runs on smoothly across their edges,
+// and the sphere looks round. Nothing about the computing has changed between the two
+// steps, only which normal goes into it: for a model that states no normals they are
+// the same picture. What neither can show is anything the light does between the
+// corners. A highlight that falls inside a triangle is missed, or caught at one corner
+// and smeared over the triangle. A lamp close to a large face leaves the face dim, and
+// dimmer the closer it comes: at the far-away corners its light arrives at a grazing
+// angle, and the bright spot in front of the lamp is nowhere computed.
 //
 // Phong shading interpolates the normals instead of the light and computes the light at
 // every pixel (see DrawPhongTriangle). The highlights are where they belong and have
@@ -43,11 +54,13 @@ namespace cgfs {
 // The price is one evaluation of the equation per pixel instead of one or three per
 // triangle.
 //
-// None of the three changes the outline of an object: a sphere made of triangles keeps
-// its corners along its silhouette, however smoothly its inside is shaded.
+// None of them changes the outline of an object: a sphere made of triangles keeps its
+// corners along its silhouette, however smoothly its inside is shaded.
 
-/// Which of the three ways a scene is shaded with.
-enum class ShadingModel { kFlat, kGouraud, kPhong };
+/// Which of the four a scene is shaded with, in the chapter's order: flat shading;
+/// Gouraud shading with every triangle's own normal at its corners, whatever normals
+/// the model states; Gouraud shading with the model's normals; Phong shading.
+enum class ShadingModel { kFlat, kGouraudFaceted, kGouraud, kPhong };
 
 /// Draw an object under lights: the book's RenderModel of the Shading chapter.
 ///
@@ -58,13 +71,16 @@ enum class ShadingModel { kFlat, kGouraud, kPhong };
 /// lights, and every triangle is then drawn in its color times the light that falls on
 /// it, by `shading_model`:
 ///
-///     kFlat       i  = ComputeIllumination(C, N, -C)
-///                 DrawFilledTriangle(P0, P1, P2, color * i)
+///     kFlat              i  = ComputeIllumination(C, N, -C)
+///                        DrawFilledTriangle(P0, P1, P2, color * i)
 ///
-///     kGouraud    hk = ComputeIllumination(Vk, Nk, -Vk)        for each corner k
-///                 DrawShadedTriangle(P0, P1, P2 with the intensities hk, color)
+///     kGouraudFaceted    hk = ComputeIllumination(Vk, N, -Vk)       for each corner k
+///                        DrawShadedTriangle(P0, P1, P2 with the intensities hk, color)
 ///
-///     kPhong      DrawPhongTriangle(P0, P1, P2 with the normals Nk, color)
+///     kGouraud           hk = ComputeIllumination(Vk, Nk, -Vk)      for each corner k
+///                        DrawShadedTriangle(P0, P1, P2 with the intensities hk, color)
+///
+///     kPhong             DrawPhongTriangle(P0, P1, P2 with the normals Nk, color)
 ///
 /// Vk is the corner k of the triangle and Pk its projection; C = (V0 + V1 + V2) / 3 is
 /// the triangle's center. N is the triangle's own normal (TriangleNormal), normalized.
@@ -82,9 +98,12 @@ enum class ShadingModel { kFlat, kGouraud, kPhong };
 /// pixel, after the interpolation.
 ///
 /// Flat shading uses the triangle's own normal whatever normals the model states: one
-/// point, one normal and one value per triangle is what it is. The intensities stored in
-/// the triangles (`h`) are not read by any of the three; under lights they are computed.
-/// A triangle without area has no normal and is not drawn.
+/// point, one normal and one value per triangle is what it is. Faceted Gouraud shading
+/// does the same at each of the three corners, which is all that tells it from Gouraud
+/// shading: it is the picture Gouraud shading draws of the same model without its
+/// normals. The intensities stored in the triangles (`h`) are not read by any of the
+/// four; under lights they are computed. A triangle without area has no normal and is
+/// not drawn.
 ///
 /// The triangles are drawn in list order, through `depth_buffer` if there is one, so
 /// that a pixel shows the nearest of them; without one the later triangle shows, as in
