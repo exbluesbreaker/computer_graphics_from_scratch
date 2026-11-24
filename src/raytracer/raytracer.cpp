@@ -11,15 +11,6 @@
 
 namespace cgfs {
 
-namespace {
-
-template <class... Ts>
-struct Overloaded : Ts... {
-    using Ts::operator()...;
-};
-
-}  // namespace
-
 SphereIntersection IntersectRaySphere(Vec3 origin, Vec3 direction, const Sphere& sphere) {
     const Vec3 co = origin - sphere.center;
 

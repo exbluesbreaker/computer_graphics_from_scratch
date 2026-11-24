@@ -41,4 +41,24 @@ namespace cgfs {
 /// the precondition.
 [[nodiscard]] Point ProjectVertex(const Viewport& viewport, Vec3 v);
 
+/// The vertex that is seen at the canvas point (x, y) at the depth z = 1 / `inv_z`: the
+/// way back from the canvas into the camera's coordinates, the book's UnProjectVertex.
+///
+/// The pixel looks through the viewport point (Vx, Vy, d) = CanvasToViewport(x, y), and
+/// everything it sees lies on the ray from the camera through that point. The projection
+/// forgot how far along the ray the vertex was; `inv_z` is what was kept of it (see
+/// Point). The projection's equations, solved for the vertex:
+///
+///     z = 1 / inv_z,   x = Vx * z / d,   y = Vy * z / d
+///
+/// A triangle primitive that interpolates 1/z has one for every pixel it draws, and so,
+/// through this function, the point of the triangle the pixel shows: what lighting a
+/// pixel needs to know (see DrawPhongTriangle).
+///
+/// This is the inverse of ProjectVertex except for its truncation: a vertex is projected
+/// to the pixel it falls in and comes back as the point of its triangle seen at that
+/// pixel's coordinates, a fraction of a pixel away. Precondition: inv_z > 0, a depth in
+/// front of the camera; asserted.
+[[nodiscard]] Vec3 UnprojectVertex(const Viewport& viewport, int x, int y, double inv_z);
+
 }  // namespace cgfs

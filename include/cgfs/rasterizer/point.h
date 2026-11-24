@@ -1,9 +1,12 @@
 #pragma once
 
+#include <cgfs/math/vec3.h>
+
 namespace cgfs {
 
 /// A point on the canvas, in the canvas's centered integer coordinates (see Canvas),
-/// with an intensity for the shaded primitives and a depth for the depth-buffered ones.
+/// with an intensity for the shaded primitives, a depth for the depth-buffered ones and
+/// a normal for the one that lights every pixel.
 ///
 /// The rasterizer works in 2D: everything it draws is made of these, and the 3D part
 /// of the pipeline ends by producing them (see ProjectVertex in projection.h).
@@ -20,11 +23,17 @@ namespace cgfs {
 /// DepthBuffer for why it is 1/z and not z). ProjectVertex sets it, and the filled and
 /// shaded triangles interpolate it like h when they are given a depth buffer; nothing
 /// else reads it. It defaults to 0: a point made in 2D has no depth.
+///
+/// `normal` is the direction the surface faces at the vertex this point is the
+/// projection of, in the camera's coordinates. Only DrawPhongTriangle reads it, to
+/// interpolate it across the triangle the way the others interpolate h, and whoever
+/// calls that sets it. It defaults to the zero vector: no normal.
 struct Point {
     int x = 0;
     int y = 0;
     double h = 1.0;
     double inv_z = 0.0;
+    Vec3 normal;
 
     bool operator==(const Point&) const = default;
 };

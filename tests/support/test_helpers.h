@@ -3,6 +3,7 @@
 // Teaches Catch2 how to print the project's value types in assertion messages.
 
 #include <cgfs/image/color.h>
+#include <cgfs/lighting/light.h>
 #include <cgfs/math/mat4.h>
 #include <cgfs/math/plane.h>
 #include <cgfs/math/vec3.h>
@@ -11,6 +12,7 @@
 
 #include <catch2/catch_tostring.hpp>
 #include <string>
+#include <variant>
 
 namespace Catch {
 
@@ -75,7 +77,31 @@ struct StringMaker<cgfs::Triangle> {
         return "Triangle(v=" + std::to_string(t.v[0]) + " " + std::to_string(t.v[1]) + " " +
                std::to_string(t.v[2]) + ", " + StringMaker<cgfs::Color>::convert(t.color) +
                ", h=" + std::to_string(t.h[0]) + " " + std::to_string(t.h[1]) + " " +
-               std::to_string(t.h[2]) + ")";
+               std::to_string(t.h[2]) +
+               ", normals=" + StringMaker<cgfs::Vec3>::convert(t.normals[0]) + " " +
+               StringMaker<cgfs::Vec3>::convert(t.normals[1]) + " " +
+               StringMaker<cgfs::Vec3>::convert(t.normals[2]) + ")";
+    }
+};
+
+template <>
+struct StringMaker<cgfs::Light> {
+    static std::string convert(const cgfs::Light& light) {
+        return std::visit(cgfs::Overloaded{
+                              [](const cgfs::AmbientLight& l) {
+                                  return "AmbientLight(" + std::to_string(l.intensity) + ")";
+                              },
+                              [](const cgfs::PointLight& l) {
+                                  return "PointLight(" + std::to_string(l.intensity) + ", at " +
+                                         StringMaker<cgfs::Vec3>::convert(l.position) + ")";
+                              },
+                              [](const cgfs::DirectionalLight& l) {
+                                  return "DirectionalLight(" + std::to_string(l.intensity) +
+                                         ", toward " +
+                                         StringMaker<cgfs::Vec3>::convert(l.direction) + ")";
+                              },
+                          },
+                          light);
     }
 };
 

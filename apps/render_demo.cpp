@@ -7,6 +7,7 @@
 #include <cgfs/demo/rasterizer_scenes.h>
 #include <cgfs/demo/raytracer_scenes.h>
 #include <cgfs/image/canvas.h>
+#include <cgfs/rasterizer/shading.h>
 #include <cgfs/raytracer/raytracer.h>
 #include <cgfs/raytracer/scene.h>
 
@@ -34,30 +35,47 @@ void RenderScene(const cgfs::Scene& scene, double distance, cgfs::Canvas& canvas
     cgfs::RayTracer(scene, viewport).Render(canvas);
 }
 
+/// What the command line says about how a picture is to be drawn. A picture reads what
+/// applies to it: the 2D pictures nothing, and only the lit ones the shading model.
+struct Settings {
+    double distance = 1.0;
+    cgfs::ShadingModel shading_model = cgfs::ShadingModel::kPhong;
+};
+
 /// A ray-traced demo scene in the shape the table wants.
 template <cgfs::Scene (*Build)()>
-void RayTraced(cgfs::Canvas& canvas, double distance) {
-    RenderScene(Build(), distance, canvas);
+void RayTraced(cgfs::Canvas& canvas, const Settings& settings) {
+    RenderScene(Build(), settings.distance, canvas);
 }
 
-/// A rasterized demo picture in the shape the table wants; it has no use for the distance.
+/// A rasterized demo picture in the shape the table wants; it has no use for the settings.
 template <void (*Draw)(cgfs::Canvas&)>
-void Rasterized(cgfs::Canvas& canvas, double /*distance*/) {
+void Rasterized(cgfs::Canvas& canvas, const Settings& /*settings*/) {
     Draw(canvas);
 }
 
 /// A rasterized 3D picture in the shape the table wants: it is drawn through the
-/// aspect-matched viewport, so `distance` zooms it like the ray-traced scenes.
+/// aspect-matched viewport, so the distance zooms it like the ray-traced scenes.
 template <void (*Draw)(cgfs::Canvas&, const cgfs::Viewport&)>
-void Projected(cgfs::Canvas& canvas, double distance) {
-    Draw(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas, 1.0, distance));
+void Projected(cgfs::Canvas& canvas, const Settings& settings) {
+    Draw(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas, 1.0, settings.distance));
 }
 
-/// One picture: its name on the command line, its line in the usage text, how to draw it.
+/// A rasterized 3D picture under lights in the shape the table wants: projected like the
+/// others and shaded with the model the command line chose.
+template <void (*Draw)(cgfs::Canvas&, const cgfs::Viewport&, cgfs::ShadingModel)>
+void Lit(cgfs::Canvas& canvas, const Settings& settings) {
+    Draw(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas, 1.0, settings.distance),
+         settings.shading_model);
+}
+
+/// One picture: its name on the command line, its line in the usage text, how to draw
+/// it, and whether the shading model changes it.
 struct DemoScene {
     std::string_view name;
     std::string_view description;
-    void (*draw)(cgfs::Canvas& canvas, double distance);
+    void (*draw)(cgfs::Canvas& canvas, const Settings& settings);
+    bool lit = false;
 };
 
 /// The first row is the default.
@@ -88,6 +106,8 @@ constexpr DemoScene kScenes[] = {
      Projected<cgfs::demo::DrawClippingScene>},
     {"filled", "filled cubes listed in the wrong order and set right by a depth buffer",
      Projected<cgfs::demo::DrawFilledCubesScene>},
+    {"shading", "a cube, two balls and a floor under a lamp, shaded as --shading says",
+     Lit<cgfs::demo::DrawShadingScene>, true},
     {"axes", "the coordinate axes and corner dots (no ray tracing)",
      Rasterized<cgfs::demo::DrawAxesScene>},
 };
@@ -114,13 +134,36 @@ std::string SceneNames() {
     return names;
 }
 
+/// One shading model: its name on the command line and its line in the usage text.
+struct ShadingChoice {
+    std::string_view name;
+    cgfs::ShadingModel shading_model;
+    std::string_view description;
+};
+
+/// From the cheapest to the best.
+constexpr ShadingChoice kShadingChoices[] = {
+    {"flat", cgfs::ShadingModel::kFlat, "one light value per triangle"},
+    {"gouraud", cgfs::ShadingModel::kGouraud, "the light at the corners, interpolated"},
+    {"phong", cgfs::ShadingModel::kPhong, "the normals interpolated, the light per pixel"},
+};
+
+const ShadingChoice& FindShadingChoice(cgfs::ShadingModel shading_model) {
+    for (const ShadingChoice& choice : kShadingChoices) {
+        if (choice.shading_model == shading_model) {
+            return choice;
+        }
+    }
+    return kShadingChoices[0];  // not reached: the table has every model
+}
+
 // --- The command line -----------------------------------------------------------------
 
 struct Options {
     std::string scene = std::string(kScenes[0].name);
     int width = 1920;
     int height = 1080;
-    double distance = 1.0;
+    Settings settings;
     std::string output = "render.png";
 };
 
@@ -132,7 +175,12 @@ std::string Usage() {
         out << (i > 0 ? "|" : "") << kScenes[i].name;
     }
     out << "]\n"
-           "                   [--width N] [--height N] [--distance D] [--output PATH]\n"
+           "                   [--width N] [--height N] [--distance D] [--shading ";
+    for (std::size_t i = 0; i < std::size(kShadingChoices); ++i) {
+        out << (i > 0 ? "|" : "") << kShadingChoices[i].name;
+    }
+    out << "]\n"
+           "                   [--output PATH]\n"
            "\n";
     std::string_view label = "  --scene     ";
     for (const DemoScene& scene : kScenes) {
@@ -143,8 +191,16 @@ std::string Usage() {
     out << "              (default: " << defaults.scene << ")\n"
         << "  --width     canvas width in pixels (default: " << defaults.width << ")\n"
         << "  --height    canvas height in pixels (default: " << defaults.height << ")\n"
-        << "  --distance  viewport distance; larger zooms in (default: " << defaults.distance
-        << ")\n"
+        << "  --distance  viewport distance; larger zooms in (default: "
+        << defaults.settings.distance << ")\n";
+    label = "  --shading   ";
+    for (const ShadingChoice& choice : kShadingChoices) {
+        out << label << std::left << std::setw(12) << (std::string(choice.name) + ":")
+            << choice.description << "\n";
+        label = "              ";
+    }
+    out << "              how the pictures under lights are shaded (default: "
+        << FindShadingChoice(defaults.settings.shading_model).name << ")\n"
         << "  --output    output file, .png or .ppm (default: " << defaults.output << ")\n";
     return out.str();
 }
@@ -179,6 +235,18 @@ int ParsePositiveInt(std::string_view name, const std::string& text) {
     return value;
 }
 
+cgfs::ShadingModel ParseShadingModel(std::string_view name, const std::string& text) {
+    std::string names;
+    for (const ShadingChoice& choice : kShadingChoices) {
+        if (choice.name == text) {
+            return choice.shading_model;
+        }
+        names += (names.empty() ? "" : ", ") + std::string(choice.name);
+    }
+    throw std::runtime_error(std::string(name) + " expects one of " + names + ", got '" + text +
+                             "'");
+}
+
 // Returns nullopt when --help was requested. Throws std::runtime_error on bad input.
 std::optional<Options> ParseArgs(int argc, char** argv) {
     Options options;
@@ -198,7 +266,9 @@ std::optional<Options> ParseArgs(int argc, char** argv) {
         } else if (arg == "--height") {
             options.height = ParsePositiveInt(arg, value);
         } else if (arg == "--distance") {
-            options.distance = ParsePositiveDouble(arg, value);
+            options.settings.distance = ParsePositiveDouble(arg, value);
+        } else if (arg == "--shading") {
+            options.settings.shading_model = ParseShadingModel(arg, value);
         } else if (arg == "--output") {
             options.output = value;
         } else {
@@ -228,14 +298,19 @@ int main(int argc, char** argv) {
         // millisecond, since most of the rasterized pictures take only a few.
         cgfs::Canvas canvas(options->width, options->height);
         const auto start = std::chrono::steady_clock::now();
-        scene->draw(canvas, options->distance);
+        scene->draw(canvas, options->settings);
         const std::chrono::duration<double, std::milli> elapsed =
             std::chrono::steady_clock::now() - start;
         canvas.Save(options->output);
 
-        std::cout << "rendered '" << scene->name << "' at " << canvas.width() << "x"
-                  << canvas.height() << " in " << std::fixed << std::setprecision(2)
-                  << elapsed.count() << " ms -> " << options->output << "\n";
+        std::cout << "rendered '" << scene->name << "'";
+        if (scene->lit) {
+            std::cout << " (" << FindShadingChoice(options->settings.shading_model).name
+                      << " shading)";
+        }
+        std::cout << " at " << canvas.width() << "x" << canvas.height() << " in " << std::fixed
+                  << std::setprecision(2) << elapsed.count() << " ms -> " << options->output
+                  << "\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         std::cerr << "render_demo: " << error.what() << "\n" << Usage();

@@ -55,9 +55,11 @@ namespace cgfs {
 /// name them by index, like any other. A crossing is always computed from the corner in
 /// front toward the corner behind (IntersectSegmentPlane), so two triangles that share
 /// the cut side compute the same point bit for bit and still meet there. The same
-/// fraction t gives the new corner its intensity, hA + t (hB - hA). The color is the
-/// triangle's. A, B and C are the triangle's corners rotated, never swapped, so every
-/// piece keeps the winding of the triangle it was cut from.
+/// fraction t gives the new corner its intensity, hA + t (hB - hA), and its normal,
+/// NA + t (NB - NA), which is no normal where neither corner had one, and is left as
+/// long as the interpolation makes it (see shading.h). The color is the triangle's. A, B and C are
+/// the triangle's corners rotated, never swapped, so every piece keeps the winding of the triangle
+/// it was cut from.
 ///
 /// The corners that were cut off stay in `vertices`, named by no triangle any more;
 /// ClipInstanceAgainstPlane removes them. Precondition: the triangle's indices are less

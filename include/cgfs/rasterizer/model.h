@@ -2,6 +2,7 @@
 
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
+#include <cgfs/lighting/illumination.h>
 #include <cgfs/math/bounding_sphere.h>
 #include <cgfs/math/mat4.h>
 #include <cgfs/math/vec3.h>
@@ -25,18 +26,36 @@ namespace cgfs {
 /// the whole model at once (see BoundingSphere and ClipInstanceAgainstPlane). The default
 /// is the sphere that contains everything, with which every triangle is examined;
 /// `MakeBoundingSphere(vertices)` gives a model a real one.
+///
+/// `specular` is how shiny the model's surface is: the exponent s of the specular term of
+/// the illumination equation (see SpecularReflection), as for a sphere of the ray tracer.
+/// A higher value gives a smaller, sharper highlight. The default, kMatte, is a surface
+/// without one. Only the drawing that lights reads it (see shading.h).
 struct Model {
     std::vector<Vec3> vertices;
     std::vector<Triangle> triangles;
     BoundingSphere bounding_sphere;
+    double specular = kMatte;
 
     bool operator==(const Model&) const = default;
 };
 
 /// The model under a transform, as a model of its own: every vertex V becomes
-/// `transform * V`, the triangles are the same, and the bounding sphere moves along with
-/// the vertices. Its center is transformed like a vertex, and its radius is multiplied
-/// by the factor by which the transform scales lengths, the book's `radius * scale`.
+/// `transform * V`, the triangles name the same corners in the same colors, and the
+/// bounding sphere moves along with the vertices. Its center is transformed like a
+/// vertex, and its radius is multiplied by the factor by which the transform scales
+/// lengths, the book's `radius * scale`.
+///
+/// The normals at the triangles' corners turn with the model and come out at unit
+/// length: each becomes `Normalized(TransformDirection(transform, normal))`. The
+/// transform is applied without its translation, since a normal is a direction and
+/// moving a surface does not change which way it faces; and its scale, which would
+/// stretch a normal like any other direction, is taken out again, since a normal says
+/// which way and not how far. However long the model stated its normals, from here on
+/// they are unit vectors, which is what lets them be interpolated with one another: by
+/// the clipping, where a triangle is cut, and by Phong shading, across a triangle. A
+/// corner without a normal, the zero vector, stays without one. The specular exponent is
+/// the model's.
 ///
 /// That factor is read off the matrix: the first column of the matrix is where the unit
 /// vector along X ends up (before the translation), so its length is how much longer a
@@ -49,7 +68,8 @@ struct Model {
 /// book's words: what the clipping step works on, and what RenderObject projects.
 ///
 /// Precondition: `transform` scales uniformly, as described; otherwise the sphere may
-/// not contain the transformed vertices.
+/// not contain the transformed vertices, and the normals are no longer perpendicular to
+/// the surface.
 [[nodiscard]] Model TransformModel(const Model& model, const Mat4& transform);
 
 /// Draw the wireframe of a model under a transform: the vertices of

@@ -1,27 +1,42 @@
 #include <cgfs/rasterizer/triangle.h>
 
+#include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/lighting/illumination.h>
+#include <cgfs/lighting/light.h>
+#include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/line.h>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "rasterizer/pixel_helpers.h"
 #include "support/test_helpers.h"
 
+using cgfs::AmbientLight;
 using cgfs::Canvas;
 using cgfs::Color;
+using cgfs::ComputeIllumination;
 using cgfs::DepthBuffer;
+using cgfs::DirectionalLight;
 using cgfs::DrawFilledTriangle;
 using cgfs::DrawLine;
+using cgfs::DrawPhongTriangle;
 using cgfs::DrawShadedTriangle;
 using cgfs::DrawWireframeTriangle;
+using cgfs::kMatte;
+using cgfs::Light;
 using cgfs::Point;
+using cgfs::PointLight;
 using cgfs::Rgb8;
+using cgfs::ToRgb8;
+using cgfs::Vec3;
+using cgfs::Viewport;
 using cgfs_test::Bytes;
 using cgfs_test::LitPixels;
 using cgfs_test::PixelsOf;
@@ -520,4 +535,283 @@ TEST_CASE("DrawWireframeTriangle: takes a depth buffer and ignores it", "[raster
         CHECK(canvas.GetPixel(pixel.x, pixel.y) == Rgb8{0, 0, 255});
     }
     CHECK(depth_buffer.InvZ(-5, 6) == 0.0);  // on the outline, outside the filled triangle
+}
+
+// --- Lit pixel by pixel ----------------------------------------------------------------
+//
+// The canvas is 32 x 32 and is seen through a 1 x 1 viewport at distance 1, so the pixel
+// (x, y) at the depth 1 shows the point (x / 32, y / 32, 1) of the camera's coordinates.
+
+namespace {
+
+const Viewport kPhongViewport(32, 32);
+
+// The direction from a surface that faces the camera back to the camera.
+constexpr Vec3 kTowardCamera{0.0, 0.0, -1.0};
+
+// `p` as the projection of a vertex at the depth 1, on the viewport plane, of a surface
+// with this normal there: one that faces the camera unless the test says otherwise.
+Point OnPlane(Point p, Vec3 normal = kTowardCamera) {
+    p.inv_z = 1.0;
+    p.normal = normal;
+    return p;
+}
+
+// A fresh black canvas with one Phong triangle on it.
+Canvas CanvasWithPhongTriangle(Point p0, Point p1, Point p2, const std::vector<Light>& lights,
+                               double specular = kMatte, Color color = kWhite) {
+    Canvas canvas(32, 32, kBlack);
+    DrawPhongTriangle(canvas, kPhongViewport, p0, p1, p2, color, specular, lights);
+    return canvas;
+}
+
+// A large triangle on the viewport plane, facing the camera, around the pixel (0, -4).
+const Point kFaceA = OnPlane({-12, -12});
+const Point kFaceB = OnPlane({12, -12});
+const Point kFaceC = OnPlane({0, 12});
+
+}  // namespace
+
+TEST_CASE("DrawPhongTriangle: under ambient light alone it is the filled triangle, dimmed",
+          "[rasterizer]") {
+    // The shapes of the shaded-triangle test, the rows without pixels among them. Ambient
+    // light is the same at every pixel, so the picture is the filled triangle's in the
+    // color times the light.
+    const Point triangles[][3] = {
+        {{0, 0}, {4, 0}, {0, 4}},               // a right triangle
+        {{-3, -2}, {4, 1}, {0, 5}},             // a general one
+        {{0, 0}, {4, 4}, {0, 4}},               // the long side on the left
+        {{0, 0}, {-4, 4}, {0, 4}},              // the long side on the right
+        {{0, 6}, {0, 0}, {2, 2}},               // fractional x on the short sides
+        {{-2, 0}, {2, 0}, {0, 2}},              // flat bottom
+        {{-2, 2}, {2, 2}, {0, 0}},              // flat top
+        {{0, 0}, {0, 3}, {0, 6}},               // collinear
+        {{-100, -100}, {100, -100}, {0, 100}},  // beyond the canvas
+        {{0, 0}, {3, 0}, {1, 1}},               // a skipped lower row
+        {{-6, -6}, {-6, -5}, {-5, 2}},          // a skipped apex row
+    };
+    const std::vector<Light> lights = {AmbientLight{.intensity = 0.5}};
+    for (const auto& [a, b, c] : triangles) {
+        INFO("triangle (" << a.x << ", " << a.y << ") (" << b.x << ", " << b.y << ") (" << c.x
+                          << ", " << c.y << ")");
+        Canvas filled(32, 32, kBlack);
+        DrawFilledTriangle(filled, a, b, c, kYellow * 0.5);
+        const Canvas lit =
+            CanvasWithPhongTriangle(OnPlane(a), OnPlane(b), OnPlane(c), lights, kMatte, kYellow);
+        CHECK(Bytes(lit) == Bytes(filled));
+    }
+}
+
+TEST_CASE("DrawPhongTriangle: a face turned to a light far away is evenly lit", "[rasterizer]") {
+    // The light comes from where the camera is, along the face's normal: cos = 1 at
+    // every pixel.
+    const std::vector<Light> lights = {
+        DirectionalLight{.intensity = 0.75, .direction = kTowardCamera}};
+    Canvas filled(32, 32, kBlack);
+    DrawFilledTriangle(filled, kFaceA, kFaceB, kFaceC, kWhite * 0.75);
+    CHECK(Bytes(CanvasWithPhongTriangle(kFaceA, kFaceB, kFaceC, lights)) == Bytes(filled));
+}
+
+TEST_CASE("DrawPhongTriangle: every pixel gets the light of the point it shows", "[rasterizer]") {
+    // A lamp a quarter of a unit in front of the face, a little off its middle, and some
+    // ambient light: no two rows of the triangle are lit alike.
+    const std::vector<Light> lights = {
+        AmbientLight{.intensity = 0.1},
+        PointLight{.intensity = 0.8, .position = {0.125, -0.0625, 0.75}},
+    };
+    const Canvas canvas = CanvasWithPhongTriangle(kFaceA, kFaceB, kFaceC, lights, 20.0);
+
+    Canvas filled(32, 32, kBlack);
+    DrawFilledTriangle(filled, kFaceA, kFaceB, kFaceC, kWhite);
+    const std::vector<Point> covered = LitPixels(filled);
+    REQUIRE(covered.size() > 200);
+    for (const Point pixel : covered) {
+        INFO("pixel (" << pixel.x << ", " << pixel.y << ")");
+        // The point of the face the pixel shows, its normal, and the way to the camera,
+        // which is the origin.
+        const Vec3 point{pixel.x / 32.0, pixel.y / 32.0, 1.0};
+        const double light = ComputeIllumination(point, kTowardCamera, -point, 20.0, lights);
+        CHECK(canvas.GetPixel(pixel.x, pixel.y) == ToRgb8(kWhite * light));
+    }
+    // And nothing outside the triangle.
+    CHECK(LitPixels(canvas) == covered);
+}
+
+TEST_CASE("DrawPhongTriangle: a lamp close to a face lights the part it is close to",
+          "[rasterizer]") {
+    // The book's Figures 13-7 and 13-10. A lamp a quarter of a unit in front of the
+    // point the pixel (0, -4) shows: there its light arrives along the normal, at full
+    // intensity. At the corners, far from it, the light arrives at a slant.
+    const std::vector<Light> lights = {
+        PointLight{.intensity = 1.0, .position = {0.0, -0.125, 0.75}}};
+    const Canvas phong = CanvasWithPhongTriangle(kFaceA, kFaceB, kFaceC, lights);
+    CHECK(phong.GetPixel(0, -4) == Rgb8{255, 255, 255});
+    CHECK(phong.GetPixel(-12, -12) == Rgb8{123, 123, 123});  // cos = 0.25 / 0.5154
+    CHECK(phong.GetPixel(12, -12) == Rgb8{123, 123, 123});
+
+    // Interpolating the light of the three corners, which is what DrawShadedTriangle
+    // does, can only give something in between the corners' values: the middle stays dim.
+    const auto light_at = [&](Point p) {
+        const Vec3 point{p.x / 32.0, p.y / 32.0, 1.0};
+        p.h = ComputeIllumination(point, kTowardCamera, -point, kMatte, lights);
+        return p;
+    };
+    Canvas shaded(32, 32, kBlack);
+    DrawShadedTriangle(shaded, light_at(kFaceA), light_at(kFaceB), light_at(kFaceC), kWhite);
+    REQUIRE(shaded.GetPixel(0, -4).has_value());
+    CHECK(shaded.GetPixel(0, -4)->r < 125);
+    CHECK(shaded.GetPixel(0, -4)->r > 100);
+}
+
+TEST_CASE("DrawPhongTriangle: the normals are interpolated along the sides and the rows",
+          "[rasterizer]") {
+    // The right triangle (0, 0), (8, 0), (0, 8) with a normal toward the camera at the
+    // right angle, along +X at (8, 0) and along +Y at (0, 8), under a light from where
+    // the camera is. The light at a pixel is the cosine between its normal and the way
+    // to the camera, minus the z of the normalized normal.
+    const std::vector<Light> lights = {
+        DirectionalLight{.intensity = 1.0, .direction = kTowardCamera}};
+    const Canvas canvas = CanvasWithPhongTriangle(OnPlane({0, 0}), OnPlane({8, 0}, {1.0, 0.0, 0.0}),
+                                                  OnPlane({0, 8}, {0.0, 1.0, 0.0}), lights);
+
+    // Along the bottom side the normal goes from (0, 0, -1) to (1, 0, 0) in steps of 1/8:
+    // (x/8, 0, x/8 - 1), which normalized has z = -(1 - x/8) / sqrt((x/8)^2 + (1 - x/8)^2).
+    CHECK(canvas.GetPixel(0, 0) == Rgb8{255, 255, 255});
+    CHECK(canvas.GetPixel(2, 0) == Rgb8{241, 241, 241});  // 0.75 / sqrt(0.625) = 0.9487
+    CHECK(canvas.GetPixel(4, 0) == Rgb8{180, 180, 180});  // 1 / sqrt(2), not the 1/2 of
+                                                          // interpolated light
+    CHECK(canvas.GetPixel(6, 0) == Rgb8{80, 80, 80});     // 0.25 / sqrt(0.625) = 0.3162
+    CHECK(canvas.GetPixel(8, 0) == Rgb8{0, 0, 0});        // the normal is across the light
+    // The left side, from (0, 0, -1) to (0, 1, 0), the same way.
+    CHECK(canvas.GetPixel(0, 2) == Rgb8{241, 241, 241});
+    CHECK(canvas.GetPixel(0, 4) == Rgb8{180, 180, 180});
+    CHECK(canvas.GetPixel(0, 6) == Rgb8{80, 80, 80});
+    CHECK(canvas.GetPixel(0, 8) == Rgb8{0, 0, 0});
+    // Inside: the pixel (2, 2) is half the first corner and a quarter of each of the
+    // others, so its normal is (1/4, 1/4, -1/2), with z = -0.8165 once normalized.
+    CHECK(canvas.GetPixel(2, 2) == Rgb8{208, 208, 208});
+}
+
+TEST_CASE("DrawPhongTriangle: a highlight shows in the middle of a face", "[rasterizer]") {
+    // A lamp where the camera is. On the axis the light goes straight back to the camera:
+    // the diffuse term and the specular term are both the lamp's whole 0.4.
+    const std::vector<Light> lights = {PointLight{.intensity = 0.4, .position = {0.0, 0.0, 0.0}}};
+    const Canvas shiny = CanvasWithPhongTriangle(kFaceA, kFaceB, kFaceC, lights, 50.0);
+    const Canvas matte = CanvasWithPhongTriangle(kFaceA, kFaceB, kFaceC, lights, kMatte);
+    CHECK(shiny.GetPixel(0, 0) == Rgb8{204, 204, 204});  // 255 * 0.8
+    CHECK(matte.GetPixel(0, 0) == Rgb8{102, 102, 102});  // 255 * 0.4
+
+    // Eight pixels to the side the mirror direction misses the camera by 28 degrees, and
+    // cos^50 of that is next to nothing: the highlight is a spot, with the matte face
+    // around it.
+    REQUIRE(shiny.GetPixel(8, 0).has_value());
+    CHECK(shiny.GetPixel(8, 0)->r < 102);
+    CHECK(shiny.GetPixel(8, 0)->r - matte.GetPixel(8, 0)->r <= 1);
+}
+
+TEST_CASE(
+    "DrawPhongTriangle: the vertex order does not matter and every normal stays with "
+    "its vertex",
+    "[rasterizer]") {
+    // Three depths, three normals and a lamp off to one side: nothing is symmetric.
+    Point a = OnPlane({-3, -2});
+    Point b = OnPlane({4, 1}, {0.6, 0.0, -0.8});
+    Point c = OnPlane({0, 5}, {0.0, 0.6, -0.8});
+    b.inv_z = 0.5;
+    c.inv_z = 0.25;
+    const std::vector<Light> lights = {
+        AmbientLight{.intensity = 0.1},
+        PointLight{.intensity = 0.7, .position = {0.25, 0.375, 0.125}},
+    };
+    const std::vector<std::uint8_t> reference =
+        Bytes(CanvasWithPhongTriangle(a, b, c, lights, 10.0));
+    CHECK(Bytes(CanvasWithPhongTriangle(a, c, b, lights, 10.0)) == reference);
+    CHECK(Bytes(CanvasWithPhongTriangle(b, a, c, lights, 10.0)) == reference);
+    CHECK(Bytes(CanvasWithPhongTriangle(b, c, a, lights, 10.0)) == reference);
+    CHECK(Bytes(CanvasWithPhongTriangle(c, a, b, lights, 10.0)) == reference);
+    CHECK(Bytes(CanvasWithPhongTriangle(c, b, a, lights, 10.0)) == reference);
+
+    // The normals do matter: with b's and c's exchanged it is another picture.
+    std::swap(b.normal, c.normal);
+    CHECK(Bytes(CanvasWithPhongTriangle(a, b, c, lights, 10.0)) != reference);
+}
+
+TEST_CASE("DrawPhongTriangle: the point a pixel shows is found from its 1/z", "[rasterizer]") {
+    // The same pixels at the depth 4 show a triangle four times as large and four times
+    // as far. A lamp a quarter of a unit in front of the point the pixel (0, -4) shows
+    // there, (0, -0.5, 4), lights that pixel in full, and the lamp of the test above,
+    // which is more than 3 in front of this triangle, lights all of it at a steep angle:
+    // cos = 0.99 in the middle and 0.85 at a corner 1.5 units to the side and below.
+    const auto far = [](Point p) {
+        p.inv_z = 0.25;
+        return p;
+    };
+    const std::vector<Light> close = {PointLight{.intensity = 1.0, .position = {0.0, -0.5, 3.75}}};
+    const Canvas lit = CanvasWithPhongTriangle(far(kFaceA), far(kFaceB), far(kFaceC), close);
+    CHECK(lit.GetPixel(0, -4) == Rgb8{255, 255, 255});
+    CHECK(lit.GetPixel(-12, -12)->r < 50);  // 1.5 units from the lamp's foot, at a slant
+
+    const std::vector<Light> distant = {
+        PointLight{.intensity = 1.0, .position = {0.0, -0.125, 0.75}}};
+    const Canvas even = CanvasWithPhongTriangle(far(kFaceA), far(kFaceB), far(kFaceC), distant);
+    CHECK(even.GetPixel(0, -4) == Rgb8{253, 253, 253});
+    CHECK(even.GetPixel(-12, -12) == Rgb8{216, 216, 216});
+}
+
+TEST_CASE("DrawPhongTriangle: with a depth buffer the nearer triangle shows, in either order",
+          "[rasterizer]") {
+    // The two triangles of the filled test, facing the camera, under ambient light, so
+    // that their colors are their own.
+    const std::vector<Light> lights = {AmbientLight{.intensity = 1.0}};
+    const auto facing = [](Point p) {
+        p.normal = kTowardCamera;
+        return p;
+    };
+    const auto draw = [&](bool near_first, bool depth_buffered) {
+        Canvas canvas(32, 32, kBlack);
+        DepthBuffer depth_buffer(canvas);
+        DepthBuffer* buffer = depth_buffered ? &depth_buffer : nullptr;
+        const auto phong = [&](const Flat& flat) {
+            DrawPhongTriangle(canvas, kPhongViewport, facing(flat.a), facing(flat.b),
+                              facing(flat.c), flat.color, kMatte, lights, buffer);
+        };
+        phong(near_first ? kNear : kFar);
+        phong(near_first ? kFar : kNear);
+        return canvas;
+    };
+
+    const Canvas near_then_far = draw(true, true);
+    CHECK(Bytes(near_then_far) == Bytes(draw(false, true)));
+    CHECK(near_then_far.GetPixel(0, 0) == Rgb8{255, 0, 0});
+    CHECK(near_then_far.GetPixel(-5, 6) == Rgb8{0, 0, 255});
+    // The filled triangles' picture through a depth buffer, and the painter's with the
+    // far one first; without a buffer the later triangle shows.
+    CHECK(Bytes(near_then_far) == Bytes(CanvasWithFlats({kNear, kFar}, true)));
+    CHECK(Bytes(near_then_far) == Bytes(draw(false, false)));
+    CHECK(Bytes(near_then_far) != Bytes(draw(true, false)));
+}
+
+TEST_CASE("DrawPhongTriangle: the depth buffer remembers the triangle as for a filled one",
+          "[rasterizer]") {
+    const std::vector<Light> lights = {AmbientLight{.intensity = 1.0}};
+    Point a = OnPlane({0, 0});
+    Point b = OnPlane({8, 0});
+    Point c = OnPlane({0, 8});
+    b.inv_z = 0.25;
+    c.inv_z = 0.5;
+
+    Canvas filled(32, 32, kBlack);
+    DepthBuffer filled_depths(filled);
+    DrawFilledTriangle(filled, a, b, c, kGreen, &filled_depths);
+    Canvas lit(32, 32, kBlack);
+    DepthBuffer lit_depths(lit);
+    DrawPhongTriangle(lit, kPhongViewport, a, b, c, kGreen, kMatte, lights, &lit_depths);
+
+    CHECK(Bytes(lit) == Bytes(filled));
+    for (int x = -16; x < 16; ++x) {
+        for (int y = -16; y < 16; ++y) {
+            CHECK(lit_depths.InvZ(x, y) == filled_depths.InvZ(x, y));
+        }
+    }
+    CHECK(lit_depths.InvZ(4, 0) == 0.625);  // halfway along the bottom side: z = 1.6
 }

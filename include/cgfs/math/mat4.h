@@ -61,6 +61,27 @@ struct Mat4 {
     return {x / w, y / w, z / w};
 }
 
+/// M applied to the direction d: M (d.x, d.y, d.z, 0), returned as (x, y, z).
+///
+/// A direction is the difference of two points, and in homogeneous coordinates the 1s of
+/// the two points cancel: its fourth coordinate is 0. The matrix's last column, the
+/// translation, is multiplied by that 0 and drops out, as it should: moving an object
+/// does not turn it, and the way from one of its points to another, or the way one of
+/// its faces looks, is the same wherever it stands. What is left is the upper 3 x 3
+/// part, the rotation and the scaling. For an affine M (bottom row 0 0 0 1) the result
+/// has w = 0, a direction again.
+///
+/// A normal, the direction a surface faces, may be transformed this way when M scales
+/// every direction by the same factor, as the transforms of this project do: it turns
+/// with the surface, stays perpendicular to it and comes out longer or shorter by that
+/// factor. Under a scaling that differs from axis to axis it would not stay
+/// perpendicular.
+[[nodiscard]] constexpr Vec3 TransformDirection(const Mat4& m, Vec3 d) {
+    return {m.m[0][0] * d.x + m.m[0][1] * d.y + m.m[0][2] * d.z,
+            m.m[1][0] * d.x + m.m[1][1] * d.y + m.m[1][2] * d.z,
+            m.m[2][0] * d.x + m.m[2][1] * d.y + m.m[2][2] * d.z};
+}
+
 /// M with its rows and columns exchanged. A rotation matrix is orthonormal, so its
 /// transpose is its inverse: the same rotation the other way.
 [[nodiscard]] constexpr Mat4 Transposed(const Mat4& m) {

@@ -17,4 +17,12 @@ Point ProjectVertex(const Viewport& viewport, Vec3 v) {
     return projected;
 }
 
+Vec3 UnprojectVertex(const Viewport& viewport, int x, int y, double inv_z) {
+    assert(inv_z > 0 && "UnprojectVertex: the depth must be in front of the camera");
+    const double z = 1.0 / inv_z;
+    const double d = viewport.distance();
+    const Vec3 on_viewport = viewport.CanvasToViewport(x, y);
+    return {on_viewport.x * z / d, on_viewport.y * z / d, z};
+}
+
 }  // namespace cgfs

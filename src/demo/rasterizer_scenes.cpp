@@ -4,8 +4,10 @@
 #include <cgfs/camera/clipping_planes.h>
 #include <cgfs/image/color.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/lighting/light.h>
 #include <cgfs/math/bounding_sphere.h>
 #include <cgfs/math/mat4.h>
+#include <cgfs/math/triangle_normal.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/culling.h>
 #include <cgfs/rasterizer/instance.h>
@@ -15,13 +17,16 @@
 #include <cgfs/rasterizer/point.h>
 #include <cgfs/rasterizer/projection.h>
 #include <cgfs/rasterizer/scene.h>
+#include <cgfs/rasterizer/shading.h>
 #include <cgfs/rasterizer/triangle.h>
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <initializer_list>
+#include <map>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // These pictures are shared by render_demo and the golden-image tests. Changing them
@@ -256,6 +261,93 @@ Model Checkerboard(double start, int tiles, Color light, Color dark) {
                     (row + column) % 2 == 0 ? light : dark);
         }
     }
+    floor.bounding_sphere = MakeBoundingSphere(floor.vertices);
+    return floor;
+}
+
+// The models of the shading picture. They are lit, so what matters about them is which
+// way their surfaces face: the normals.
+
+/// `model` in one color: every triangle of it painted `color`.
+Model Painted(Model model, Color color) {
+    for (Triangle& triangle : model.triangles) {
+        triangle.color = color;
+    }
+    return model;
+}
+
+/// A sphere of radius 1 around the origin as 8 * divisions^2 triangles, with the normals
+/// of the sphere at their corners.
+///
+/// The corners are the points of an octahedron pushed out to the sphere. The octahedron
+/// |x| + |y| + |z| = n has a vertex at every point (i, j, k) of whole numbers on it, n
+/// steps along each of its edges, and those points cut each of its eight faces into n^2
+/// small triangles; Normalized((i, j, k)) is the same point on the unit sphere. No cos
+/// and no sin: a square root per vertex, which every platform rounds the same way.
+///
+/// The normal of a sphere at one of its points is the direction from the center to the
+/// point, and the center is the origin: every corner's normal is the corner itself. The
+/// triangles themselves are flat, and each has a normal of its own that none of its
+/// corners has, which is the difference between a ball and a faceted ball under lights.
+Model Sphere(int divisions, Color color) {
+    const int n = divisions;
+    Model sphere;
+
+    // The vertex of the lattice point (i, j, k), made the first time it is asked for, so
+    // that the triangles around a point share it.
+    std::map<std::array<int, 3>, std::size_t> index_of;
+    const auto vertex = [&](int i, int j, int k) {
+        const auto [entry, is_new] = index_of.try_emplace({i, j, k}, sphere.vertices.size());
+        if (is_new) {
+            sphere.vertices.push_back(Normalized(
+                Vec3{static_cast<double>(i), static_cast<double>(j), static_cast<double>(k)}));
+        }
+        return entry->second;
+    };
+
+    // The triangle of three vertices, listed clockwise as seen from outside: if its normal
+    // points toward the center, two of its corners change places.
+    const auto triangle = [&](std::size_t a, std::size_t b, std::size_t c) {
+        const std::vector<Vec3>& v = sphere.vertices;
+        if (Dot(TriangleNormal(v[a], v[b], v[c]), v[a] + v[b] + v[c]) < 0.0) {
+            std::swap(b, c);
+        }
+        sphere.triangles.push_back({.v = {a, b, c}, .color = color, .normals = {v[a], v[b], v[c]}});
+    };
+
+    // One face of the octahedron per octant. The lattice points of the face x, y, z >= 0
+    // are (a, b, c) with a + b + c = n; a small triangle points away from the corner
+    // (0, 0, n) or, in the gaps between those, toward it.
+    for (const int sx : {1, -1}) {
+        for (const int sy : {1, -1}) {
+            for (const int sz : {1, -1}) {
+                const auto at = [&](int a, int b) {
+                    return vertex(sx * a, sy * b, sz * (n - a - b));
+                };
+                for (int a = 0; a < n; ++a) {
+                    for (int b = 0; a + b < n; ++b) {
+                        triangle(at(a, b), at(a + 1, b), at(a, b + 1));
+                        if (a + b + 1 < n) {
+                            triangle(at(a + 1, b), at(a + 1, b + 1), at(a, b + 1));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    sphere.bounding_sphere = {.center = {0.0, 0.0, 0.0}, .radius = 1.0};
+    return sphere;
+}
+
+/// A rectangular floor in the plane y = 0, `width` along X and `depth` along Z around
+/// the origin, facing up: one face, two triangles, however large it is.
+Model Floor(double width, double depth, Color color) {
+    const double x = width / 2.0;
+    const double z = depth / 2.0;
+    Model floor;
+    floor.vertices = {{-x, 0.0, -z}, {-x, 0.0, z}, {x, 0.0, z}, {x, 0.0, -z}};
+    // Clockwise as seen from above: near left, far left, far right, near right.
+    floor.triangles = {{{0, 1, 2}, color}, {{0, 2, 3}, color}};
     floor.bounding_sphere = MakeBoundingSphere(floor.vertices);
     return floor;
 }
@@ -738,6 +830,82 @@ void DrawFilledCubesScene(Canvas& canvas, const Viewport& viewport) {
     // RenderScene's default: of the 180 triangles 78 are drawn.
     DepthBuffer depth_buffer(canvas);
     RenderScene(canvas, viewport, models, instances, Camera{}, DrawFilledTriangle, &depth_buffer);
+}
+
+void DrawShadingScene(Canvas& canvas, const Viewport& viewport, ShadingModel shading_model) {
+    constexpr Color kBackground{18.0, 20.0, 28.0};
+
+    canvas.Clear(kBackground);
+
+    // Five models, each there to be right from one shading model on and wrong before it.
+    //
+    // The floor is one face of two triangles, 10 x 8, with a lamp less than a unit above
+    // it: the large face with a light close to it that only lighting every pixel gets
+    // right. The cube has flat faces, which one light value per triangle is nearly enough
+    // for. The two balls have the normals of a sphere at the corners of their triangles,
+    // which lighting the corners is enough for as long as the ball is matte; the second
+    // ball is shiny, and a highlight is smaller than its triangles.
+    //
+    // The bulb marks where the lamp is, and is not lit like the rest: its color is ten
+    // times too bright, so the ambient light alone takes its red and green to the top
+    // of the scale, and it glows the same under every shading model.
+    constexpr std::size_t kFloor = 0;
+    constexpr std::size_t kCube = 1;
+    constexpr std::size_t kMatteBall = 2;
+    constexpr std::size_t kShinyBall = 3;
+    constexpr std::size_t kBulb = 4;
+    std::vector<Model> models = {
+        Floor(10.0, 8.0, {206.0, 198.0, 180.0}), Painted(Cube(), {70.0, 140.0, 230.0}),
+        Sphere(6, {90.0, 200.0, 110.0}),         Sphere(6, {214.0, 52.0, 48.0}),
+        Sphere(4, {2550.0, 2040.0, 300.0}),
+    };
+    models[kCube].bounding_sphere = MakeBoundingSphere(models[kCube].vertices);
+    models[kShinyBall].specular = 30.0;
+
+    // The stage: the floor around the world's origin, the cube and the two balls standing
+    // on it in a row from left to right, and the lamp in front of the shiny ball, 0.9
+    // above the floor. The cube stands the farthest from the lamp, where the lamp's light
+    // changes least across a face.
+    constexpr Vec3 kLamp{1.5, 0.9, -1.9};
+    constexpr double kBallRadius = 1.2;
+    const std::vector<Instance> instances = {
+        {.model = kFloor},
+        {.model = kCube, .position = {-3.6, 1.0, 2.2}},
+        {.model = kMatteBall, .position = {-0.5, kBallRadius, 1.5}, .scale = kBallRadius},
+        {.model = kShinyBall, .position = {2.7, kBallRadius, 0.6}, .scale = kBallRadius},
+        {.model = kBulb, .position = kLamp, .scale = 0.14},
+    };
+
+    // The lights, in the world's coordinates like the instances: a little light from
+    // everywhere, a sun high up to the left and behind the camera, and the lamp.
+    const std::vector<Light> lights = {
+        AmbientLight{.intensity = 0.2},
+        DirectionalLight{.intensity = 0.25, .direction = {-1.0, 2.0, -1.5}},
+        PointLight{.intensity = 0.65, .position = kLamp},
+    };
+
+    // The camera stands in front of the stage and above it and looks down on it: turned
+    // about the X axis by the angle whose cosine and sine are 4/5 and 3/5, the angle of
+    // the 3-4-5 triangle, about 36.9 degrees. Its forward axis (0, 0, 1) becomes
+    // (0, -3/5, 4/5) and its up axis (0, 1, 0) becomes (0, 4/5, 3/5), the third and the
+    // second column of the matrix. Written out rather than built from an angle so that
+    // no cos or sin is called: with the sphere's square roots, every vertex of this
+    // picture is plain IEEE arithmetic, which every platform rounds the same way.
+    constexpr double kCosine = 0.8;
+    constexpr double kSine = 0.6;
+    constexpr Mat4 kLookingDown{{{1.0, 0.0, 0.0, 0.0},
+                                 {0.0, kCosine, -kSine, 0.0},
+                                 {0.0, kSine, kCosine, 0.0},
+                                 {0.0, 0.0, 0.0, 1.0}}};
+    const Camera camera{.position = {0.0, 5.4, -7.4},
+                        .orientation = kLookingDown,
+                        .clipping_planes = MakeClippingPlanes(viewport)};
+
+    // Solid faces in any order: one depth buffer for the picture, and back-face culling,
+    // RenderScene's default. The floor is not a closed object, but it is only ever seen
+    // from above, which is its front.
+    DepthBuffer depth_buffer(canvas);
+    RenderScene(canvas, viewport, models, instances, camera, lights, shading_model, &depth_buffer);
 }
 
 void DrawAxesScene(Canvas& canvas) {

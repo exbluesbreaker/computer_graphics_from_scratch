@@ -305,3 +305,33 @@ TEST_CASE("RenderObject: a wireframe is drawn whole through a depth buffer", "[r
                  DrawWireframeTriangle, &depth_buffer);
     CHECK(Bytes(canvas) == Bytes(CanvasWithObject(kSquare, {{{0, 1, 2}, kRed}})));
 }
+
+TEST_CASE("Triangle: a corner has no normal of its own unless the triangle states one",
+          "[rasterizer]") {
+    const Triangle triangle{{0, 1, 2}, kRed};
+    CHECK(triangle.normals == std::array<Vec3, 3>{});
+    const Triangle smooth{
+        .v = {0, 1, 2},
+        .color = kRed,
+        .normals = {Vec3{1.0, 0.0, 0.0}, Vec3{0.0, 1.0, 0.0}, Vec3{0.0, 0.0, 1.0}}};
+    CHECK_FALSE(triangle == smooth);
+    CHECK(smooth.h == std::array<double, 3>{1.0, 1.0, 1.0});
+}
+
+TEST_CASE("RenderObject: a triangle primitive does not look at the normals", "[rasterizer]") {
+    // The normals are for the drawing under lights (see shading_test.cpp); with a
+    // primitive the picture is the same whatever they are.
+    const std::vector<Vec3> vertices = {{0.25, 0.25, 1.0}, {-0.25, 0.0, 1.0}, {0.125, -0.25, 1.0}};
+    const std::vector<Triangle> plain = {{{0, 1, 2}, kRed, {1.0, 0.25, 0.5}}};
+    std::vector<Triangle> with_normals = plain;
+    with_normals[0].normals = {Vec3{1.0, 0.0, 0.0}, Vec3{0.0, 1.0, 0.0}, Vec3{0.0, 0.0, 1.0}};
+    for (const cgfs::DrawTriangleFunction draw :
+         {DrawWireframeTriangle, DrawFilledTriangle, DrawShadedTriangle}) {
+        Canvas expected(kSize, kSize, kBlack);
+        RenderObject(expected, TestViewport(), vertices, plain, draw);
+        Canvas canvas(kSize, kSize, kBlack);
+        RenderObject(canvas, TestViewport(), vertices, with_normals, draw);
+        CHECK(Bytes(canvas) == Bytes(expected));
+        CHECK_FALSE(LitPixels(canvas).empty());
+    }
+}

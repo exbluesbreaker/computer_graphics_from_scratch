@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cgfs/lighting/light.h>
 #include <cgfs/math/vec3.h>
 
 #include <cmath>
+#include <span>
 
 namespace cgfs {
 
@@ -18,9 +20,10 @@ namespace cgfs {
 // the normal, V the direction from P to the viewer and s the surface's specular exponent.
 // The result multiplies the surface's color.
 //
-// The two terms of one light are the two functions below. Whoever sums them decides
-// which lights reach the point at all: the ray tracer leaves out the ones another sphere
-// blocks, which is a shadow.
+// The two terms of one light are the first two functions below, and ComputeIllumination
+// is the whole sum. Whoever sums the terms decides which lights reach the point at all:
+// the ray tracer has a sum of its own that leaves out the lights another sphere blocks,
+// which is a shadow; the rasterizer, which casts no shadows, uses the sum here.
 
 /// The `specular` value of a surface with no highlight at all. The book's convention:
 /// -1 means "skip the specular term", any other value is the exponent.
@@ -67,5 +70,25 @@ inline constexpr double kMatte = -1.0;
     }
     return light_intensity * std::pow(r_dot_v / (Length(reflected) * Length(view)), exponent);
 }
+
+/// The illumination equation, summed over `lights`: the intensity of the light that
+/// leaves `point` toward the viewer, the book's ComputeIllumination.
+///
+///     i = the sum of the intensities I of the ambient lights
+///     for each point light, with L = position - point,
+///     and each directional light, with L = direction:
+///         i += DiffuseReflection(I, N, L)
+///         i += SpecularReflection(I, N, L, V, s)       unless s is kMatte
+///
+/// `normal` is the unit normal N of the surface at the point, `view` the direction V
+/// from the point to the viewer, of any length, and `specular` the surface's exponent s.
+/// The result multiplies the surface's color; it is not clamped and may exceed 1 where
+/// several lights add up or a highlight sits on a lit surface.
+///
+/// Every light reaches the point: nothing is in the way of anything, so there are no
+/// shadows. The point, the two vectors and the lights are all in one system of
+/// coordinates, whichever it is. Precondition: |normal| = 1, asserted.
+[[nodiscard]] double ComputeIllumination(Vec3 point, Vec3 normal, Vec3 view, double specular,
+                                         std::span<const Light> lights);
 
 }  // namespace cgfs

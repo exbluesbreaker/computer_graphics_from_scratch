@@ -18,8 +18,9 @@ the first steps of the rasterizer, lines, filled and shaded triangles, the persp
 projection of vertices, objects made of triangles, drawn as wireframes, filled or
 shaded, and scenes of instances of models, each with a model transform, seen from a
 movable camera, clipped in 3D to what that camera can see and, where asked, drawn
-through a depth buffer that removes the hidden surfaces; section 13 lists what comes
-next.
+through a depth buffer that removes the hidden surfaces and lit by the same lights and
+the same equation as the ray tracer's spheres, with flat, Gouraud or Phong shading;
+section 13 lists what comes next.
 
 ## 2. Goals and non-goals
 
@@ -124,9 +125,9 @@ For a ray `P(t) = O + t * D` and a sphere with center `C` and radius `r`, let
 
 ### 3.5 Lighting
 
-The lights and the two terms of the illumination equation are a layer of their own,
-`lighting/`, below both renderers (section 14, decision 17): the ray tracer sums the
-terms here, with shadows.
+The lights and the illumination equation are a layer of their own, `lighting/`, below
+both renderers (section 14, decision 17): the ray tracer sums the terms of the equation
+here, with shadows, and the rasterizer uses the sum without them (3.13).
 
 Three light types, each with an `intensity`:
 
@@ -167,7 +168,9 @@ The two terms of one light are `DiffuseReflection(I, N, L)` and
 `SpecularReflection(I, N, L, V, s)` of `lighting/illumination.h`, exactly the two lines
 of the sum above, each returning 0 where its line is skipped for the sign of its dot
 product. `ComputeLighting` adds them for every light that is not blocked, the specular
-one only when `s` is not `kMatte`.
+one only when `s` is not `kMatte`. `ComputeIllumination(P, N, V, s, lights)` of the same
+header is that sum with no light blocked, the book's `ComputeIllumination`: what the
+rasterizer, which casts no shadows, computes (3.13).
 
 ### 3.6 Rasterizer: lines and triangles
 
@@ -176,7 +179,8 @@ the ray tracer is involved. A `Point` is a canvas position in the centered integ
 coordinates of 3.1 together with an intensity `h`, a multiplier for the color that only
 the shaded triangle reads; it defaults to 1, the full color. It also carries a depth,
 `inv_z`, which the filled and the shaded triangle read when they are given a depth
-buffer (3.12) and which nothing reads otherwise.
+buffer (3.12) and which nothing reads otherwise, and a `normal`, which only the Phong
+triangle reads (3.13).
 
 - `Interpolate(i0, d0, i1, d1)` returns the values of a dependent variable `d` at the
   integers `i0, i0 + 1, ..., i1`, given `d = d0` at `i0` and `d = d1` at `i1`: that is
@@ -256,6 +260,9 @@ tracer looks through: the camera at the origin looking along +Z and the viewport
   `inv_z = 1 / v.z`, all that is left of the vertex's depth once it is a pixel, for
   the depth buffer (3.12); `ViewportToCanvas`, which is given no depth, leaves it at
   0. Precondition: `v.z > 0`, asserted.
+- `UnprojectVertex(viewport, x, y, inv_z)` is the way back, from a pixel and the `1/z`
+  kept for it to the point of the scene it shows; Phong shading needs it and 3.13
+  defines it.
 - The projection does not clip. A vertex outside the field of view projects beyond the
   canvas and the primitives draw what fits; a vertex very near the camera plane projects
   very far away, and a canvas coordinate beyond the range of `int` is undefined behaviour
@@ -269,12 +276,14 @@ triangles, each naming three of the vertices by index and carrying a color. The
 indirection stores a vertex once however many triangles meet at it (a cube is eight
 vertices and twelve triangles, not thirty-six vertices) and projects it once.
 
-- `Triangle` is `{v, color, h}`, with `v` an array of three indices into the object's
-  vertex list and `h` an array of three intensities, `h[k]` the intensity of the
-  triangle at its corner `v[k]`: the `h` of 3.6, a multiplier for the color. It is 1 at
-  every corner by default, the full color. The intensity belongs to the corner of the
+- `Triangle` is `{v, color, h, normals}`, with `v` an array of three indices into the
+  object's vertex list and `h` an array of three intensities, `h[k]` the intensity of
+  the triangle at its corner `v[k]`: the `h` of 3.6, a multiplier for the color. It is 1
+  at every corner by default, the full color. The intensity belongs to the corner of the
   triangle, not to the vertex, so two triangles that meet at a vertex may be differently
-  bright there, as two faces of a cube are (section 14, decision 14).
+  bright there, as two faces of a cube are (section 14, decision 14). `normals` is an
+  array of three normals, one per corner in the same way, none by default; only the
+  drawing under lights reads them (3.13).
 - `RenderObject(viewport, vertices, triangles, draw_triangle = DrawWireframeTriangle,
   depth_buffer = none)`
   first projects every vertex with `ProjectVertex` (3.7) into a list `projected`
@@ -365,8 +374,8 @@ stays outside the matrices (section 14, decision 12).
   the inverse of the camera's rotation, its transpose, which puts the camera's line of
   sight on +Z. Precondition: `orientation` is a rotation (orthonormal), not checked.
 - `TransformModel(model, transform)` is the model under a transform, as a model of its
-  own: every vertex `V` replaced by `transform * V`, the same triangles, and the
-  bounding sphere moved along (3.11). `RenderModel(viewport, model, transform)` draws
+  own: every vertex `V` replaced by `transform * V`, the same triangles with the normals
+  at their corners turned along (3.13), and the bounding sphere moved along (3.11). `RenderModel(viewport, model, transform)` draws
   the vertices of `TransformModel(model, transform)` with the model's triangles through
   `RenderObject` (3.8), which projects each vertex with `ProjectVertex` and outlines
   each triangle: the book's `RenderModel`.
@@ -386,7 +395,9 @@ stays outside the matrices (section 14, decision 12).
   matrix per instance takes a vertex from the model's coordinates through the world into
   the camera's, the culling and the clipping work on the result in 3D, and the
   projection follows vertex by vertex. A camera has no clipping planes unless it is
-  given some, and without them the clipping changes nothing.
+  given some, and without them the clipping changes nothing. A second `RenderScene`
+  takes lights and a shading model in place of the triangle primitive and lights what
+  it draws (3.13).
 - The projection is not a matrix, by the book's own choice: "for practical reasons we
   won't be using the full projection matrix". The model and camera transforms are
   applied as matrices, their result is converted back to Cartesian coordinates, and
@@ -493,7 +504,9 @@ coordinates, as `TransformModel` returns it; a scene is a list of those.
   is `A + t (B - A)` with `t = IntersectSegmentPlane(A, B, plane)`, always computed from
   the corner in front toward the corner behind, so two triangles that share the cut side
   compute the same point bit for bit; it is appended to `vertices` and named by index.
-  The new corner's intensity is `hA + t (hB - hA)`, and the color is the triangle's.
+  The new corner's intensity is `hA + t (hB - hA)`, its normal `NA + t (NB - NA)`, no
+  normal where neither corner had one and not normalized (3.13), and the color is the
+  triangle's.
   The book's `ClipTriangle` returns the list; this one appends to it, as the book's own
   demo code does.
 - `ClipTrianglesAgainstPlane(triangles, plane, vertices)` returns the concatenation of
@@ -674,7 +687,160 @@ triangles.
   beyond the front faces that should cover it, and that pixel is no longer set. Section
   15 has the counts for the demo pictures, and the time culling saves.
 
-### 3.13 Numeric conventions
+### 3.13 Rasterizer: shading
+
+Until here a triangle was drawn in its color, or in its color times intensities that
+the model stated at its corners (3.8). With lights in the scene the intensities are
+computed, by the illumination equation of 3.5: the lights and the equation are the ray
+tracer's, and the code is the same (`lighting/`). The equation gives the light at one
+point. Shading, the book's word, is how light computed at points is spread over a
+triangle, and the book's Shading chapter has three ways to do it, each computing more
+than the one before.
+
+The light at a point:
+
+- `ComputeIllumination(P, N, V, s, lights)` is the sum of 3.5 with nothing in the way
+  of any light:
+
+  ```
+  i = sum(ambient I)
+    + sum over point lights (L = position - P) and directional lights (L = direction) of
+          DiffuseReflection(I, N, L)
+        + SpecularReflection(I, N, L, V, s)         unless s = kMatte
+  ```
+
+  `N` is the unit normal of the surface at `P`, asserted; `V` points from `P` toward the
+  viewer and may have any length. The result is not clamped and may exceed 1. The
+  rasterizer casts no shadows: every light reaches every point.
+- The equation asks only where the point, its normal, the lights and the viewer are
+  relative to one another, so it may be evaluated in any coordinates all of them are
+  in. The rasterizer uses the camera's, as the book's demo does: the vertices are there
+  after the transforms of 3.10, and the viewer is the origin, so `V = -P`. The lights
+  are given in the world's coordinates, where the instances are placed, and follow the
+  scene: `TransformLight(light, M)` is the point light with the position
+  `M * position`, the directional light with the direction
+  `TransformDirection(M, direction)`, and the ambient light as it is.
+- `TransformDirection(M, d)` is `M` applied to the homogeneous `(d.x, d.y, d.z, 0)`: a
+  direction is the difference of two points, the 1s of their fourth coordinates cancel,
+  and the matrix's translation column, multiplied by that 0, drops out. What is left is
+  the upper 3 x 3 part of `M`, its rotation and scaling. Moving a scene does not change
+  where an infinitely distant light is, or which way a surface faces.
+
+Normals:
+
+- The normal of a triangle `A B C` is `TriangleNormal(A, B, C) = (B - A) x (C - A)`,
+  the vector back-face culling tests (3.12): it points out of an object whose triangles
+  list their corners clockwise as seen from outside, is as long as twice the triangle's
+  area, and is zero for a triangle without area.
+- A triangle is flat, but the triangles of a sphere stand for a curved surface, which
+  faces a different way at each of a triangle's three corners. `Triangle.normals[k]` is
+  the normal of that surface at the corner `v[k]`, the book's model format
+  (`normals = [N0, N1, N2]` beside `vertices`). It belongs to the corner of the
+  triangle and not to the vertex, as in the book: at a corner of a cube three faces
+  meet, each with a normal of its own. The zero vector, the default, says the corner
+  has no normal of its own and the triangle's is used, which is right for every flat
+  face, so a cube states nothing. A model may state its normals at any length.
+- `Model.specular` is the exponent `s` for the model's surface, `kMatte` by default.
+- `TransformModel(model, M)` (3.10) turns the normals with the model and returns them
+  at unit length: each becomes `Normalized(TransformDirection(M, N))`, and a corner
+  without a normal stays without one. The translation in `M` does not apply to a
+  direction, and its scale, which stretches every direction, is taken out again by the
+  normalization. From there on the normals are unit vectors, which is what lets them be
+  interpolated with one another. Precondition, as before: `M` scales uniformly;
+  otherwise a transformed normal is no longer perpendicular to its surface.
+- `ClipTriangle` (3.11) gives a new corner the normal `NA + t (NB - NA)` and does not
+  normalize it. It is shorter than 1, and it is exactly what the interpolation of the
+  normals over the whole triangle has at that point, so interpolating between the
+  corners of a piece continues the interpolation over the whole triangle.
+
+The shading models. `ShadingModel` is `kFlat`, `kGouraud` or `kPhong`.
+`RenderObject(viewport, object, lights, shading_model = kPhong, depth_buffer = none)`
+draws an object under lights, the book's `RenderModel` of this chapter: `object` is a
+`Model` in the camera's coordinates and `lights` are the lights in the same
+coordinates. Every vertex is projected once, as in 3.8. For every triangle, with `Vk`
+its corners, `Pk` their projections, `N = Normalized(TriangleNormal(V0, V1, V2))` and
+`Nk` the normal the triangle states at corner `k`, or `N` where it states none:
+
+- Flat shading computes the light once, at the triangle's center
+  `C = (V0 + V1 + V2) / 3` with the triangle's own normal,
+  `i = ComputeIllumination(C, N, -C, s, lights)`, and draws
+  `DrawFilledTriangle(P0, P1, P2, color * i)`. It uses `N` whatever normals the model
+  states: one point, one normal, one value per triangle. A flat face under a
+  directional light has one value at every point, and flat shading is exact for it.
+  Under a point light the two triangles of a face get values a little apart and a seam
+  shows between them, and a curved surface shows every triangle in a shade of its own.
+- Gouraud shading computes the light at the three corners,
+  `hk = ComputeIllumination(Vk, Normalized(Nk), -Vk, s, lights)`, and draws
+  `DrawShadedTriangle` (3.6) through the `Pk` with those intensities. With the
+  triangle's own normal at every corner that removes the seam. With the normals of the
+  surface at the corners, all the triangles around a vertex compute the same light
+  there, the intensity runs on continuously across their edges, and a sphere looks
+  round. What it cannot show is what the light does between the corners: a highlight
+  smaller than a triangle is missed or caught at one corner and smeared, and a lamp
+  close to a large face leaves the face dim, the dimmer the closer it comes, since its
+  light reaches the far corners at a grazing angle (the book's Figure 13-7).
+- Phong shading interpolates the normals instead of the light and computes the light at
+  every pixel: `DrawPhongTriangle(viewport, P0, P1, P2, color, s, lights, depth_buffer)`
+  with `Pk.normal = Nk`. It fills the triangle as `DrawFilledTriangle` does, the same
+  pixels, and five quantities travel along the sides and along every row with x: `1/z`
+  and the three components of the normal, each interpolated by the calls of 3.6 (for a
+  quantity `v`: `v02 = Interpolate(y0, v0, y2, v2)` and
+  `v012 = Interpolate(y0, v0, y1, v1)` without its last value `+
+  Interpolate(y1, v1, y2, v2)`, the book's `EdgeInterpolate`, and
+  `Interpolate(x_l, v_left, x_r, v_right)` in every row). At a pixel `(x, y)` that is
+  to be set, which with a depth buffer is one where the triangle is the nearest so far:
+
+  ```
+  P = UnprojectVertex(viewport, x, y, 1/z)
+  N = Normalized((nx, ny, nz))
+  V = -P
+  pixel = color * ComputeIllumination(P, N, V, s, lights)
+  ```
+
+  The normal is normalized after the interpolation, a vector between two unit vectors
+  being shorter than either. Preconditions: every `Pk` has `inv_z > 0` and a normal
+  that is not zero, and no two of the normals are opposite.
+- `UnprojectVertex(viewport, x, y, inv_z)` is the book's `UnProjectVertex`, the way
+  back from a pixel and its depth to the point it shows. With
+  `(Vx, Vy, d) = CanvasToViewport(x, y)` the viewport point the pixel looks through, and
+  `z = 1 / inv_z`, it returns `(Vx z / d, Vy z / d, z)`: the projection of 3.7 solved
+  for the vertex. It inverts `ProjectVertex` up to that function's truncation.
+  Precondition: `inv_z > 0`, asserted.
+- None of the three reads the intensities stored in the triangles (`h`); under lights
+  they are computed. A triangle without area has no normal and is not drawn. The normals
+  are taken as they are: unit vectors as `TransformModel` leaves them, or interpolated
+  between unit vectors as the clipping leaves them. Gouraud shading normalizes one to
+  compute the light at its corner; Phong shading normalizes after interpolating.
+
+Scenes under lights:
+
+- `RenderScene(viewport, models, instances, camera, lights, shading_model = kPhong,
+  depth_buffer = none, back_face_culling = kOn)` is the book's `RenderScene` of this
+  chapter, the steps of 3.10 with the lights taken along:
+  `M_camera = MakeCameraMatrix(...)`; every instance placed by `TransformModel`, which
+  turns its normals; every light `L` replaced by `TransformLight(L, M_camera)`; back
+  faces culled (3.12) and the scene clipped (3.11) as before; then every instance that
+  is left drawn by `RenderObject(instance, lights, shading_model, depth_buffer)`.
+  `lights` are in the world's coordinates.
+- The overload that takes a triangle primitive (3.10) is unchanged and draws what it
+  drew: outlines, plain colors, or the intensities a model states.
+- Lit faces are solid, so a scene wants a depth buffer here unless it is listed from
+  the back to the front. Back-face culling matters more than in 3.12: a face turned
+  away from the camera is lit by its outward normal like any other.
+- A triangle cut by a clipping plane is lit as its pieces. Under Phong shading that is
+  the light the whole triangle would have shown, the pieces' corners having the normals
+  the whole triangle has at those points. Under Gouraud shading it is not: a new corner
+  gets the light computed there, where the whole triangle had the light interpolated
+  between its own corners, which is the same only where the light is linear along the
+  side. Under flat shading every piece is lit at its own center, so the pieces of one
+  triangle can differ in shade when a point light is near.
+- The interpolation of the normals, like that of `h`, is linear on the canvas and so not
+  quite linear over the triangle in space unless the triangle is parallel to the
+  viewport; only `1/z` is. Section 13 says what removes the difference.
+- Shading does not change the outline of an object: a sphere made of triangles keeps its
+  corners along its silhouette, however smoothly its inside is lit.
+
+### 3.14 Numeric conventions
 
 - All geometry and color math uses `double`. Switching to `float` would be a deliberate
   decision rather than a detail, because it changes the golden images.
@@ -693,13 +859,13 @@ CLAUDE.md                 design principles and the folder-structure rules
 README.md                 build instructions and project overview
 docs/SPEC.md              this document
 include/cgfs/             public headers: one folder per layer, one file per concept
-    math/vec3.h  mat4.h  plane.h  bounding_sphere.h
+    math/vec3.h  mat4.h  plane.h  bounding_sphere.h  triangle_normal.h
     image/color.h  pixel_index.h  canvas.h  depth_buffer.h  image_io.h
     camera/viewport.h  camera.h  clipping_planes.h
     lighting/light.h  illumination.h
     raytracer/scene.h  raytracer.h
     rasterizer/point.h  interpolate.h  line.h  triangle.h  projection.h  object.h
-    rasterizer/model.h  instance.h  culling.h  clipping.h  scene.h
+    rasterizer/model.h  instance.h  culling.h  clipping.h  shading.h  scene.h
     demo/raytracer_scenes.h  rasterizer_scenes.h
                           the demo pictures shared by render_demo and the golden tests
 src/<layer>/              implementation files, mirroring include/cgfs/<layer>/
@@ -707,17 +873,18 @@ apps/
     render_demo.cpp       command-line renderer for the demo pictures
 tests/
     CMakeLists.txt
-    support/test_helpers.h      Catch2 printers for Vec3/Mat4/Plane/Color/Rgb8/Point/Triangle,
-                                a temp-file helper
+    support/test_helpers.h      Catch2 printers for Vec3/Mat4/Plane/Color/Rgb8/Point/Triangle/
+                                Light, a temp-file helper
     math/vec3_test.cpp  mat4_test.cpp  plane_test.cpp  bounding_sphere_test.cpp
+    math/triangle_normal_test.cpp
     image/color_test.cpp  pixel_index_test.cpp  canvas_test.cpp  depth_buffer_test.cpp
     image/image_io_test.cpp
     camera/viewport_test.cpp  camera_test.cpp  clipping_planes_test.cpp
-    lighting/illumination_test.cpp
+    lighting/light_test.cpp  illumination_test.cpp
     raytracer/raytracer_test.cpp
     rasterizer/interpolate_test.cpp  line_test.cpp  triangle_test.cpp  projection_test.cpp
     rasterizer/object_test.cpp  model_test.cpp  instance_test.cpp  culling_test.cpp
-    rasterizer/clipping_test.cpp  scene_test.cpp
+    rasterizer/clipping_test.cpp  shading_test.cpp  scene_test.cpp
     rasterizer/pixel_helpers.h
     demo/golden_test.cpp
     demo/golden/          reference renders of the demo pictures (PPM)
@@ -737,22 +904,26 @@ not the namespaces, carry the structure. The layers, bottom to top, each dependi
 on the ones below it:
 
 ```
-math         vec3, mat4, plane, bounding_sphere                     vector algebra and plain geometry
+math         vec3, mat4, plane, bounding_sphere, triangle_normal    vector algebra and plain geometry
 image        color, pixel_index, canvas, depth_buffer, image_io     colors, the pixel buffer, the depth buffer, file formats
 camera       viewport, camera, clipping_planes                      how canvas pixels map into the world
 lighting     light, illumination                                    the lights and the illumination equation
 raytracer    scene, raytracer                                       the ray tracing renderer
 rasterizer   point, interpolate, line, triangle, projection,        the rasterizing renderer
-             object, model, instance, culling, clipping, scene
+             object, model, instance, culling, clipping, shading,
+             scene
 demo         raytracer_scenes, rasterizer_scenes                    the demo pictures
 ```
 
 - `math/vec3`: `Vec3` and its free functions, header-only, `constexpr` where possible.
   `math/mat4`: `Mat4`, the 4 x 4 matrix of the transforms, its product, its application
-  to a point and the scaling, translation and rotation constructors; header-only.
+  to a point and to a direction and the scaling, translation and rotation constructors;
+  header-only.
   `math/plane`: `Plane`, `SignedDistance` and `IntersectSegmentPlane`.
-  `math/bounding_sphere`: `BoundingSphere` and `MakeBoundingSphere`. Both header-only,
-  and in this layer because they depend on nothing but `Vec3`.
+  `math/bounding_sphere`: `BoundingSphere` and `MakeBoundingSphere`.
+  `math/triangle_normal`: `TriangleNormal`, the normal of a triangle from its three
+  corners, which back-face culling and shading both ask for. All three header-only, and
+  in this layer because they depend on nothing but `Vec3`.
 - `image/color`: `Color`, `Rgb8`, `ToRgb8`, header-only. `image/pixel_index`:
   `PixelIndex`, the centered coordinate system as one function, header-only.
   `image/canvas`: the pixel buffer. `image/depth_buffer`: `DepthBuffer`, a `1/z` per
@@ -765,37 +936,42 @@ demo         raytracer_scenes, rasterizer_scenes                    the demo pic
   whichever renderer moves its camera, the rasterizer today.
   `camera/clipping_planes`: `MakeClippingPlanes`, the five planes of what a viewport
   shows.
-- `lighting/light`: the three kinds of light and `Light`, the variant of them; plain
-  data. `lighting/illumination`: the illumination equation term by term,
-  `DiffuseReflection` and `SpecularReflection`, and `kMatte`, the specular exponent of a
-  surface without a highlight. Header-only, and a layer of its own because both
-  renderers light their scenes with it and neither may know the other.
+- `lighting/light`: the three kinds of light and `Light`, the variant of them, plain
+  data, and `TransformLight`, a light in other coordinates. `lighting/illumination`:
+  the illumination equation, term by term, `DiffuseReflection` and `SpecularReflection`,
+  and summed over a list of lights, `ComputeIllumination`; and `kMatte`, the specular
+  exponent of a surface without a highlight. A layer of its own because both renderers
+  light their scenes with it and neither may know the other.
 - `raytracer/scene`: plain data: spheres, the lights of the lighting layer, background
   color. `raytracer/raytracer`: intersection, the lighting of a point with its shadows,
   the render loop.
-- `rasterizer/point`: `Point`, with its intensity `h` and its depth `inv_z`, and
-  `ToPixel`, the one conversion
+- `rasterizer/point`: `Point`, with its intensity `h`, its depth `inv_z` and its
+  `normal`, and `ToPixel`, the one conversion
   from interpolated coordinates to pixels. `rasterizer/interpolate`: `Interpolate`, the
   building block. `rasterizer/line`: `DrawLine`. `rasterizer/triangle`:
   `DrawWireframeTriangle`, `DrawFilledTriangle` and `DrawShadedTriangle`, the last two
-  through a depth buffer when they are given one, and the signature the three share,
-  `DrawTriangleFunction`.
+  through a depth buffer when they are given one, the signature the three share,
+  `DrawTriangleFunction`, and `DrawPhongTriangle`, which lights every pixel.
   `rasterizer/projection`: `ViewportToCanvas` and `ProjectVertex`, from a `Vec3` seen
-  through a `Viewport` to the `Point` the primitives draw; the start of the 3D pipeline.
-  `rasterizer/object`: `Triangle`, three vertex indices, a color and an intensity per
-  corner, and `RenderObject`, which projects an object's vertex list and draws its
-  triangles with the primitive it is given; the first use of the projection.
+  through a `Viewport` to the `Point` the primitives draw, the start of the 3D pipeline,
+  and `UnprojectVertex`, the way back.
+  `rasterizer/object`: `Triangle`, three vertex indices, a color and an intensity and a
+  normal per corner, and `RenderObject`, which projects an object's vertex list and
+  draws its triangles with the primitive it is given; the first use of the projection.
   `rasterizer/model`: `Model`, the vertex list and the triangle list of an object,
-  stored once, with a bounding sphere, `TransformModel`, the model under a transform,
-  and `RenderModel`, which draws that through `RenderObject`. `rasterizer/instance`:
+  stored once, with a bounding sphere and a specular exponent, `TransformModel`, the
+  model under a transform, and `RenderModel`, which draws that through `RenderObject`. `rasterizer/instance`:
   `Instance`, a model index with a position, an orientation and a scale,
   `MakeModelMatrix`, its model matrix, and `RenderInstance`. `rasterizer/culling`:
   `IsBackFacing`, `CullBackFaces` and the switch `BackFaceCulling`, an object without
   the triangles that are turned away from the camera. `rasterizer/clipping`:
   `ClipScene`, `ClipInstance`, `ClipInstanceAgainstPlane`, `ClipTrianglesAgainstPlane`
-  and `ClipTriangle`, what a list of planes leaves of a scene. `rasterizer/scene`:
-  `RenderScene`, every instance of a model list and an instance list, in order, as a
-  camera sees them: transformed, culled, clipped, projected and drawn.
+  and `ClipTriangle`, what a list of planes leaves of a scene. `rasterizer/shading`:
+  `ShadingModel`, flat, Gouraud or Phong, and `RenderObject` under lights, which draws
+  an object's triangles in their colors times the light computed for them.
+  `rasterizer/scene`: `RenderScene`, every instance of a model list and an instance
+  list, in order, as a camera sees them: transformed, culled, clipped, projected and
+  drawn, with a triangle primitive or under lights.
 - `demo/raytracer_scenes`: the ray-traced demo scenes, each a function returning a
   `Scene`. `demo/rasterizer_scenes`: the rasterized demo pictures, each a function that
   draws into a canvas. Either way the app and the golden tests render exactly the same
@@ -827,7 +1003,7 @@ and a line in the table above.
 Signatures below are the intended shape. Names, parameter order and semantics are
 normative; exact qualifiers and overload sets may be adjusted during implementation.
 
-### 5.1 `math/vec3.h`, `math/mat4.h`, `math/plane.h`, `math/bounding_sphere.h`
+### 5.1 `math/vec3.h`, `math/mat4.h`, `math/plane.h`, `math/bounding_sphere.h`, `math/triangle_normal.h`
 
 ```cpp
 struct Vec3 {
@@ -851,6 +1027,7 @@ struct Mat4 {                         // 4 x 4, homogeneous coordinates (section
 };
 constexpr Mat4 operator*(const Mat4& a, const Mat4& b);   // applies b first, then a
 constexpr Vec3 operator*(const Mat4& m, Vec3 p);          // m (p, 1), divided by w
+constexpr Vec3 TransformDirection(const Mat4& m, Vec3 d); // m (d, 0): no translation (3.13)
 constexpr Mat4 Transposed(const Mat4& m);                 // the inverse of a rotation
 constexpr Mat4 MakeScalingMatrix(double scale);
 constexpr Mat4 MakeTranslationMatrix(Vec3 translation);
@@ -878,6 +1055,10 @@ struct BoundingSphere {               // a sphere that contains an object (secti
     bool operator==(const BoundingSphere&) const = default;
 };
 BoundingSphere MakeBoundingSphere(std::span<const Vec3> points);  // average; farthest point
+
+// triangle_normal.h
+constexpr Vec3 TriangleNormal(Vec3 a, Vec3 b, Vec3 c);   // (b - a) x (c - a), not normalized
+// toward whoever sees a, b, c run clockwise (sections 3.12 and 3.13)
 ```
 
 Plain geometry on `Vec3`, header-only like the rest of the layer. The ray tracer's
@@ -1008,20 +1189,29 @@ struct AmbientLight     { double intensity = 0; };
 struct PointLight       { double intensity = 0; Vec3 position; };
 struct DirectionalLight { double intensity = 0; Vec3 direction; };   // points toward the light
 using Light = std::variant<AmbientLight, PointLight, DirectionalLight>;
+// each of the three compares with ==
+template <class... Ts> struct Overloaded;   // one lambda per kind of light, for std::visit
+Light TransformLight(const Light& light, const Mat4& transform);
+// the position as a point, the direction as a direction, ambient as it is (section 3.13)
 
-// illumination.h (section 3.5)
+// illumination.h (sections 3.5 and 3.13)
 inline constexpr double kMatte = -1.0;    // the specular value of a surface with no highlight
 double DiffuseReflection(double light_intensity, Vec3 normal, Vec3 to_light);
 // I <N, L> / (|N| |L|), or 0 when <N, L> <= 0
 double SpecularReflection(double light_intensity, Vec3 normal, Vec3 to_light, Vec3 view,
                           double exponent);
 // I (<R, V> / (|R| |V|))^s with R = Reflect(L, N), or 0 when <R, V> <= 0; |normal| = 1
+double ComputeIllumination(Vec3 point, Vec3 normal, Vec3 view, double specular,
+                           std::span<const Light> lights);
+// the sum over the lights, none blocked; |normal| = 1, view from the point to the viewer
 ```
 
 `std::variant` instead of a class hierarchy: lights are a small closed set, value
 semantics keep scenes copyable and trivially testable, and `std::visit` dispatches on
-the light type. The two terms are inline functions in the header, so the ray tracer's
-inner loop is the code it was when they were private to it.
+the light type; `Overloaded` is the usual helper for it, here because every visit of a
+light uses it. The two terms are inline functions in the header, so the ray tracer's
+inner loop is the code it was when they were private to it. `ComputeIllumination` takes
+the lights as a span, so it serves a `std::vector<Light>` as it is.
 
 ### 5.7 `raytracer/scene.h`
 
@@ -1073,7 +1263,7 @@ The scene and viewport must outlive the tracer. `Hit::sphere` points into the sc
 sphere vector and is valid as long as that vector is not modified. `ClosestIntersection`,
 `TraceRay` and `ComputeLighting` are public so the tests can exercise them directly.
 
-### 5.9 `rasterizer/point.h`, `interpolate.h`, `line.h`, `triangle.h`, `projection.h`, `object.h`, `model.h`, `instance.h`, `culling.h`, `clipping.h`, `scene.h`
+### 5.9 `rasterizer/point.h`, `interpolate.h`, `line.h`, `triangle.h`, `projection.h`, `object.h`, `model.h`, `instance.h`, `culling.h`, `clipping.h`, `shading.h`, `scene.h`
 
 ```cpp
 // point.h
@@ -1082,6 +1272,7 @@ struct Point {                 // canvas coordinates, intensity and depth (secti
     int y = 0;
     double h = 1.0;            // multiplier for the color; read by DrawShadedTriangle only
     double inv_z = 0.0;        // 1/z of the projected vertex; read through a depth buffer
+    Vec3 normal;               // of the surface at the vertex; read by DrawPhongTriangle only
     bool operator==(const Point&) const = default;
 };
 constexpr int ToPixel(double coordinate);    // truncation toward zero (section 3.6)
@@ -1105,16 +1296,24 @@ void DrawShadedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color colo
 using DrawTriangleFunction = void (*)(Canvas& canvas, Point p0, Point p1, Point p2, Color color,
                                       DepthBuffer* depth_buffer);
 // the signature of the three, for whoever draws many triangles
+void DrawPhongTriangle(Canvas& canvas, const Viewport& viewport, Point p0, Point p1, Point p2,
+                       Color color, double specular, std::span<const Light> lights,
+                       DepthBuffer* depth_buffer = nullptr);
+// color * ComputeIllumination at every pixel, from the interpolated 1/z and normals; the
+// lights in the camera's coordinates; every point with inv_z > 0 and a normal (section 3.13)
 
 // projection.h
 Point ViewportToCanvas(const Viewport& viewport, double x, double y);  // truncated (section 3.7)
 Point ProjectVertex(const Viewport& viewport, Vec3 v);  // precondition v.z > 0; inv_z = 1 / v.z
+Vec3 UnprojectVertex(const Viewport& viewport, int x, int y, double inv_z);
+// the point seen at the pixel at depth 1 / inv_z; precondition inv_z > 0 (section 3.13)
 
 // object.h
 struct Triangle {                     // one face of an object (section 3.8)
     std::array<std::size_t, 3> v{};   // indices into the object's vertex list
     Color color;
     std::array<double, 3> h{1.0, 1.0, 1.0};  // the intensity at each corner
+    std::array<Vec3, 3> normals{};    // the surface's normal at each corner; zero: the triangle's
     bool operator==(const Triangle&) const = default;
 };
 void RenderObject(Canvas& canvas, const Viewport& viewport, std::span<const Vec3> vertices,
@@ -1128,10 +1327,12 @@ struct Model {                        // an object's shape, described once (sect
     std::vector<Vec3> vertices;       // in the model's own coordinates
     std::vector<Triangle> triangles;
     BoundingSphere bounding_sphere;   // around the vertices; the default contains everything
+    double specular = kMatte;         // the exponent of the surface's highlight (section 3.13)
     bool operator==(const Model&) const = default;
 };
 Model TransformModel(const Model& model, const Mat4& transform);
-// transform * every vertex, the same triangles, the sphere moved and scaled along (section 3.11)
+// transform * every vertex, the same triangles with their normals turned and at unit length,
+// the sphere moved and scaled along (sections 3.11 and 3.13)
 void RenderModel(Canvas& canvas, const Viewport& viewport, const Model& model,
                  const Mat4& transform);  // RenderObject on TransformModel's vertices (section 3.10)
 
@@ -1163,6 +1364,15 @@ std::optional<Model> ClipInstanceAgainstPlane(Model instance, const Plane& plane
 std::optional<Model> ClipInstance(Model instance, std::span<const Plane> planes);
 std::vector<Model> ClipScene(std::vector<Model> scene, std::span<const Plane> planes);
 
+// shading.h (section 3.13)
+enum class ShadingModel { kFlat, kGouraud, kPhong };
+void RenderObject(Canvas& canvas, const Viewport& viewport, const Model& object,
+                  std::span<const Light> lights,
+                  ShadingModel shading_model = ShadingModel::kPhong,
+                  DepthBuffer* depth_buffer = nullptr);
+// the object, a Model in the camera's coordinates, under lights in the same coordinates:
+// every triangle in its color times the light computed per triangle, per corner or per pixel
+
 // scene.h
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
                  std::span<const Instance> instances, const Camera& camera = Camera{},
@@ -1172,6 +1382,14 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
 // every instance, in list order, as camera sees it: transformed, culled, clipped, projected,
 // drawn; through the depth buffer, if there is one, the nearest surface shows whatever the
 // order; with BackFaceCulling::kOff the back faces are drawn too
+void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
+                 std::span<const Instance> instances, const Camera& camera,
+                 std::span<const Light> lights,
+                 ShadingModel shading_model = ShadingModel::kPhong,
+                 DepthBuffer* depth_buffer = nullptr,
+                 BackFaceCulling back_face_culling = BackFaceCulling::kOn);
+// the same steps under lights, which are given in the world's coordinates and taken into
+// the camera's with the scene; every instance drawn by RenderObject with the shading model
 ```
 
 One header per primitive. Free functions that take the canvas as their first parameter,
@@ -1207,6 +1425,19 @@ handing a scene over (`std::move`) and keeping it. "Nothing is left" is an empty
 They are the primitives; a class comes when there is state to protect, and the depth
 buffer is the first in the rasterizer: a buffer whose size and contents must stay in
 step. The primitives stay free functions.
+Shading arrived as additions beside what was there (section 14, decision 18). The
+normals of a triangle, the normal of a point and the specular exponent of a model are
+fields with defaults, none, none and matte, so every model and every point written
+before them is what it was. The drawing under lights is a second `RenderScene` and a
+second `RenderObject`, overloads that take a list of lights and a `ShadingModel` where
+the first take a triangle primitive: the book keeps the names and adds the lights to
+the parameters, and so does this. The two `RenderObject`s are in two headers, the first
+with `Triangle` and the second with the shading it does. The shading model is a scoped
+enumeration with the book's three names and defaults to Phong, the book's demo's
+default and the one of the three that is right everywhere; a caller who wants a cheaper
+one says so. `DrawPhongTriangle` does not have the signature the other three primitives
+share and is not a `DrawTriangleFunction`: it needs the viewport, to find the point a
+pixel shows, and the lights.
 
 ## 6. Build system
 
@@ -1289,6 +1520,11 @@ Unit tests:
   `MakeOYRotationMatrix` turns +X to +Z and +Z to -X at 90 degrees within `1e-12`,
   leaves y exactly, is exactly the identity at 0 degrees, matches cos and sin by hand at
   30 degrees, composes (30 + 60 = 90), keeps lengths and inverts by transposition.
+  `TransformDirection` leaves a direction as it is under a translation that moves the
+  same three numbers as a point, turns it under a rotation and stretches it under a
+  scaling; for a translation times a rotation times a scaling by 1.5 the direction
+  `q - p` comes out as `M q - M p` within `1e-12`, 1.5 times as long; the zero vector
+  stays zero; it is usable in a constant expression.
 - `plane`: `SignedDistance` is positive in front of the plane, negative behind it, zero
   on it and `D` at the origin; flipping the normal and `D` exchanges the sides; a slanted
   unit normal (0.6, 0, 0.8) gives distances within `1e-12`; a normal of length 2 gives
@@ -1303,6 +1539,13 @@ Unit tests:
   average and the distance to the farthest point (center (1, 0, 0), radius 3, where the
   smallest sphere has radius 2) and still contains every point; one point gives radius
   0 and no points the origin with radius 0.
+- `triangle_normal`: for a viewer at the origin who looks along +Z, three corners that
+  run clockwise give `(0, 0, -4)`, toward the viewer, and the same corners the other way
+  round `(0, 0, 4)`; the three rotations of the corners give one normal; for a right
+  triangle with legs 3 and 4 in a tilted plane the normal is perpendicular to all three
+  sides and 12 long, twice the area; a floor listed clockwise as seen from above faces
+  up; three points on a line, or two corners at one place, give the zero vector; usable
+  in a constant expression.
 - `color`: scaling, addition, `ToRgb8` clamping and truncation (e.g. `254.9 -> 254`,
   `300 -> 255`, `-5 -> 0`).
 - `pixel_index`: on a 4 x 4 grid the origin has index 6 and the four corners 0, 3, 12
@@ -1356,7 +1599,23 @@ Unit tests:
   `cos^s` away from it (s = 2 and s = 10 at 45 degrees) and a larger exponent leaves
   less; nothing is seen from more than 90 degrees off the mirror direction, or at 90
   exactly; the lengths of `L` and `V` do not matter; the term is not gated on the light
-  being in front of the surface.
+  being in front of the surface. `ComputeIllumination`: ambient light adds its
+  intensity everywhere and for any exponent, and no lights give 0; the direction to a
+  point light is taken from the point (full intensity under it, `1 / sqrt(2)` from 5 to
+  the side of a light 5 up, nothing from above it), and a directional light arrives
+  alike at points far apart; three lights add up to 1.3, unclamped; a shiny surface adds
+  the highlight (the full intensity in the mirror direction, `1 / 32` at 45 degrees with
+  s = 10, for a point light too) and a matte one none; a light a million units away
+  arrives, nothing being in the way; and the light at a point is the same within
+  `1e-12` when the point, the normal, the viewer and three lights are taken into the
+  coordinates of a camera that stands elsewhere and is turned 70 degrees, points as
+  points and directions as directions. `Light`: two lights are equal when they are of
+  one kind with the same values. `TransformLight`: ambient light is unchanged by any
+  transform; a point light's position is moved by a translation and turned by a
+  rotation, its intensity kept; a directional light is not moved by a translation and
+  is turned by a rotation; through the matrix of a camera at (4, 5, 6) that looks along
+  -X a lamp at the camera's place lands at the origin, one 2 ahead of it at `(0, 0, 2)`,
+  and a sun in the world's -X straight ahead.
 - `raytracer`:
   - `IntersectRaySphere`: miss gives two infinite roots; hit gives two finite roots in
     the right order; tangent gives equal roots; origin inside the sphere gives one
@@ -1441,6 +1700,27 @@ Unit tests:
     to 0. With a depth buffer the nearer of two shaded triangles shows in either
     order with its shading, the painter's picture to the byte, and with `h = 1` the
     canvas and the depths are those of the filled triangle.
+  - `DrawPhongTriangle` (a 32 x 32 canvas through a 1 x 1 viewport at distance 1, where
+    the pixel `(x, y)` at depth 1 shows the point `(x / 32, y / 32, 1)`; the triangles
+    face the camera unless said otherwise): under ambient light of 0.5 it is the filled
+    triangle in half the color, for the eleven shapes of the shaded test; under a light
+    from behind the camera it is evenly `0.75` of the color; with a lamp a quarter of a
+    unit in front of the face, ambient light and an exponent of 20, every one of more
+    than 200 pixels is the color times `ComputeIllumination` at the point it shows, and
+    nothing else is lit; a lamp in front of the point of the pixel (0, -4) lights that
+    pixel at 255 and the corners at 123, where `DrawShadedTriangle` with the corners'
+    light leaves the pixel between 100 and 125; on the right triangle (0, 0), (8, 0),
+    (0, 8) with normals toward the camera, along +X and along +Y the bottom side reads
+    255, 241, 180, 80 and 0 at x = 0, 2, 4, 6 and 8, the cosines of the interpolated and
+    normalized normals (180 where interpolated light would give 127), the left side the
+    same and the pixel (2, 2) 208; with a lamp at the camera a shiny face reads 204 on
+    the axis, where a matte one reads 102, and no more than the matte one eight pixels
+    to the side; all six vertex orders give one canvas for a triangle with three depths
+    and three normals, and exchanging two normals gives another; the same pixels at
+    depth 4 show a triangle four times as large, a lamp in front of its point lighting
+    the pixel in full; through a depth buffer the nearer of two shows in either order,
+    the picture of the filled triangles, and the buffer holds what a filled triangle
+    leaves in it, 0.625 halfway along a side from `1/z` = 1 to 1/4.
   - `ViewportToCanvas`: the viewport test's table the other way round (the default
     viewport on 1920 x 1080); a 2 x 1 viewport scales each axis by its own ratio;
     truncation toward zero (`33.7 -> 33`, `-33.7 -> -33`, `0.5` and `-0.5` to 0); the
@@ -1454,6 +1734,12 @@ Unit tests:
     inverts `CanvasToViewport` on every pixel. The point's `inv_z` is `1 / z`: 1, 1/2
     and 1/8 for three vertices on one ray, larger for the nearer of two vertices
     anywhere, and the vertex's depth whatever the viewport's distance.
+  - `UnprojectVertex`: on 1920 x 1080 the pixel (480, -540) at depth 1 is
+    `(0.25, -0.5, 1)` and at depth 4 `(1, -2, 4)`, four times as far along one ray; the
+    middle pixel looks along the axis; through a viewport at distance 2 the pixel
+    (960, 540) is `(0.5, 0.5, 2)` at depth 2 and `(1, 1, 4)` at depth 4; on the 64 x 32
+    canvas of the round trip above, for every pixel and three depths, the vertex on the
+    pixel's ray projects to the pixel with its `1/z` and unprojects to itself, exactly.
   - `RenderObject` (on a 32 x 32 canvas through a 1 x 1 viewport at distance 1, where a
     vertex `(x, y, 1)` lands on the pixel `(32 x, 32 y)`): one triangle gives the canvas
     of `DrawWireframeTriangle` on its projected corners; a triangle names its corners by
@@ -1474,7 +1760,8 @@ Unit tests:
     z = 1 and z = 2, the nearer shows in both list orders, the painter's picture with
     the far one first; the buffer holds 1/2 where only the far one is; two objects
     drawn through one shared buffer hide each other and through a buffer each the
-    later one shows; a wireframe is drawn whole.
+    later one shows; a wireframe is drawn whole. A `Triangle` states no normals unless
+    given, and the three primitives draw the same picture whatever normals it states.
   - `RenderModel` (same canvas and viewport; a lopsided triangle in its own plane
     z = 0): a translation to z = 1 gives the wireframe of its corners and the canvas of
     `RenderObject` on the vertices moved by hand; the transform is applied before the
@@ -1489,7 +1776,12 @@ Unit tests:
     rotation keeps it within `1e-12`, and under an instance's whole model matrix the
     radius is multiplied by the scale; the transformed sphere of `MakeBoundingSphere`
     still contains the transformed vertices under three transforms, one of them a
-    mirroring.
+    mirroring. A model is matte unless it says otherwise, and a transformed model has
+    its model's exponent; a translation leaves the normals of a triangle as they are
+    while it moves the vertices; a quarter turn about Y takes normals along +X, +Y and
+    +Z to +Z, +Y and -X; the normals come out at unit length under a scaling by 0.5 or
+    by 3, under the identity when the model states them 4, 0.25 and 5 long, and turned,
+    scaled and moved at once; a corner without a normal stays without one.
   - `RenderInstance` (same canvas and viewport; the model's triangle lies in its own
     plane z = 0 and is placed at z = 1): at `(0, 0, 1)` it gives the wireframe of its
     corners and the canvas of `RenderObject` on the vertices moved by hand; a position
@@ -1519,7 +1811,12 @@ Unit tests:
     be kept, all without new vertices; a triangle cut through a corner gives one
     triangle, the crossing on the side to that corner being the corner itself; two
     triangles that share a cut side and list it in opposite directions get the same
-    crossing point bit for bit, with coordinates that are not round.
+    crossing point bit for bit, with coordinates that are not round. Normals: with one
+    corner in front the two new corners get `NA + 1/4 (NB - NA)` and
+    `NA + 1/2 (NC - NA)`, exactly and not normalized; with two in front both pieces get
+    the two normals interpolated half way; a triangle without normals is cut into
+    pieces without normals, whichever corner the list starts from and in either
+    winding; a triangle kept whole keeps its normals.
     `ClipTrianglesAgainstPlane` keeps the order and appends the new vertices after the
     old. `ClipInstanceAgainstPlane` (a 2 x 2 square of two triangles with its bounding
     sphere): in front it is returned equal to itself, behind nothing is returned, and
@@ -1610,7 +1907,57 @@ Unit tests:
     top; a front face cut by a clipping plane is drawn as its pieces and a back face cut
     the same way not at all; and to a camera at the center of a cube, with the clipping
     planes of its viewport, the inside fills the canvas without culling and nothing is
-    drawn with it.
+    drawn with it. Under lights (a triangle listed clockwise as the camera sees it, its
+    corners 0.26 from its center, off the pixel boundaries, drawn through a depth
+    buffer): an instance scaled and placed off the axis is, for each shading model, the
+    canvas of `RenderObject` under lights on its placed model; the three models light
+    the same pixels differently, Phong shading alone reaching 223 in front of a lamp,
+    and Phong is the default; the camera, the instance and the lamp moved together by
+    one vector give the same canvas to the bit, and the lamp left behind another; to a
+    camera turned 90 degrees a sun in the world's +X lights a triangle that faces it at
+    191 on every pixel, the canvas of the default camera with the sun behind it, a sun
+    in the world's -Z leaves the triangle dark, and a lamp a quarter of a unit in front
+    of the triangle gives the default camera's picture within one level; an instance
+    turned 45 degrees turns its stated normals from 45 degrees off the sun, 135, to
+    straight at it, 191, and its own normal, for flat shading, from across the sun to 45
+    degrees off it; a model twice as large with normals of three other lengths, placed
+    at half the scale, is the same canvas; a triangle listed the other way round is not
+    drawn, and with the culling off is lit by the ambient light alone, 63, where the
+    front face has 191; of two instances on the axis the nearer shows in either order
+    and without a buffer the later; a triangle with normals across the light at one
+    corner and along it at two, cut by the plane `x = 0`, is under Phong shading the
+    whole one with everything behind the plane removed, within one level, 135 on the
+    cut, under Gouraud shading 135 on the cut where the whole triangle has 95, and under
+    flat shading one shade over the same pixels.
+  - Shading, `RenderObject` under lights (one triangle on the viewport plane that faces
+    the camera, its corners on the pixels (0, 12), (12, -12) and (-12, -12) and its
+    center on (0, -4)): Phong shading by default; under ambient light alone every
+    shading model draws the filled triangle in half the color; under a directional
+    light at the angle of the 3-4-5 triangle every model draws it in `0.525` of the
+    color, one value being all a flat face lit from far away has; flat shading draws the
+    filled triangle in the color times the light at the center, which is not the light
+    under the lamp, and draws the same whatever normals the triangle states, while the
+    other two change; Gouraud shading draws `DrawShadedTriangle` through the projected
+    corners with `ComputeIllumination` at each vertex, the model's exponent included,
+    three different values; with normals leaning by the 3-4-5 angle at the two lower
+    corners those corners read 204 and the top more than 250 under a light from the
+    camera, and normals half as long give the same canvases; a corner without a normal
+    is lit as the flat face's while the corner with one leans away; Phong shading draws
+    `DrawPhongTriangle` through the projected corners with their depths and normals; a
+    lamp in front of the point of the pixel (4, 0), at a quarter of a unit, an eighth
+    and a sixteenth, leaves that pixel at 255 under Phong shading every time and darker
+    each time under the other two, below 135 under Gouraud throughout and below 50 at
+    the end (the book's Figures 13-7 and 13-10); with a lamp at the camera a shiny face
+    reads 204 on the axis under Phong shading and a matte one 102, under Gouraud
+    shading the two differ by at most one level, and under flat shading the shiny one
+    is brighter all over by what its center caught; two triangles folded along a shared
+    side read 241 and 80 under flat shading, and with the surface's normals at their
+    corners 180 on the fold from both sides under Gouraud and Phong shading, less than
+    50 apart two pixels either side of it; the stored intensities are not read; the
+    same corners the other way round are lit by the ambient light alone; three corners
+    on a line, or two at one place, draw nothing, nor does an empty object; every
+    triangle is lit in its own color; and through a depth buffer the nearer of two
+    triangles shows under all three, where painted in list order the later one does.
 
 Golden-image tests:
 
@@ -1626,10 +1973,14 @@ Golden-image tests:
   and mirror ball references show reflections. `lines_320x180.ppm`,
   `triangles_320x180.ppm`, `shaded_320x180.ppm`, `cube_320x180.ppm`,
   `objects_320x180.ppm`, `instances_320x180.ppm`, `camera_320x180.ppm`,
-  `clipping_320x180.ppm` and `filled_320x180.ppm` are the rasterizer's demos (section
-  9): every pixel of them comes from `DrawLine`, `DrawFilledTriangle` or
-  `DrawShadedTriangle`, the objects' through `RenderObject`, the instances', the camera
-  scene's, the clipping scene's and the filled cubes' through `RenderScene`, the last
+  `clipping_320x180.ppm`, `filled_320x180.ppm` and the three of the shading scene,
+  `shading_flat_320x180.ppm`, `shading_gouraud_320x180.ppm` and
+  `shading_phong_320x180.ppm`, are the rasterizer's demos (section
+  9): every pixel of them comes from `DrawLine`, `DrawFilledTriangle`,
+  `DrawShadedTriangle` or `DrawPhongTriangle`, the objects' through `RenderObject`, the
+  instances', the camera
+  scene's, the clipping scene's, the filled cubes' and the shading scene's through
+  `RenderScene`, the last two
   through a depth buffer and with back-face culling as well. The 2D
   scenes compute their
   vertices with integer arithmetic and their colors and intensities without any `libm`
@@ -1641,7 +1992,12 @@ Golden-image tests:
   projected vertices clear the pixel boundaries, so that a `libm` off by a few ulps
   still draws the same pixels. The clipping scene is the second, and the first whose
   picture is filled: section 15 records its margin, and what had to be moved off the
-  pixel boundaries to get one.
+  pixel boundaries to get one. The shading scene, though its camera is turned and two
+  of its models are spheres, calls neither: its vertices come from additions,
+  multiplications, divisions and square roots, all of which IEEE arithmetic rounds one
+  way (section 9 says how). What differs between platforms in its three references is
+  `pow`, in the specular term of the shiny ball, by an amount far inside the test's
+  tolerance.
 - `golden_test.cpp` renders the same scenes and compares every channel of every pixel
   with the reference image. The test passes when no channel differs by more than 1. The
   tolerance absorbs floating-point differences between compilers and standard
@@ -1650,6 +2006,8 @@ Golden-image tests:
   golden test, so the app and the test cannot drift apart.
 - The references are regenerated only when rendering behaviour changes on purpose, with
   `render_demo --scene <flat|diffuse|specular|reflective|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|filled> --width 320 --height 180 --output tests/demo/golden/...`
+  and `render_demo --scene shading --shading <flat|gouraud|phong> ...` for the three of
+  the shading scene,
   from a Release build, and the pictures are reviewed before they are committed. The
   `flat` reference doubles as a regression test: neither the specular nor the shadow code
   path may change the output of an ambient-only scene, `diffuse` pins the shadows of
@@ -1664,17 +2022,22 @@ Golden-image tests:
   `instances`, `camera` and `clipping` are drawn with the culling off and are byte for
   byte what they were. `filled` is also the one reference that would notice a triangle
   listed the wrong way round, and only in the cube; the other models are drawn without
-  culling, and their winding was checked once, outside the tests (section 15).
+  culling, and their winding was checked once, outside the tests (section 15). The three
+  shading references pin one scene under the three shading models: the same 26216
+  pixels are covered in each, and what differs is the light. They are drawn with
+  culling, so they would notice a triangle of the sphere or of the floor listed the
+  wrong way round. Shading changed no other reference: the fourteen from before it are
+  byte for byte what they were.
 
 ## 9. Demo application
 
 `render_demo` renders one of the demo pictures to a file:
 
 ```
-render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|filled|axes] [--width N] [--height N] [--distance D] [--output PATH]
+render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|filled|shading|axes] [--width N] [--height N] [--distance D] [--shading flat|gouraud|phong] [--output PATH]
 ```
 
-Defaults: `reflective`, 1920 x 1080, distance 1, `render.png`. The `mirrorball` scene is
+Defaults: `reflective`, 1920 x 1080, distance 1, Phong shading, `render.png`. The `mirrorball` scene is
 the project's own composition, built from the same features as the book's scene: a chrome
 ball ringed by six colored spheres of different finishes on a dark polished floor,
 marbles in front, spheres floating above, two point lights for crossing shadows and a
@@ -1775,16 +2138,70 @@ its front, its top and the side toward the wall. In all 78 of the 180 triangles 
 drawn, and the picture needs both halves of the chapter: culling for the faces within
 a cube, at half the work, and the depth buffer between the cubes. The ties of 3.12
 along the edges of faces turned away, lines one pixel wide that the depth buffer alone
-left in this picture, are gone with those faces; section 15 counts them. The
+left in this picture, are gone with those faces; section 15 counts them. The `shading`
+scene is the picture of the Shading chapter and the first under lights:
+`DrawShadingScene(canvas, viewport, shading_model)` draws five instances of five models
+with `RenderScene(..., camera, lights, shading_model, &depth_buffer)`, and
+`--shading flat|gouraud|phong` chooses the shading model, Phong when it is not given.
+It is one scene made to be drawn three times: every object in it is right from one
+shading model on and wrong before it, so that from flat to Gouraud to Phong fewer and
+fewer of them look wrong. The stage is a floor in the plane y = 0, 10 x 8 around the
+world's origin, one face of two triangles. On it stand, from left to right, a blue cube
+at (-3.6, 1, 2.2), the cube of the objects scene in one color; a matte green ball of
+radius 1.2 at (-0.5, 1.2, 1.5); and a shiny red ball of the same size at
+(2.7, 1.2, 0.6), with the specular exponent 30. The lights are an ambient light of 0.2,
+a directional light of 0.25 toward (-1, 2, -1.5), a sun high up to the left and behind
+the camera, and a point light of 0.65 at (1.5, 0.9, -1.9), a lamp in front of the shiny
+ball and less than a unit above the floor. A ball of radius 0.14 marks where the lamp
+is. Its color is (2550, 2040, 300), ten times off the scale, so that the ambient light
+alone saturates its red and green: it is the same glowing yellow under every shading
+model, a color that the lights cannot dim rather than a surface that emits light. The
+camera stands at (0, 5.4, -7.4), in front of the stage and above it, turned about X to
+look down on it by about 36.9 degrees, with the clipping planes of its viewport; the
+scene is drawn through a depth buffer and with back-face culling, 322 of its 718
+triangles.
+Under flat shading the cube is nearly right: its top, which the lamp is below, is one
+shade, and on each of the two sides that the lamp lights the two triangles come out 7
+and 8 levels of 255 apart, a faint seam across the face, the one in the book's own
+figure. The balls show their 288 triangles each, every one in a shade of its own, one
+of the shiny ball's bright with what its center caught of a highlight. The floor is two
+flat tones, (191, 183, 167) and (105, 101, 92) at 1920 x 1080, with a seam from corner
+to corner. Under Gouraud shading the cube has no seams and the matte ball is round, the
+light running on smoothly across its triangles' edges; both are as good as they get.
+The shiny ball is round too and has lost its highlights, which are smaller than its
+triangles: a dim smear is what the corners catch of them. The floor is evenly dull: the
+lamp's light reaches its four corners at a grazing angle, and nothing is computed in
+between. Under Phong shading the shiny ball has its two highlights, the lamp's and the
+sun's, round and sharp, and the floor has a pool of light under the lamp, more than
+twice as bright at its middle as the same pixels under Gouraud shading. What is left is
+what no shading mends: the corners in the outlines of the balls.
+The balls are made without trigonometry. `Sphere(n, color)` takes the octahedron
+`|x| + |y| + |z| = n`, which has a vertex at every point of whole numbers on it and
+`n^2` small triangles on each of its eight faces, and pushes every vertex out to the
+unit sphere by normalizing it; a vertex is its own normal there, and a triangle is
+listed clockwise as seen from outside by exchanging two of its corners if its normal
+points inward. The balls have n = 6, 288 triangles on 146 vertices, and the bulb n = 4.
+The camera's orientation is written out as a matrix, the rotation about X with the
+cosine 4/5 and the sine 3/5 of the 3-4-5 triangle, instead of being computed from an
+angle. So no vertex of this picture passes through `cos` or `sin`, and its geometry is
+the same to the bit on every platform that follows IEEE 754 (section 15 has the
+margins all the same). At the default distance on a 16:9 canvas the whole floor is in
+view and no triangle is cut by a clipping plane, which matters to this picture: a cut
+floor would be lit as its pieces (3.13), more of them than its two triangles. The
 `axes` scene draws the coordinate axes and corner dots; it exercises the canvas without
 ray tracing. For the ray-traced scenes, the cube, the objects, the instances, the camera
-scene, the clipping scene and the filled cubes the viewport width always matches the
-canvas aspect ratio,
-and `--distance` zooms them (in the clipping scene it moves the near plane out with the
-viewport as well); it has no effect on the 2D pictures. The output format follows
+scene, the clipping scene, the filled cubes and the shading scene the viewport width
+always matches the canvas aspect ratio,
+and `--distance` zooms them (in the clipping scene and the shading scene it moves the
+near plane out with the viewport as well); it has no effect on the 2D pictures.
+`--shading` has an effect on the shading scene alone, the one picture under the
+rasterizer's lights. The output format follows
 the extension. After every render the program prints one line with the picture's name,
 its size, the render time and the file it was saved to,
-`rendered 'filled' at 1920x1080 in 16.95 ms -> filled.png`. The time is that of the
+`rendered 'filled' at 1920x1080 in 16.95 ms -> filled.png`, and for a picture under
+lights the shading model after its name,
+`rendered 'shading' (gouraud shading) at 1920x1080 in 26.88 ms -> gouraud.png`, so that
+three runs can be told apart by their lines. The time is that of the
 drawing alone, from the canvas that already exists to the canvas that is not yet saved,
 in milliseconds to two decimals: most of the rasterized pictures take a few
 milliseconds or less, and in whole milliseconds they all took "0 ms" or "1 ms". It is
@@ -1793,7 +2210,10 @@ one run on a machine that is doing other things, good for telling 5 ms from 50 a
 non-zero with a message on bad arguments or I/O failure. Argument parsing is hand-written; no library
 is added for it. The scene table in `render_demo.cpp` is the single list of pictures: the
 usage text, the default and the dispatch are derived from it, so a new picture is a new
-row.
+row. The shading models are a table of the same kind, each with its name on the command
+line and a line of the usage text, and what the command line says about how a picture is
+drawn, the distance and the shading model, reaches a picture as one small struct of
+which each reads what applies to it.
 
 ## 10. Code style and conventions
 
@@ -1822,11 +2242,14 @@ row.
 - The ray tracer's render loop, intersection and lighting code never throw and never
   allocate. The rasterizer's `Interpolate` returns a `std::vector`, as in the book: one
   allocation per line, a few per triangle, one per row of a shaded triangle and one more
-  per row of a triangle drawn through a depth buffer; the
+  per row of a triangle drawn through a depth buffer, and four per row of a Phong
+  triangle, for `1/z` and the three components of the normal; the
   primitives can only throw if an allocation fails. `RenderScene` builds the scene in
   the camera's coordinates as a list of models, one per instance, and clipping returns
   new lists; both allocate per instance, and neither throws otherwise. Back-face
-  culling removes triangles from those lists in place and allocates nothing.
+  culling removes triangles from those lists in place and allocates nothing. Under
+  lights `RenderScene` makes one more list, the lights in the camera's coordinates;
+  `ComputeIllumination` allocates nothing and does not throw.
 - Programming errors inside the library (a non-unit normal, a dimension mismatch that
   slipped past the constructor check, a vertex index out of range, a depth buffer of
   another size than the canvas) are `assert`ed in
@@ -1834,7 +2257,12 @@ row.
   that does not contain its model and a transform that does not scale uniformly are
   stated as preconditions and not checked; neither is what back-face culling asks of a
   model, that it is closed and lists the corners of every triangle clockwise as seen
-  from outside.
+  from outside. Under lights a normal that is not of unit length is asserted where the
+  light is computed (`ComputeIllumination`), and a depth that is not in front of the
+  camera where a pixel is taken back to its point (`UnprojectVertex`). That the normals
+  an object states are unit vectors, or interpolated between unit vectors, is a
+  precondition of `RenderObject` under lights that `TransformModel` and the clipping
+  see to and nothing checks; so is that the normals of one triangle do not cancel.
 
 ## 12. Performance
 
@@ -1853,6 +2281,10 @@ Targets apply to Release builds on a single core. Debug builds have no targets.
 | clipping demo (47 instances, 1626 triangles, shaded)| 1920 x 1080 | under 150 ms; about 50 ms measured               |
 | clipping demo                                    | 320 x 180   | under 20 ms; about 2 ms measured                 |
 | filled demo (15 instances, 78 of 180 triangles drawn, depth buffer)| 1920 x 1080 | under 60 ms; about 16 ms measured |
+| shading demo, flat (5 instances, 322 of 718 triangles drawn, depth buffer) | 1920 x 1080 | under 70 ms; about 22 ms measured |
+| shading demo, Gouraud                            | 1920 x 1080 | under 80 ms; about 27 ms measured                |
+| shading demo, Phong (the light at 950565 pixels and more) | 1920 x 1080 | under 200 ms; about 61 ms measured      |
+| shading demo, each of the three                  | 320 x 180   | under 10 ms; 1.1, 1.4 and 2.5 ms measured        |
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
@@ -1888,11 +2320,17 @@ section 4 is meant to absorb these steps as additions:
   pixels where they are nearest, so that a scene no longer has to be listed back to
   front, and back-face culling, `CullBackFaces`, which takes the triangles turned away
   from the camera out of every instance before it is clipped and drawn, on by default
-  in `RenderScene`. Next, in the book's order: shading (which
-  computes the corner intensities from lights and normals instead of storing them) and
-  textures (which need perspective-correct interpolation, and with it the intensities
-  of a clipped triangle will stop depending on where it was cut). Rotations about X and
-  Z are added the way `MakeOYRotationMatrix` is, when a scene needs them.
+  in `RenderScene`; and shading: the lights and the illumination equation shared with
+  the ray tracer, normals at the corners of a model's triangles, and `RenderScene` and
+  `RenderObject` under lights with the book's three shading models, flat, Gouraud and
+  Phong, the last through `DrawPhongTriangle`, which lights every pixel. Next, in the
+  book's order: textures (which need perspective-correct interpolation, and with it the
+  intensities and the normals of a triangle will be interpolated over the triangle in
+  space rather than over its picture, and those of a clipped triangle will stop
+  depending on where it was cut). The rasterizer casts no shadows and mirrors nothing;
+  the book leaves both to the ray tracer. Rotations about X and
+  Z are added the way `MakeOYRotationMatrix` is, when a scene needs them; the one
+  scene that tilts its camera about X writes the matrix out (section 9).
 - Optional interactive window behind a `CGFS_ENABLE_WINDOW` option (SDL2 or similar),
   off by default so the dependency policy in section 7 holds for everyone else.
 
@@ -1928,7 +2366,8 @@ The judgment calls behind this design, so they are not relitigated by accident.
    listings, rather than extra parameters of `DrawShadedTriangle`. The sort that orders
    the vertices by y then carries each intensity with its point, every `Point{x, y}`
    written so far keeps meaning "the full color", and the later chapters attach more
-   per-vertex data the same way. `DrawLine` and `DrawFilledTriangle` ignore it.
+   per-vertex data the same way. `DrawLine` and `DrawFilledTriangle` ignore it. The
+   normal that Phong shading interpolates was the next (decision 18).
 10. The projection lives in the rasterizer layer, as free functions that take the
     `Viewport`, rather than as methods of `Viewport`: its result is a `Point`, a
     rasterizer type, truncated with the rasterizer's `ToPixel`, and the camera layer
@@ -1944,7 +2383,8 @@ The judgment calls behind this design, so they are not relitigated by accident.
     passed as the two lists, exactly as an object is passed to `RenderObject`. The
     camera (3.10) joined as a defaulted parameter of `RenderScene`, which keeps every
     earlier call compiling; a scene type is still a step away. The clipping planes did
-    not need one either: they went into the camera (decision 13). Lights may.
+    not need one either: they went into the camera (decision 13). Nor did the lights:
+    they are a third list beside the models and the instances (decision 18).
 12. The projection is not a matrix. The chapter derives the homogeneous projection and
     viewport matrices and then sets them aside "for practical reasons", and the project
     does the same: `Mat4` carries only the affine model and camera transforms, and
@@ -2075,7 +2515,8 @@ The judgment calls behind this design, so they are not relitigated by accident.
       `..., nullptr, BackFaceCulling::kOff)` says what it does.
     - The test is the book's, with the book's formulas and the book's `<=`, in
       `IsBackFacing`; the normal is computed from the corners where it is needed, by a
-      helper private to `culling.cpp` until shading asks for normals too.
+      helper that was private to `culling.cpp` until shading asked for normals too, and
+      is `TriangleNormal` in `math/` since (decision 18).
     - `CullBackFaces(object, camera_position)` is the book's
       `CullBackFaces(object, camera)` and takes a position rather than a `Camera`: the
       position is all the test asks for, and it is in whatever coordinates the object
@@ -2116,6 +2557,77 @@ The judgment calls behind this design, so they are not relitigated by accident.
       next to their only caller and compiled into its loop, and they still are: the
       ray-traced pictures are byte for byte what they were and take as long (section
       15).
+18. Shading follows the book's chapter and its demo, `RenderScene` down to
+    `ComputeIllumination` and `UnProjectVertex`, and these are the calls that fit it to
+    this code.
+    - Drawing under lights is added beside drawing with a triangle primitive, not put
+      in its place: a second `RenderScene` and a second `RenderObject` that take the
+      lights and a `ShadingModel` where the first take a `DrawTriangleFunction`. The
+      wireframes, the plain colors and the stated intensities of the earlier chapters
+      are still what the first two draw, and every earlier picture is byte for byte
+      what it was. The lights are a list in the parameters, the book's
+      `RenderScene(camera, instances, lights)`, like the models and the instances; a
+      scene type was not needed for them (decision 11).
+    - The shading model is a parameter, a scoped enumeration, where the book's demo has
+      a global `ShadingModel`. Its default is Phong, the demo's default and the one
+      model that is right for every surface.
+    - The three models are three calls of three primitives, not three branches inside
+      one fill loop as in the demo's `RenderTriangle`: flat shading is
+      `DrawFilledTriangle` in the color times the light, Gouraud shading is
+      `DrawShadedTriangle` with the light at the corners as its intensities, which is
+      what the chapter's text says to do, and Phong shading is a fourth primitive,
+      `DrawPhongTriangle`. The first two were there and are used as they are.
+    - `DrawPhongTriangle` lives in `triangle.h` with the other three and shares their
+      helpers. It is the first primitive that needs more than canvas points: the
+      viewport, to take a pixel back to the point it shows, and the lights. What it
+      needs of each vertex still arrives on the `Point`, the normal joining `h` and
+      `inv_z` there (decision 9). Its five quantities are interpolated along the sides
+      by `EdgeInterpolate`, the helper the book's demo introduces in this chapter; the
+      two older primitives keep their lists written out, in the shape of their listings
+      (decision 15).
+    - The light is computed in the camera's coordinates, as in the demo. The lights are
+      taken there once per picture by `TransformLight`; the demo multiplies every light
+      by the camera matrix inside `ComputeIllumination`, once per light for every point
+      it lights, which under Phong shading is every pixel.
+    - The view vector is `-P`, from the point to the camera at the origin. The
+      chapter's text prints `V = P - C`, from the camera to the point; the equation it
+      is put into takes `V` from the point toward the viewer, as the Light chapter
+      defines it and as the ray tracer passes it (3.4), and with the sign of the text
+      `<R, V>` would be negative wherever a highlight belongs. The demo computes
+      `camera.position - vertex`, the right way round, with a camera position in the
+      world's coordinates and a vertex in the camera's.
+    - Normals are stated per corner of a triangle, the book's model format, and a
+      corner that states none has the triangle's own. The demo has a global switch
+      instead, `UseVertexNormals`, for all models at once; per corner, one scene holds a
+      cube that says nothing and a ball that says everything, and the choice is the
+      model's. "None" is the zero vector rather than a `std::optional`: clipping and
+      `TransformModel` then need no case for it, a zero vector interpolates and
+      transforms to a zero vector.
+    - Flat shading uses the triangle's own normal whatever the model states. The demo,
+      with vertex normals on, uses the normal of whichever corner sorts lowest on the
+      canvas. One value per triangle wants the one normal the triangle has.
+    - `TransformModel` returns the normals at unit length, and after that nothing
+      normalizes them until the light is computed: the clipping interpolates them as
+      they are and leaves the result as short as it comes out, and Phong shading
+      interpolates them as they are. Normalizing the normal of a corner that the
+      clipping made would be the same direction at that corner and other directions
+      inside the piece, since interpolating between two unit vectors is not
+      interpolating along the chord between them: the first version of this code did
+      that, and in the unit test that cuts a triangle whose normals are 90 degrees
+      apart the pieces came out up to six levels of 255 off the whole triangle, where
+      they are within one now. The price is a precondition on `RenderObject` under
+      lights, unit normals, that only a caller who bypasses `TransformModel` can break.
+    - The specular exponent is a field of `Model`, as it is a field of the ray tracer's
+      `Sphere`; the demo uses 50 for everything. Per model and not per triangle, where
+      the color is: one finish per object is what the pictures need, and a field per
+      triangle would be copied through every stage of the pipeline.
+    - `TriangleNormal` moved from `culling.cpp` to `math/` when shading became its
+      second user (decision 16), and `Overloaded`, the helper for visiting a light,
+      from `raytracer.cpp` to `light.h` for the same reason.
+    - The rasterizer's `RenderModel` and `RenderInstance` still outline and take no
+      lights, steps of an earlier chapter (decision 14).
+    - No shadows: the book's rasterizer has none, and `ComputeIllumination` has no scene
+      to ask. The `shading` demo is composed without them in mind (section 9).
 
 ## 15. Implementation notes
 
@@ -2125,7 +2637,7 @@ filled triangles and the reorganisation into layers, 2026-11-05 with shaded tria
 the perspective projection and objects made of triangles, 2026-11-09 with models,
 instances and scenes and, the same day, with model and camera transforms,
 2026-11-16 with clipping and shaded objects, 2026-11-20 with back-face culling, and
-2026-11-24 with the lighting layer.
+2026-11-24 with the lighting layer and with shading.
 
 - Catch2 is pinned to v3.16.1.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
@@ -2392,6 +2904,52 @@ instances and scenes and, the same day, with model and camera transforms,
   scene at 1920 x 1080, run alternately from the build before and the build after,
   printed 249 to 264 ms before and 241 to 248 ms after, the same within the noise of a
   single run.
+- The shading demo has 5 instances of 5 models and 718 triangles: 2 in the floor, 12 in
+  the cube, 288 in each ball and 128 in the bulb. Back-face culling leaves 322, and at
+  the default distance on a 16:9 canvas the clipping cuts none of them: the bounding
+  spheres of the floor and of the cube reach across a plane, which costs a look at their
+  triangles and no more. It covers 26216 of the 57600 pixels at 320 x 180 and 950565 of
+  2073600 at 1920 x 1080, the same pixels under each shading model.
+- Render times of the shading demo, as `render_demo` prints them, nine runs of each on
+  2026-11-24, Release, the smallest, the median and the largest: at 1920 x 1080 flat
+  shading 20.6, 22.4 and 24.5 ms, Gouraud 25.1, 26.9 and 28.1 ms, Phong 59.6, 61.1 and
+  69.0 ms; at 320 x 180 flat 1.04, 1.12 and 1.22 ms, Gouraud 1.28, 1.38 and 1.44 ms,
+  Phong 2.35, 2.52 and 2.68 ms. Flat and Gouraud shading compute the light 322 and 966
+  times a picture and differ by what `DrawShadedTriangle` costs over
+  `DrawFilledTriangle`, a list of intensities per row. Phong shading computes it at
+  every pixel it sets, three lights and for the shiny ball up to two `pow` calls each
+  time, and allocates four lists per row: about 39 ms more than flat shading for the
+  950565 pixels covered, some 40 ns a pixel. Much of what is left of the flat figure is not shading:
+  clearing the canvas and making a depth buffer of 16.6 MB, as in the filled demo.
+- The three shading references differ from one another on nearly every covered pixel,
+  if often by little: flat and Gouraud on 25475 of the 26216, by more than 8 levels on
+  21829; Gouraud and Phong on 24457, by more than 8 levels on 14995, the pool of light
+  on the floor and the highlights.
+- The shading demo's geometry calls neither `cos` nor `sin` (section 9), so the margins
+  that the camera and clipping demos needed are not what keeps it reproducible. They
+  were measured all the same, in a scratch program that included the demo source: no
+  projected coordinate of the 322 triangles drawn comes closer to a pixel boundary than
+  7.6e-4 pixels at 320 x 180 and 3.2e-3 at 1920 x 1080, and the nearest vertex is 5.96
+  in front of the camera. The same program checked the winding: every triangle of the
+  balls, the bulb and the cube has its normal pointing away from the model's middle, the
+  floor's point up, no triangle is without area, and every stated normal is the unit
+  vector to its vertex.
+- A ball of the shading demo is the octahedron `|x| + |y| + |z| = 6` normalized, not the
+  book's sphere, which stacks rings of vertices by `cos` and `sin` and has a ring of
+  coincident vertices and triangles without area at each pole. Lit triangles without
+  area are skipped (3.13), so the book's sphere would draw as well.
+- The cube of the shading demo is "nearly right" under flat shading by a number: at
+  1920 x 1080 its top is one color, (26, 53, 88), its front (48, 96, 159) and
+  (46, 92, 152) and its right side (47, 94, 155) and (44, 89, 147), the two triangles of
+  a face 7 and 8 levels apart in blue. The lamp is about 6 units from those faces;
+  nearer, the seam grows.
+- Shading changed no picture that is drawn without lights: the fourteen earlier
+  references and the fifteen pictures at 640 x 360 and at 321 x 181 are byte for byte
+  what they were, compared with renders of the build before it. `TransformModel` now
+  walks the normals of every triangle of every instance, which for those pictures are
+  all zero and stay so, and a `Point` is 24 bytes larger; neither shows in the timings
+  (the clipping demo 55 ms against 54, the filled demo 18.7 against 19, medians of nine
+  single runs at 1920 x 1080).
 - The `.clang-format` file is in place and clang-format 18 is now installed on the
   development machine, but the sources were formatted by hand to its rules and
   `clang-format --dry-run` still reports a handful of differences in older files. A

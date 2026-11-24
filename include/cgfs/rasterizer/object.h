@@ -14,7 +14,7 @@
 namespace cgfs {
 
 /// One triangle of an object: the indices of its three corners in the object's vertex
-/// list, its color, and an intensity at each corner.
+/// list, its color, and an intensity and a normal at each corner.
 ///
 /// A triangle does not hold its corners, it names them, so a vertex that several
 /// triangles meet at (every vertex of a closed surface) is stored once and projected
@@ -28,10 +28,25 @@ namespace cgfs {
 /// the vertex, so two triangles that meet at a vertex may be differently bright there:
 /// the faces of a cube can each have their own shade. It defaults to 1 at every corner,
 /// the full color, so a triangle written as `{{0, 1, 2}, color}` is what it was.
+///
+/// `normals[k]` is the normal of the surface at the corner `v[k]`: the direction the
+/// surface that the triangle stands for faces there, in the coordinates of the vertices.
+/// A model may state it at any length; TransformModel brings it to unit length when it
+/// places the model. A triangle is flat and has one normal of its own (TriangleNormal), but
+/// the triangles of a sphere stand for a curved surface, which faces a different way at
+/// each of a triangle's corners: away from the sphere's center. Lighting computed with
+/// those normals shades the triangles as the surface they approximate (see shading.h).
+/// The normal belongs to the corner of the triangle and not to the vertex, like `h` and
+/// as in the book's model: at a corner of a cube three faces meet, and each faces its
+/// own way there. The zero vector, the default, says that the corner has no normal of
+/// its own and the triangle's is used, which is right for every flat face: a cube says
+/// nothing. The drawing that does not light (RenderObject with a triangle primitive)
+/// does not read the normals.
 struct Triangle {
     std::array<std::size_t, 3> v{};
     Color color;
     std::array<double, 3> h{1.0, 1.0, 1.0};
+    std::array<Vec3, 3> normals{};
 
     bool operator==(const Triangle&) const = default;
 };

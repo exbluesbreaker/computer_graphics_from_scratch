@@ -1,3 +1,4 @@
+#include <cgfs/math/triangle_normal.h>
 #include <cgfs/rasterizer/culling.h>
 
 #include <cassert>
@@ -5,16 +6,9 @@
 
 namespace cgfs {
 
-namespace {
-
-/// A normal of the triangle A B C: the cross product of the two sides that leave A, the
-/// book's V1 x V2. It is as long as twice the triangle's area, which does not matter to
-/// a test that asks only which way it points.
-Vec3 TriangleNormal(Vec3 a, Vec3 b, Vec3 c) { return Cross(b - a, c - a); }
-
-}  // namespace
-
 bool IsBackFacing(Vec3 a, Vec3 b, Vec3 c, Vec3 camera_position) {
+    // The normal is as long as twice the triangle's area, which does not matter to a
+    // test that asks only which way it points.
     const Vec3 normal = TriangleNormal(a, b, c);
     const Vec3 to_camera = camera_position - a;
     return Dot(normal, to_camera) <= 0.0;

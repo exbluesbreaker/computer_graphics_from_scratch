@@ -56,7 +56,7 @@ add_subdirectory(third_party)
 
 # --- The library ----------------------------------------------------------------------
 # One folder per layer, listed in dependency order (CLAUDE.md explains the layers). The
-# math and lighting layers are header-only.
+# math layer is header-only.
 add_library(cgfs STATIC
     # image: colors, the pixel buffer, file formats
     src/image/canvas.cpp
@@ -66,6 +66,9 @@ add_library(cgfs STATIC
     src/camera/viewport.cpp
     src/camera/camera.cpp
     src/camera/clipping_planes.cpp
+    # lighting: the lights and the illumination equation
+    src/lighting/light.cpp
+    src/lighting/illumination.cpp
     # raytracer: the ray tracing renderer
     src/raytracer/raytracer.cpp
     # rasterizer: the rasterizing renderer, one concept per file
@@ -78,6 +81,7 @@ add_library(cgfs STATIC
     src/rasterizer/instance.cpp
     src/rasterizer/culling.cpp
     src/rasterizer/clipping.cpp
+    src/rasterizer/shading.cpp
     src/rasterizer/scene.cpp)
 add_library(cgfs::cgfs ALIAS cgfs)
 target_include_directories(cgfs PUBLIC ${PROJECT_SOURCE_DIR}/include)

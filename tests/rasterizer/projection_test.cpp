@@ -10,6 +10,7 @@
 
 using cgfs::Point;
 using cgfs::ProjectVertex;
+using cgfs::UnprojectVertex;
 using cgfs::Vec3;
 using cgfs::Viewport;
 using cgfs::ViewportToCanvas;
@@ -111,6 +112,45 @@ TEST_CASE("ProjectVertex inverts CanvasToViewport pixel for pixel", "[rasterizer
             // The viewport is at distance 2, so that is the depth of every point on it.
             CHECK(ProjectVertex(viewport, viewport.CanvasToViewport(x, y)) ==
                   Point{.x = x, .y = y, .inv_z = 0.5});
+        }
+    }
+}
+
+TEST_CASE("UnprojectVertex: a pixel and its depth give back the vertex", "[rasterizer]") {
+    const Viewport viewport(1920, 1080);  // 1 x 1 at distance 1
+    // The pixel (480, -540) looks through the viewport point (0.25, -0.5, 1): at the
+    // depth 1 that is the vertex itself.
+    CHECK(UnprojectVertex(viewport, 480, -540, 1.0) == Vec3{0.25, -0.5, 1.0});
+    // The same pixel at the depth 4: four times as far along the same ray.
+    CHECK(UnprojectVertex(viewport, 480, -540, 0.25) == Vec3{1.0, -2.0, 4.0});
+    // The middle pixel looks along the axis.
+    CHECK(UnprojectVertex(viewport, 0, 0, 0.5) == Vec3{0.0, 0.0, 2.0});
+}
+
+TEST_CASE("UnprojectVertex: the depth is the vertex's whatever the viewport's distance",
+          "[rasterizer]") {
+    // Through a viewport at distance 2 the pixel (960, 540) looks through (0.5, 0.5, 2),
+    // and at the depth 4 it shows the point twice as far along that ray.
+    const Viewport far(1920, 1080, 1.0, 1.0, 2.0);
+    CHECK(UnprojectVertex(far, 960, 540, 0.5) == Vec3{0.5, 0.5, 2.0});
+    CHECK(UnprojectVertex(far, 960, 540, 0.25) == Vec3{1.0, 1.0, 4.0});
+}
+
+TEST_CASE("UnprojectVertex inverts ProjectVertex", "[rasterizer]") {
+    // Sizes that are powers of two, as in the round trip above: on every ray through a
+    // pixel, a vertex at each of three depths is projected to that pixel with its 1/z,
+    // and the pixel with that 1/z is unprojected to the vertex, exactly.
+    const Viewport viewport(64, 32, 2.0, 1.0, 2.0);
+    for (int x = -32; x < 32; ++x) {
+        for (int y = -16; y < 16; ++y) {
+            for (const double z : {2.0, 4.0, 8.0}) {
+                INFO("pixel (" << x << ", " << y << ") at depth " << z);
+                const Vec3 vertex = viewport.CanvasToViewport(x, y) * (z / 2.0);
+                const Point projected = ProjectVertex(viewport, vertex);
+                CHECK(projected == Point{.x = x, .y = y, .inv_z = 1.0 / z});
+                CHECK(UnprojectVertex(viewport, projected.x, projected.y, projected.inv_z) ==
+                      vertex);
+            }
         }
     }
 }

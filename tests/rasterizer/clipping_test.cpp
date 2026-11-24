@@ -612,3 +612,73 @@ TEST_CASE("ClipInstance: the planes of a viewport keep what is in view and remov
         CHECK_FALSE(ClipInstance(cube_at(position), planes).has_value());
     }
 }
+
+// --- Normals -----------------------------------------------------------------------------
+
+TEST_CASE("ClipTriangle: a new corner gets its normal by the fraction of its position",
+          "[clipping]") {
+    // The triangle of the one-corner test, with a normal at each corner: AB crosses the
+    // plane a quarter of the way along and AC half way.
+    const std::vector<Vec3> vertices = {
+        {0.0, 0.0, 3.0},   // A
+        {6.0, 0.0, -5.0},  // B
+        {0.0, 4.0, -1.0},  // C
+    };
+    const Triangle triangle{
+        .v = {0, 1, 2},
+        .color = kRed,
+        .normals = {Vec3{0.0, 0.0, -1.0}, Vec3{4.0, 0.0, 0.0}, Vec3{0.0, 2.0, 0.0}}};
+    const Clipped clipped = Clip(vertices, triangle, kNear);
+
+    // A B' C': NA + 1/4 (NB - NA) and NA + 1/2 (NC - NA). Not normalized: whoever lights
+    // the corner does that.
+    REQUIRE(clipped.triangles.size() == 1);
+    CHECK(clipped.triangles[0] ==
+          Triangle{.v = {0, 3, 4},
+                   .color = kRed,
+                   .normals = {Vec3{0.0, 0.0, -1.0}, Vec3{1.0, 0.0, -0.75}, Vec3{0.0, 1.0, -0.5}}});
+}
+
+TEST_CASE("ClipTriangle: both pieces of a quadrilateral get the interpolated normals",
+          "[clipping]") {
+    // The triangle of the two-corner test: both sides to C cross half way along.
+    const std::vector<Vec3> vertices = {
+        {0.0, 0.0, 3.0},   // A
+        {4.0, 0.0, 3.0},   // B
+        {0.0, 4.0, -1.0},  // C
+    };
+    const Vec3 na{0.0, 0.0, -1.0};
+    const Vec3 nb{1.0, 0.0, 0.0};
+    const Vec3 nc{0.0, 1.0, 0.0};
+    const Clipped clipped =
+        Clip(vertices, {.v = {0, 1, 2}, .color = kBlue, .normals = {na, nb, nc}}, kNear);
+
+    const Vec3 na_prime{0.0, 0.5, -0.5};  // half way from NA to NC
+    const Vec3 nb_prime{0.5, 0.5, 0.0};   // half way from NB to NC
+    REQUIRE(clipped.triangles.size() == 2);
+    CHECK(clipped.triangles[0].normals == std::array<Vec3, 3>{na, nb, na_prime});
+    CHECK(clipped.triangles[1].normals == std::array<Vec3, 3>{na_prime, nb, nb_prime});
+}
+
+TEST_CASE("ClipTriangle: a triangle without normals is cut into pieces without normals",
+          "[clipping]") {
+    const std::vector<Vec3> vertices = {{0.0, 0.0, 3.0}, {6.0, 0.0, -5.0}, {0.0, 4.0, -1.0}};
+    for (const Corners corners : {Corners{0, 1, 2}, Corners{1, 2, 0}, Corners{1, 0, 2}}) {
+        const Clipped clipped = Clip(vertices, {corners, kRed}, kNear);
+        REQUIRE_FALSE(clipped.triangles.empty());
+        for (const Triangle& piece : clipped.triangles) {
+            CHECK(piece.normals == std::array<Vec3, 3>{});
+        }
+    }
+}
+
+TEST_CASE("ClipTriangle: a triangle that is kept whole keeps its normals", "[clipping]") {
+    const std::vector<Vec3> vertices = {{0.0, 0.0, 3.0}, {4.0, 0.0, 3.0}, {0.0, 4.0, 2.0}};
+    const Triangle triangle{
+        .v = {0, 1, 2},
+        .color = kRed,
+        .normals = {Vec3{0.0, 0.0, -1.0}, Vec3{1.0, 0.0, 0.0}, Vec3{0.0, 1.0, 0.0}}};
+    const Clipped clipped = Clip(vertices, triangle, kNear);
+    REQUIRE(clipped.triangles.size() == 1);
+    CHECK(clipped.triangles[0] == triangle);
+}

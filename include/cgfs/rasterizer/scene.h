@@ -4,9 +4,11 @@
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/lighting/light.h>
 #include <cgfs/rasterizer/culling.h>
 #include <cgfs/rasterizer/instance.h>
 #include <cgfs/rasterizer/model.h>
+#include <cgfs/rasterizer/shading.h>
 #include <cgfs/rasterizer/triangle.h>
 
 #include <span>
@@ -70,6 +72,49 @@ namespace cgfs {
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
                  std::span<const Instance> instances, const Camera& camera = Camera{},
                  DrawTriangleFunction draw_triangle = DrawWireframeTriangle,
+                 DepthBuffer* depth_buffer = nullptr,
+                 BackFaceCulling back_face_culling = BackFaceCulling::kOn);
+
+/// Draw a scene under lights as `camera` sees it: the book's RenderScene of the Shading
+/// chapter. The scene goes through the steps above, and so do its lights:
+///
+///     M_camera = MakeCameraMatrix(camera.position, camera.orientation)
+///     scene    = for each instance I:
+///                    TransformModel(models[I.model], M_camera * MakeModelMatrix(I))
+///     lit_by   = for each light L of lights:
+///                    TransformLight(L, M_camera)
+///     culled, clipped as above
+///     for each instance C of clipped:
+///                    RenderObject(C, lit_by, shading_model, depth_buffer)
+///
+/// `lights` are given in the world's coordinates, where the instances are placed and the
+/// camera stands. The light on a surface depends on where the surface, the lights and
+/// the viewer are relative to one another, and on nothing else, so it can be computed in
+/// any coordinates all of them are in. Here those are the camera's: the vertices are
+/// there already, TransformModel turns the normals of the models with them, and
+/// TransformLight takes the position of a point light and the direction of a
+/// directional one along. The viewer is then the origin.
+///
+/// Every triangle is drawn in its color times the light it gets, computed per triangle,
+/// per corner or per pixel as `shading_model` says: flat, Gouraud or Phong shading (see
+/// shading.h, where RenderObject with lights does the work). A model's `specular` is how
+/// shiny its instances are, and the normals at the corners of its triangles are what
+/// lets Gouraud and Phong shading show a curved surface as one. The intensities stored
+/// in the triangles are not read. Nothing casts a shadow.
+///
+/// Lit faces are solid, so a scene wants a `depth_buffer` here, a buffer of the canvas's
+/// size, unless it is listed from the back to the front; without one the instances and
+/// their triangles are painted in list order. Back-face culling is on unless it is
+/// turned off, as above, and matters more here than there: a face turned away from the
+/// camera is lit by its outward normal like any other and would be drawn over the front
+/// of its object if nothing sorted the two. A triangle that the clipping cuts is lit as
+/// its pieces: each piece has its own corners, with the normals of the whole triangle
+/// interpolated to them, and under flat shading its own center.
+///
+/// Preconditions: as above.
+void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
+                 std::span<const Instance> instances, const Camera& camera,
+                 std::span<const Light> lights, ShadingModel shading_model = ShadingModel::kPhong,
                  DepthBuffer* depth_buffer = nullptr,
                  BackFaceCulling back_face_culling = BackFaceCulling::kOn);
 

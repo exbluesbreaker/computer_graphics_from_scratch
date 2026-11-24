@@ -1,9 +1,13 @@
 #pragma once
 
+#include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/lighting/light.h>
 #include <cgfs/rasterizer/point.h>
+
+#include <span>
 
 namespace cgfs {
 
@@ -87,5 +91,48 @@ void DrawShadedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color colo
 /// passes on the depth buffer it was given, or none.
 using DrawTriangleFunction = void (*)(Canvas& canvas, Point p0, Point p1, Point p2, Color color,
                                       DepthBuffer* depth_buffer);
+
+/// Fill the triangle p0 p1 p2 with `color` lit pixel by pixel: the primitive of Phong
+/// shading.
+///
+/// DrawShadedTriangle is handed the light at the three vertices and spreads it over the
+/// triangle, so it cannot show what the light does between them: a highlight in the
+/// middle of a face, or a lamp close to it. Here every pixel computes its own light with
+/// the illumination equation (ComputeIllumination), which asks three things of a pixel:
+///
+/// - The point P of the triangle that the pixel shows. 1/z is interpolated along the
+///   sides and along every row, as for a depth buffer, and UnprojectVertex takes the
+///   pixel and its 1/z back to the point in the camera's coordinates.
+/// - The normal N of the surface there. Every vertex brings its normal (see Point), and
+///   the three components of it are three more quantities that travel along the sides
+///   and the rows like h: nx, ny and nz are interpolated one by one, put together again
+///   at the pixel and normalized, a vector between two unit vectors being shorter than
+///   either.
+/// - The direction V from the point to the viewer. The camera is the origin of its own
+///   coordinates, so V = -P.
+///
+/// The pixel is set to `color * ComputeIllumination(P, N, V, specular, lights)`.
+/// `lights` are in the camera's coordinates, like the normals and like P; `specular` is
+/// the exponent of the surface's highlight, kMatte for none; `viewport` is the one the
+/// points were projected through.
+///
+/// With the same normal at all three vertices the surface is flat and is still lit
+/// pixel by pixel, the directions to a point light and to the viewer changing across it.
+/// With three different normals the triangle is shaded as a piece of the curved surface
+/// they are the normals of. Either way the pixels covered are exactly those that
+/// DrawFilledTriangle covers for the same three points. The vertex order does not
+/// matter; no clipping.
+///
+/// With a `depth_buffer` only the pixels where the triangle is the nearest thing so far
+/// are set, as in DrawFilledTriangle, and only those are lit, the lighting being the
+/// expensive part. Without one every pixel is lit and set.
+///
+/// Preconditions: every point has `inv_z` > 0, as the projection of a vertex in front
+/// of the camera has, asserted by UnprojectVertex; every point has a normal that is not
+/// the zero vector, and no two of the normals are opposite, so that nothing between them
+/// is zero either; the depth buffer, if there is one, has the canvas's size, asserted.
+void DrawPhongTriangle(Canvas& canvas, const Viewport& viewport, Point p0, Point p1, Point p2,
+                       Color color, double specular, std::span<const Light> lights,
+                       DepthBuffer* depth_buffer = nullptr);
 
 }  // namespace cgfs

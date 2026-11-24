@@ -10,29 +10,38 @@ namespace cgfs {
 
 namespace {
 
-/// One corner of a triangle: which vertex it is, and the triangle's intensity there.
+/// One corner of a triangle: which vertex it is, and the triangle's intensity and normal
+/// there.
 struct Corner {
     std::size_t v = 0;
     double h = 1.0;
+    Vec3 normal;
 };
 
-Corner CornerOf(const Triangle& triangle, std::size_t k) { return {triangle.v[k], triangle.h[k]}; }
+Corner CornerOf(const Triangle& triangle, std::size_t k) {
+    return {triangle.v[k], triangle.h[k], triangle.normals[k]};
+}
 
 /// The new corner where the side from `front`, a corner in front of the plane, to
 /// `behind`, a corner behind it or on it, crosses the plane: the book's
 /// Intersection(AB, plane). The crossing point is appended to `vertices`, and the
-/// corner's intensity is interpolated by the same fraction t as its position.
+/// corner's intensity and normal are interpolated by the same fraction t as its
+/// position. Between two corners without a normal that is a corner without one.
 Corner Intersection(Corner front, Corner behind, const Plane& plane, std::vector<Vec3>& vertices) {
     const Vec3 a = vertices[front.v];
     const Vec3 b = vertices[behind.v];
     const double t = IntersectSegmentPlane(a, b, plane);
     vertices.push_back(a + t * (b - a));
-    return {vertices.size() - 1, front.h + t * (behind.h - front.h)};
+    return {vertices.size() - 1, front.h + t * (behind.h - front.h),
+            front.normal + t * (behind.normal - front.normal)};
 }
 
 /// The triangle with the corners a, b and c, in that order, in `color`.
 Triangle MakeTriangle(Corner a, Corner b, Corner c, Color color) {
-    return {.v = {a.v, b.v, c.v}, .color = color, .h = {a.h, b.h, c.h}};
+    return {.v = {a.v, b.v, c.v},
+            .color = color,
+            .h = {a.h, b.h, c.h},
+            .normals = {a.normal, b.normal, c.normal}};
 }
 
 /// Remove the vertices that no triangle names and renumber the triangles to match. The

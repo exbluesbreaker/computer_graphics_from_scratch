@@ -4,6 +4,7 @@
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/lighting/light.h>
 #include <cgfs/math/bounding_sphere.h>
 #include <cgfs/math/mat4.h>
 #include <cgfs/math/plane.h>
@@ -14,35 +15,45 @@
 #include <cgfs/rasterizer/object.h>
 #include <cgfs/rasterizer/point.h>
 #include <cgfs/rasterizer/scene.h>
+#include <cgfs/rasterizer/shading.h>
 #include <cgfs/rasterizer/triangle.h>
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <utility>
 #include <vector>
 
 #include "rasterizer/pixel_helpers.h"
 #include "support/test_helpers.h"
 
+using cgfs::AmbientLight;
 using cgfs::BackFaceCulling;
 using cgfs::Camera;
 using cgfs::Canvas;
 using cgfs::DepthBuffer;
+using cgfs::DirectionalLight;
 using cgfs::DrawFilledTriangle;
 using cgfs::DrawShadedTriangle;
 using cgfs::DrawTriangleFunction;
 using cgfs::DrawWireframeTriangle;
 using cgfs::Instance;
+using cgfs::Light;
 using cgfs::MakeClippingPlanes;
 using cgfs::MakeOYRotationMatrix;
 using cgfs::Model;
 using cgfs::Plane;
 using cgfs::Point;
+using cgfs::PointLight;
 using cgfs::RenderInstance;
+using cgfs::RenderObject;
 using cgfs::RenderScene;
 using cgfs::Rgb8;
+using cgfs::ShadingModel;
+using cgfs::TransformModel;
 using cgfs::Vec3;
 using cgfs::Viewport;
 using cgfs_test::Bytes;
@@ -688,4 +699,342 @@ TEST_CASE("RenderScene: from inside an object every face is a back face", "[rast
     CHECK(LitPixels(CanvasWithScene(models, around_the_camera, camera, DrawFilledTriangle,
                                     BackFaceCulling::kOn))
               .empty());
+}
+
+// --- Under lights ------------------------------------------------------------------------
+
+namespace {
+
+constexpr ShadingModel kEveryShadingModel[] = {ShadingModel::kFlat, ShadingModel::kGouraud,
+                                               ShadingModel::kPhong};
+
+// A triangle in its own plane z = 0 that faces a camera looking at it along +Z: its
+// corners are listed clockwise as that camera sees them, top, bottom right, bottom left,
+// so its normal is (0, 0, -1) and it is a front face. Placed at (0, 0, 1) its corners
+// land on the pixels (0, 8), (8, -8) and (-8, -8). They are 0.26 from its center and not
+// 0.25, off the pixel boundary, for the cameras and instances that are turned (see
+// OffGridTriangle).
+Model FacingTriangle(cgfs::Color color = kWhite) {
+    return {
+        .vertices = {{0.0, 0.26, 0.0}, {0.26, -0.26, 0.0}, {-0.26, -0.26, 0.0}},
+        .triangles = {{{0, 1, 2}, color}},
+    };
+}
+
+// A fresh black canvas with the scene drawn under the lights through a depth buffer of
+// its own, with back-face culling, RenderScene's default.
+Canvas CanvasWithLitScene(const std::vector<Model>& models, const std::vector<Instance>& instances,
+                          const std::vector<Light>& lights, ShadingModel shading_model,
+                          const Camera& camera = Camera{},
+                          BackFaceCulling back_face_culling = BackFaceCulling::kOn) {
+    Canvas canvas(kSize, kSize, kBlack);
+    DepthBuffer depth_buffer(canvas);
+    RenderScene(canvas, TestViewport(), models, instances, camera, lights, shading_model,
+                &depth_buffer, back_face_culling);
+    return canvas;
+}
+
+// By how much two canvases of one size differ at most, in any channel of any pixel.
+int LargestDifference(const Canvas& a, const Canvas& b) {
+    const std::vector<std::uint8_t> bytes_a = Bytes(a);
+    const std::vector<std::uint8_t> bytes_b = Bytes(b);
+    int largest = 0;
+    for (std::size_t i = 0; i < bytes_a.size(); ++i) {
+        largest = std::max(largest, std::abs(int{bytes_a[i]} - int{bytes_b[i]}));
+    }
+    return largest;
+}
+
+// Whether every pixel the canvas has lit has this color.
+bool EveryLitPixelIs(const Canvas& canvas, Rgb8 color) {
+    for (const Point pixel : LitPixels(canvas)) {
+        if (canvas.GetPixel(pixel.x, pixel.y) != color) {
+            return false;
+        }
+    }
+    return true;
+}
+
+const Instance kAhead{.model = 0, .position = {0.0, 0.0, 1.0}};
+
+// A lamp a quarter of a unit in front of the triangle placed at kAhead, off its middle.
+const std::vector<Light> kLampAhead = {
+    AmbientLight{.intensity = 0.125},
+    PointLight{.intensity = 0.75, .position = {0.125, 0.0, 0.75}},
+};
+
+}  // namespace
+
+TEST_CASE("RenderScene under lights: an instance is lit as RenderObject lights its placed model",
+          "[rasterizer][shading]") {
+    Model model = FacingTriangle(kYellow);
+    model.specular = 20.0;
+    const std::vector<Model> models = {model};
+    const Instance instance{.model = 0, .position = {0.125, -0.0625, 1.0}, .scale = 0.75};
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        Canvas expected(kSize, kSize, kBlack);
+        RenderObject(expected, TestViewport(), TransformModel(model, MakeModelMatrix(instance)),
+                     kLampAhead, shading_model);
+        const Canvas canvas = CanvasWithLitScene(models, {instance}, kLampAhead, shading_model);
+        CHECK(Bytes(canvas) == Bytes(expected));
+        CHECK(LitPixels(canvas).size() > 50);
+    }
+}
+
+TEST_CASE("RenderScene under lights: the shading model is the caller's choice, Phong by default",
+          "[rasterizer][shading]") {
+    const std::vector<Model> models = {FacingTriangle()};
+    const Canvas flat = CanvasWithLitScene(models, {kAhead}, kLampAhead, ShadingModel::kFlat);
+    const Canvas gouraud = CanvasWithLitScene(models, {kAhead}, kLampAhead, ShadingModel::kGouraud);
+    const Canvas phong = CanvasWithLitScene(models, {kAhead}, kLampAhead, ShadingModel::kPhong);
+    // The same pixels, lit three ways.
+    CHECK(LitPixels(flat) == LitPixels(gouraud));
+    CHECK(LitPixels(flat) == LitPixels(phong));
+    CHECK(Bytes(flat) != Bytes(gouraud));
+    CHECK(Bytes(gouraud) != Bytes(phong));
+    // Only Phong shading finds the point in front of the lamp: 255 * (0.125 + 0.75).
+    CHECK(phong.GetPixel(4, 0) == Rgb8{223, 223, 223});
+    CHECK(int{gouraud.GetPixel(4, 0)->r} < 175);
+
+    Canvas by_default(kSize, kSize, kBlack);
+    RenderScene(by_default, TestViewport(), models, std::vector<Instance>{kAhead}, Camera{},
+                kLampAhead);
+    CHECK(Bytes(by_default) == Bytes(phong));
+}
+
+TEST_CASE(
+    "RenderScene under lights: a lamp is where the world has it, wherever the camera "
+    "stands",
+    "[rasterizer][shading]") {
+    // The camera, the instance and the lamp moved together by the same vector: the same
+    // picture, to the bit, since every sum here is exact.
+    const std::vector<Model> models = {FacingTriangle()};
+    const Vec3 moved{4.0, -2.0, -8.0};
+    const Camera camera{.position = moved};
+    const std::vector<Instance> instances = {{.model = 0, .position = moved + kAhead.position}};
+    const std::vector<Light> lights = {
+        AmbientLight{.intensity = 0.125},
+        PointLight{.intensity = 0.75, .position = moved + Vec3{0.125, 0.0, 0.75}},
+    };
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        const Canvas canvas = CanvasWithLitScene(models, instances, lights, shading_model, camera);
+        CHECK(Bytes(canvas) ==
+              Bytes(CanvasWithLitScene(models, {kAhead}, kLampAhead, shading_model)));
+        // A lamp left behind at the old place is a long way off and to the side: another
+        // picture.
+        CHECK(Bytes(canvas) !=
+              Bytes(CanvasWithLitScene(models, instances, kLampAhead, shading_model, camera)));
+    }
+}
+
+TEST_CASE("RenderScene under lights: the lights are turned into the camera's coordinates",
+          "[rasterizer][shading]") {
+    // The camera of the turned-camera test: it looks along -X at a triangle that stands
+    // at (-1, 0, 0) and is turned to face it. The triangle's normal is +X in the world.
+    const std::vector<Model> models = {FacingTriangle()};
+    const std::vector<Instance> instances = {
+        {.model = 0, .position = {-1.0, 0.0, 0.0}, .orientation = MakeOYRotationMatrix(90.0)}};
+    const Camera turned{.orientation = MakeOYRotationMatrix(90.0)};
+
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        // A sun in the world's +X, behind the camera, shines straight onto the triangle:
+        // 255 * 0.75 at every pixel, as for the default camera with the sun behind it.
+        const std::vector<Light> sun = {
+            DirectionalLight{.intensity = 0.75, .direction = {1.0, 0.0, 0.0}}};
+        const Canvas lit = CanvasWithLitScene(models, instances, sun, shading_model, turned);
+        CHECK(LitPixels(lit).size() > 100);
+        CHECK(EveryLitPixelIs(lit, Rgb8{191, 191, 191}));
+        const std::vector<Light> sun_behind_default = {
+            DirectionalLight{.intensity = 0.75, .direction = {0.0, 0.0, -1.0}}};
+        CHECK(Bytes(lit) ==
+              Bytes(CanvasWithLitScene(models, {kAhead}, sun_behind_default, shading_model)));
+
+        // A sun in the world's -Z is to this camera's side and grazes the triangle: had
+        // its direction been read as the camera's -Z, it would light it in full.
+        const std::vector<Light> sun_to_the_side = {
+            DirectionalLight{.intensity = 0.75, .direction = {0.0, 0.0, -1.0}}};
+        CHECK(
+            LitPixels(CanvasWithLitScene(models, instances, sun_to_the_side, shading_model, turned))
+                .empty());
+
+        // A lamp a quarter of a unit in front of the triangle, at (-0.75, 0, 0) of the
+        // world, with some ambient light: the picture the default camera has of the
+        // triangle ahead of it with the lamp at (0, 0, 0.75), give or take the last bit
+        // of cos and sin.
+        const std::vector<Light> lamp = {
+            AmbientLight{.intensity = 0.125},
+            PointLight{.intensity = 0.5, .position = {-0.75, 0.0, 0.0}},
+        };
+        const std::vector<Light> lamp_ahead = {
+            AmbientLight{.intensity = 0.125},
+            PointLight{.intensity = 0.5, .position = {0.0, 0.0, 0.75}},
+        };
+        CHECK(LargestDifference(CanvasWithLitScene(models, instances, lamp, shading_model, turned),
+                                CanvasWithLitScene(models, {kAhead}, lamp_ahead, shading_model)) <=
+              1);
+    }
+}
+
+TEST_CASE("RenderScene under lights: an instance's orientation turns its normals with it",
+          "[rasterizer][shading]") {
+    // The triangle states normals that lean 45 degrees to its right, and the sun is in
+    // the world's +X, to the right of the default camera.
+    const std::vector<Light> sun = {
+        DirectionalLight{.intensity = 0.75, .direction = {1.0, 0.0, 0.0}}};
+    Model model = FacingTriangle();
+    model.triangles[0].normals = {Vec3{1.0, 0.0, -1.0}, Vec3{1.0, 0.0, -1.0}, Vec3{1.0, 0.0, -1.0}};
+    const std::vector<Model> models = {model};
+
+    for (const ShadingModel shading_model : {ShadingModel::kGouraud, ShadingModel::kPhong}) {
+        // As the model stands the sun arrives 45 degrees off those normals: 0.75 / sqrt(2).
+        const Canvas as_it_stands = CanvasWithLitScene(models, {kAhead}, sun, shading_model);
+        CHECK(LitPixels(as_it_stands).size() > 100);
+        CHECK(EveryLitPixelIs(as_it_stands, Rgb8{135, 135, 135}));
+
+        // Turned 45 degrees about Y, +X toward +Z, the triangle's right side swings away
+        // from the camera and its stated normals swing to +X, straight at the sun.
+        const Instance turned{
+            .model = 0, .position = {0.0, 0.0, 1.0}, .orientation = MakeOYRotationMatrix(45.0)};
+        const Canvas swung = CanvasWithLitScene(models, {turned}, sun, shading_model);
+        CHECK(LitPixels(swung).size() > 50);
+        CHECK(EveryLitPixelIs(swung, Rgb8{191, 191, 191}));
+    }
+
+    // Flat shading goes by the triangle's own normal, which the sun grazes as the model
+    // stands and reaches at 45 degrees once it is turned.
+    CHECK(LitPixels(CanvasWithLitScene(models, {kAhead}, sun, ShadingModel::kFlat)).empty());
+    const Instance turned{
+        .model = 0, .position = {0.0, 0.0, 1.0}, .orientation = MakeOYRotationMatrix(45.0)};
+    CHECK(EveryLitPixelIs(CanvasWithLitScene(models, {turned}, sun, ShadingModel::kFlat),
+                          Rgb8{135, 135, 135}));
+}
+
+TEST_CASE(
+    "RenderScene under lights: neither an instance's scale nor the length a model gives "
+    "its normals changes the light",
+    "[rasterizer][shading]") {
+    // The triangle twice as large, with normals of three other lengths in the same
+    // directions, placed at half the scale: the same vertices and, once the model is
+    // placed, the same unit normals.
+    Model model = FacingTriangle();
+    model.triangles[0].normals = {Vec3{0.0, 0.6, -0.8}, Vec3{0.6, 0.0, -0.8},
+                                  Vec3{-0.6, 0.0, -0.8}};
+    Model doubled = model;
+    for (Vec3& vertex : doubled.vertices) {
+        vertex *= 2.0;
+    }
+    doubled.triangles[0].normals = {Vec3{0.0, 3.0, -4.0}, Vec3{0.3, 0.0, -0.4},
+                                    Vec3{-1.2, 0.0, -1.6}};
+    const Instance halved{.model = 0, .position = {0.0, 0.0, 1.0}, .scale = 0.5};
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        CHECK(Bytes(CanvasWithLitScene({doubled}, {halved}, kLampAhead, shading_model)) ==
+              Bytes(CanvasWithLitScene({model}, {kAhead}, kLampAhead, shading_model)));
+    }
+}
+
+TEST_CASE("RenderScene under lights: back faces are culled unless the caller keeps them",
+          "[rasterizer][shading]") {
+    // The triangle listed the other way round is turned away from the camera.
+    Model reversed = FacingTriangle();
+    reversed.triangles[0].v = {0, 2, 1};
+    const std::vector<Light> lights = {
+        AmbientLight{.intensity = 0.25},
+        DirectionalLight{.intensity = 0.5, .direction = {0.0, 0.0, -1.0}},
+    };
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        CHECK(LitPixels(CanvasWithLitScene({reversed}, {kAhead}, lights, shading_model)).empty());
+        // Kept, it is lit on the side its normal points to, which the sun behind the
+        // camera does not reach: the ambient light alone.
+        const Canvas kept = CanvasWithLitScene({reversed}, {kAhead}, lights, shading_model,
+                                               Camera{}, BackFaceCulling::kOff);
+        CHECK(LitPixels(kept).size() > 100);
+        CHECK(EveryLitPixelIs(kept, Rgb8{63, 63, 63}));
+        // The front face gets both.
+        CHECK(
+            EveryLitPixelIs(CanvasWithLitScene({FacingTriangle()}, {kAhead}, lights, shading_model),
+                            Rgb8{191, 191, 191}));
+    }
+}
+
+TEST_CASE("RenderScene under lights: through the depth buffer the nearer instance shows",
+          "[rasterizer][shading]") {
+    const std::vector<Model> models = {FacingTriangle(kRed), FacingTriangle(kBlue)};
+    const Instance near{.model = 0, .position = {0.0, 0.0, 1.0}};
+    const Instance far{.model = 1, .position = {0.0, 0.0, 2.0}};
+    const std::vector<Light> lights = {AmbientLight{.intensity = 1.0}};
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        const Canvas near_first = CanvasWithLitScene(models, {near, far}, lights, shading_model);
+        CHECK(Bytes(near_first) ==
+              Bytes(CanvasWithLitScene(models, {far, near}, lights, shading_model)));
+        CHECK(near_first.GetPixel(0, 0) == Rgb8{255, 0, 0});
+        CHECK(Bytes(near_first) ==
+              Bytes(CanvasWithLitScene(models, {near}, lights, shading_model)));
+
+        // Without a buffer the instances are painted in list order.
+        Canvas painted(kSize, kSize, kBlack);
+        RenderScene(painted, TestViewport(), models, std::vector<Instance>{near, far}, Camera{},
+                    lights, shading_model);
+        CHECK(painted.GetPixel(0, 0) == Rgb8{0, 0, 255});
+    }
+}
+
+TEST_CASE("RenderScene under lights: a triangle cut by a clipping plane is lit as its pieces",
+          "[rasterizer][shading]") {
+    // A right triangle with its corners on the pixels (-8, -8), (8, 0) and (8, -8), cut
+    // by the plane x = 0 through (0, -8) and (0, -4). Its normal is across the light at
+    // the left corner and along it at the two on the right, under a sun behind the
+    // camera: dark on the left, 255 * 0.75 on the right.
+    const std::vector<Light> sun = {
+        DirectionalLight{.intensity = 0.75, .direction = {0.0, 0.0, -1.0}}};
+    const Model model{
+        .vertices = {{-0.25, -0.25, 0.0}, {0.25, 0.0, 0.0}, {0.25, -0.25, 0.0}},
+        .triangles = {{.v = {0, 1, 2},
+                       .color = kWhite,
+                       .normals = {Vec3{-1.0, 0.0, 0.0}, Vec3{0.0, 0.0, -1.0},
+                                   Vec3{0.0, 0.0, -1.0}}}},
+    };
+    const Camera cutting{.clipping_planes = {kRightHalf}};
+
+    // Lit pixel by pixel the pieces show what the whole triangle shows in front of the
+    // plane, give or take the last bit of a running sum: a new corner has the normal
+    // that the interpolation over the whole triangle has at that place, at the length
+    // it has there, so the interpolation inside a piece is the whole triangle's.
+    const Canvas whole = CanvasWithLitScene({model}, {kAhead}, sun, ShadingModel::kPhong);
+    const Canvas cut = CanvasWithLitScene({model}, {kAhead}, sun, ShadingModel::kPhong, cutting);
+    std::size_t kept = 0;
+    for (int x = -kSize / 2; x < kSize / 2; ++x) {
+        for (int y = -kSize / 2; y < kSize / 2; ++y) {
+            INFO("pixel (" << x << ", " << y << ")");
+            if (x < 0) {
+                CHECK(cut.GetPixel(x, y) == Rgb8{0, 0, 0});
+            } else {
+                CHECK(std::abs(int{cut.GetPixel(x, y)->r} - int{whole.GetPixel(x, y)->r}) <= 1);
+                if (cut.GetPixel(x, y) != Rgb8{0, 0, 0}) {
+                    ++kept;
+                }
+            }
+        }
+    }
+    CHECK(kept > 30);
+    // Half way along the bottom side the normal is (-1/2, 0, -1/2): 255 * 0.75 / sqrt(2).
+    CHECK(whole.GetPixel(0, -8) == Rgb8{135, 135, 135});
+    CHECK(cut.GetPixel(0, -8) == Rgb8{135, 135, 135});
+
+    // Gouraud shading lights the corners it is given. The whole triangle has light 0 at
+    // the left corner and 0.75 at the right and, half way, the mean of the two. The
+    // piece has a corner there, with the triangle's normal at that place, and computes
+    // its light: what Phong shading gets, and more than the mean.
+    const Canvas whole_gouraud = CanvasWithLitScene({model}, {kAhead}, sun, ShadingModel::kGouraud);
+    const Canvas cut_gouraud =
+        CanvasWithLitScene({model}, {kAhead}, sun, ShadingModel::kGouraud, cutting);
+    CHECK(whole_gouraud.GetPixel(0, -8) == Rgb8{95, 95, 95});   // 255 * 0.375
+    CHECK(cut_gouraud.GetPixel(0, -8) == Rgb8{135, 135, 135});  // 255 * 0.75 / sqrt(2)
+    CHECK(cut_gouraud.GetPixel(8, -8) == Rgb8{191, 191, 191});
+
+    // Flat shading lights each piece at its own center, with the triangle's own normal,
+    // which the pieces share: under a sun they are one shade, the whole triangle's.
+    const Canvas cut_flat =
+        CanvasWithLitScene({model}, {kAhead}, sun, ShadingModel::kFlat, cutting);
+    CHECK(LitPixels(cut_flat).size() == kept);
+    CHECK(EveryLitPixelIs(cut_flat, Rgb8{191, 191, 191}));
 }

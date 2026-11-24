@@ -9,6 +9,7 @@
 #include <cgfs/rasterizer/point.h>
 #include <cgfs/rasterizer/triangle.h>
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstdint>
@@ -20,6 +21,7 @@
 using cgfs::BoundingSphere;
 using cgfs::Canvas;
 using cgfs::DrawWireframeTriangle;
+using cgfs::kMatte;
 using cgfs::Length;
 using cgfs::MakeBoundingSphere;
 using cgfs::MakeOYRotationMatrix;
@@ -203,4 +205,91 @@ TEST_CASE("TransformModel: the sphere that contains everything stays that", "[ra
     const Model placed = TransformModel(
         kTriangle, MakeTranslationMatrix({-3.0, 1.0, 7.0}) * MakeScalingMatrix(0.75));
     CHECK(std::isinf(placed.bounding_sphere.radius));
+}
+
+// --- What the drawing under lights reads of a model ------------------------------------
+
+namespace {
+
+// kTriangle with a normal at each corner, each along another axis.
+Model TriangleWithNormals() {
+    Model model = kTriangle;
+    model.triangles[0].normals = {Vec3{1.0, 0.0, 0.0}, Vec3{0.0, 1.0, 0.0}, Vec3{0.0, 0.0, 1.0}};
+    return model;
+}
+
+bool Near(Vec3 a, Vec3 b) {
+    return std::abs(a.x - b.x) < 1e-12 && std::abs(a.y - b.y) < 1e-12 &&
+           std::abs(a.z - b.z) < 1e-12;
+}
+
+}  // namespace
+
+TEST_CASE("Model: matte unless it says otherwise", "[rasterizer]") {
+    CHECK(kTriangle.specular == kMatte);
+    Model shiny = kTriangle;
+    shiny.specular = 50.0;
+    CHECK_FALSE(shiny == kTriangle);
+}
+
+TEST_CASE("TransformModel: moving a model does not turn its normals", "[rasterizer]") {
+    const Model model = TriangleWithNormals();
+    const Model moved = TransformModel(model, MakeTranslationMatrix({1.0, 2.0, 3.0}));
+    CHECK(moved.triangles == model.triangles);
+    CHECK(moved.vertices[0] == Vec3{1.25, 2.25, 3.0});  // the vertices did move
+}
+
+TEST_CASE("TransformModel: the normals turn with the model", "[rasterizer]") {
+    // A quarter turn about Y takes +X to +Z and +Z to -X, and leaves +Y.
+    const Model model = TriangleWithNormals();
+    const Model turned =
+        TransformModel(model, MakeTranslationMatrix({1.0, 2.0, 3.0}) * MakeOYRotationMatrix(90.0));
+    const auto& normals = turned.triangles[0].normals;
+    CHECK(Near(normals[0], {0.0, 0.0, 1.0}));
+    CHECK(Near(normals[1], {0.0, 1.0, 0.0}));
+    CHECK(Near(normals[2], {-1.0, 0.0, 0.0}));
+    // Everything else about the triangle is as it was.
+    CHECK(turned.triangles[0].v == model.triangles[0].v);
+    CHECK(turned.triangles[0].color == model.triangles[0].color);
+    CHECK(turned.triangles[0].h == model.triangles[0].h);
+}
+
+TEST_CASE("TransformModel: the normals come out at unit length", "[rasterizer]") {
+    // A scale stretches every direction and is taken out of the normals again.
+    const Model model = TriangleWithNormals();
+    const std::array<Vec3, 3> unit = {Vec3{1.0, 0.0, 0.0}, Vec3{0.0, 1.0, 0.0},
+                                      Vec3{0.0, 0.0, 1.0}};
+    CHECK(TransformModel(model, MakeScalingMatrix(0.5)).triangles[0].normals == unit);
+    CHECK(TransformModel(model, MakeScalingMatrix(3.0)).triangles[0].normals == unit);
+
+    // So is whatever length the model stated them at, even under the identity.
+    Model stated = kTriangle;
+    stated.triangles[0].normals = {Vec3{4.0, 0.0, 0.0}, Vec3{0.0, 0.25, 0.0}, Vec3{0.0, 3.0, -4.0}};
+    const Model as_it_stands = TransformModel(stated, Mat4::Identity());
+    const auto& normals = as_it_stands.triangles[0].normals;
+    CHECK(normals[0] == Vec3{1.0, 0.0, 0.0});
+    CHECK(normals[1] == Vec3{0.0, 1.0, 0.0});
+    CHECK(Near(normals[2], {0.0, 0.6, -0.8}));
+
+    // Turned, scaled and moved at once: still unit vectors.
+    const Model placed =
+        TransformModel(stated, MakeTranslationMatrix({1.0, 2.0, 3.0}) * MakeOYRotationMatrix(35.0) *
+                                   MakeScalingMatrix(0.75));
+    for (const Vec3 normal : placed.triangles[0].normals) {
+        CHECK(std::abs(Length(normal) - 1.0) < 1e-12);
+    }
+}
+
+TEST_CASE("TransformModel: a corner without a normal stays without one", "[rasterizer]") {
+    const Model transformed =
+        TransformModel(kTriangle, MakeTranslationMatrix({1.0, 2.0, 3.0}) *
+                                      MakeOYRotationMatrix(35.0) * MakeScalingMatrix(0.75));
+    CHECK(transformed.triangles[0].normals == std::array<Vec3, 3>{});
+}
+
+TEST_CASE("TransformModel: the specular exponent is the model's", "[rasterizer]") {
+    Model shiny = kTriangle;
+    shiny.specular = 50.0;
+    CHECK(TransformModel(shiny, MakeTranslationMatrix({1.0, 2.0, 3.0})).specular == 50.0);
+    CHECK(TransformModel(kTriangle, MakeScalingMatrix(2.0)).specular == kMatte);
 }

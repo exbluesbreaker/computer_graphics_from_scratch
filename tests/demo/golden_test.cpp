@@ -6,6 +6,7 @@
 #include <cgfs/demo/raytracer_scenes.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/image_io.h>
+#include <cgfs/rasterizer/shading.h>
 #include <cgfs/raytracer/raytracer.h>
 
 #include <catch2/catch_test_macros.hpp>
@@ -158,4 +159,33 @@ TEST_CASE("filled cubes scene matches the reference drawing", "[golden]") {
             cgfs::demo::DrawFilledCubesScene(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas));
         },
         "filled_320x180.ppm");
+}
+
+// The shading scene is one scene and three pictures, one per shading model.
+
+TEST_CASE("shading scene matches the reference drawing under flat shading", "[golden]") {
+    CheckDrawingMatchesGolden(
+        [](cgfs::Canvas& canvas) {
+            cgfs::demo::DrawShadingScene(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas),
+                                         cgfs::ShadingModel::kFlat);
+        },
+        "shading_flat_320x180.ppm");
+}
+
+TEST_CASE("shading scene matches the reference drawing under Gouraud shading", "[golden]") {
+    CheckDrawingMatchesGolden(
+        [](cgfs::Canvas& canvas) {
+            cgfs::demo::DrawShadingScene(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas),
+                                         cgfs::ShadingModel::kGouraud);
+        },
+        "shading_gouraud_320x180.ppm");
+}
+
+TEST_CASE("shading scene matches the reference drawing under Phong shading", "[golden]") {
+    CheckDrawingMatchesGolden(
+        [](cgfs::Canvas& canvas) {
+            cgfs::demo::DrawShadingScene(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas),
+                                         cgfs::ShadingModel::kPhong);
+        },
+        "shading_phong_320x180.ppm");
 }

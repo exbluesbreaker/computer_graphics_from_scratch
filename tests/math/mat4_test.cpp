@@ -13,6 +13,7 @@ using cgfs::MakeOYRotationMatrix;
 using cgfs::MakeScalingMatrix;
 using cgfs::MakeTranslationMatrix;
 using cgfs::Mat4;
+using cgfs::TransformDirection;
 using cgfs::Transposed;
 using cgfs::Vec3;
 
@@ -141,4 +142,42 @@ TEST_CASE("MakeOYRotationMatrix: rotations compose, keep lengths and invert by t
     CHECK_THAT(Length(r * p), WithinAbs(Length(p), kEpsilon));
     CHECK(Near(Transposed(r) * r, Mat4::Identity()));
     CHECK(Near(Transposed(r), MakeOYRotationMatrix(-195.0)));
+}
+
+TEST_CASE("TransformDirection: a translation does not move a direction", "[mat4]") {
+    // A point picks up the last column of the matrix; a direction, whose fourth
+    // coordinate is 0, does not.
+    const Vec3 d{1.0, -2.0, 3.0};
+    const Mat4 moved = MakeTranslationMatrix({5.0, 6.0, 7.0});
+    CHECK(TransformDirection(moved, d) == d);
+    CHECK(moved * d == Vec3{6.0, 4.0, 10.0});
+    CHECK(TransformDirection(Mat4::Identity(), d) == d);
+}
+
+TEST_CASE("TransformDirection: a rotation turns a direction and a scaling stretches it", "[mat4]") {
+    CHECK(Near(TransformDirection(MakeOYRotationMatrix(90.0), {1.0, 0.0, 0.0}), {0.0, 0.0, 1.0}));
+    CHECK(Near(TransformDirection(MakeOYRotationMatrix(90.0), {0.0, 0.0, 1.0}), {-1.0, 0.0, 0.0}));
+    CHECK(TransformDirection(MakeOYRotationMatrix(90.0), {0.0, 1.0, 0.0}) == Vec3{0.0, 1.0, 0.0});
+    CHECK(TransformDirection(MakeScalingMatrix(2.0), {1.0, -2.0, 3.0}) == Vec3{2.0, -4.0, 6.0});
+}
+
+TEST_CASE("TransformDirection: the direction between two points is transformed with them",
+          "[mat4]") {
+    // M q - M p = M (q - p), the translation in M cancelling: which is why a direction
+    // is transformed without it.
+    const Mat4 m = MakeTranslationMatrix({3.0, -1.0, 2.0}) * MakeOYRotationMatrix(30.0) *
+                   MakeScalingMatrix(1.5);
+    const Vec3 p{1.0, 2.0, 3.0};
+    const Vec3 q{-2.0, 0.5, 4.0};
+    CHECK(Near(TransformDirection(m, q - p), m * q - m * p));
+    // The transform scales lengths by 1.5, a direction's among them.
+    CHECK(std::abs(Length(TransformDirection(m, q - p)) - 1.5 * Length(q - p)) < kEpsilon);
+}
+
+TEST_CASE("TransformDirection: no direction stays no direction", "[mat4]") {
+    const Mat4 m = MakeTranslationMatrix({3.0, -1.0, 2.0}) * MakeOYRotationMatrix(30.0) *
+                   MakeScalingMatrix(1.5);
+    CHECK(TransformDirection(m, Vec3{}) == Vec3{});
+    static_assert(TransformDirection(MakeScalingMatrix(2.0), Vec3{1.0, 0.0, 0.0}).x == 2.0,
+                  "usable in a constant expression");
 }
