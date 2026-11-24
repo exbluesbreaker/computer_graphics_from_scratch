@@ -1782,8 +1782,15 @@ scene, the clipping scene and the filled cubes the viewport width always matches
 canvas aspect ratio,
 and `--distance` zooms them (in the clipping scene it moves the near plane out with the
 viewport as well); it has no effect on the 2D pictures. The output format follows
-the extension. The program prints the render time in milliseconds and exits non-zero with
-a message on bad arguments or I/O failure. Argument parsing is hand-written; no library
+the extension. After every render the program prints one line with the picture's name,
+its size, the render time and the file it was saved to,
+`rendered 'filled' at 1920x1080 in 16.95 ms -> filled.png`. The time is that of the
+drawing alone, from the canvas that already exists to the canvas that is not yet saved,
+in milliseconds to two decimals: most of the rasterized pictures take a few
+milliseconds or less, and in whole milliseconds they all took "0 ms" or "1 ms". It is
+one run on a machine that is doing other things, good for telling 5 ms from 50 and not
+5.0 from 5.3; section 15 says how the figures quoted there were taken. The program exits
+non-zero with a message on bad arguments or I/O failure. Argument parsing is hand-written; no library
 is added for it. The scene table in `render_demo.cpp` is the single list of pictures: the
 usage text, the default and the dispatch are derived from it, so a new picture is a new
 row.

@@ -1,7 +1,7 @@
-// Command-line renderer: draws one of the demo pictures into a canvas and saves it to
-// a file. The scene table is the one place that knows the pictures by name; the usage
-// text, the default and the dispatch are derived from it, so adding a picture is adding
-// a row.
+// Command-line renderer: draws one of the demo pictures into a canvas, saves it to a
+// file and reports how long the drawing took. The scene table is the one place that
+// knows the pictures by name; the usage text, the default and the dispatch are derived
+// from it, so adding a picture is adding a row.
 
 #include <cgfs/camera/viewport.h>
 #include <cgfs/demo/rasterizer_scenes.h>
@@ -223,16 +223,19 @@ int main(int argc, char** argv) {
                                      SceneNames() + ")");
         }
 
+        // The render time is that of the drawing alone: the canvas exists before the
+        // clock starts and the file is written after it stops. In hundredths of a
+        // millisecond, since most of the rasterized pictures take only a few.
         cgfs::Canvas canvas(options->width, options->height);
         const auto start = std::chrono::steady_clock::now();
         scene->draw(canvas, options->distance);
-        const auto elapsed = std::chrono::steady_clock::now() - start;
+        const std::chrono::duration<double, std::milli> elapsed =
+            std::chrono::steady_clock::now() - start;
         canvas.Save(options->output);
 
         std::cout << "rendered '" << scene->name << "' at " << canvas.width() << "x"
-                  << canvas.height() << " in "
-                  << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
-                  << " ms -> " << options->output << "\n";
+                  << canvas.height() << " in " << std::fixed << std::setprecision(2)
+                  << elapsed.count() << " ms -> " << options->output << "\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         std::cerr << "render_demo: " << error.what() << "\n" << Usage();

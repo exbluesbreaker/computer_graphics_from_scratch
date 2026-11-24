@@ -59,6 +59,11 @@ Use `--preset release` for an optimized build in `build/release`. Then:
 ./build/release/apps/render_demo --help
 ```
 
+Every run prints what it drew, how long the drawing took and where it went:
+`rendered 'filled' at 1920x1080 in 16.95 ms -> filled.png`. The time is the render
+alone, without writing the file, to a hundredth of a millisecond; it is a single run, so
+compare several before trusting a small difference.
+
 Scenes: `reflective` (three shiny spheres on a shiny yellow floor with ambient, point and
 directional lights; the lights show up as highlights, the spheres cast shadows and mirror
 each other and the floor), `specular` (the same scene without reflections), `diffuse`
