@@ -106,7 +106,7 @@ constexpr DemoScene kScenes[] = {
      Projected<cgfs::demo::DrawClippingScene>},
     {"filled", "filled cubes listed in the wrong order and set right by a depth buffer",
      Projected<cgfs::demo::DrawFilledCubesScene>},
-    {"shading", "a cube, two balls and a floor under a lamp, shaded as --shading says",
+    {"shading", "solids and three lamps over three tiles, shaded as --shading says",
      Lit<cgfs::demo::DrawShadingScene>, true},
     {"axes", "the coordinate axes and corner dots (no ray tracing)",
      Rasterized<cgfs::demo::DrawAxesScene>},

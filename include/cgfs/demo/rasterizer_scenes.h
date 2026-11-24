@@ -141,45 +141,58 @@ void DrawClippingScene(Canvas& canvas, const Viewport& viewport);
 /// --distance zooms it.
 void DrawFilledCubesScene(Canvas& canvas, const Viewport& viewport);
 
-/// The picture of the Shading chapter, the first under lights: a floor with a cube, a
-/// matte ball and a shiny ball standing on it, lit by a little ambient light, a sun and a
-/// lamp close above the floor, drawn with RenderScene through a depth buffer and shaded
-/// with `shading_model`. It is one scene to be drawn four times, the four pictures of
-/// the book's chapter, and it is composed so that each shading model gets more of it
-/// right than the one before:
+/// The picture of the Shading chapter, the first under lights: a floor with five solids
+/// standing on it and three lamps hanging low over three tiles, lit by a little ambient
+/// light and a sun besides, drawn with RenderScene through a depth buffer and shaded with
+/// `shading_model`. It is one scene to be drawn four times, the four pictures of the
+/// book's chapter, and every object in it is there for something that one shading model
+/// gets right and the one before it does not:
 ///
-/// - Flat shading gets the cube nearly right and nothing else. The cube's faces are
-///   flat, and one light value per triangle is what a flat face lit from far away has;
-///   the lamp is not infinitely far, so the two triangles of a face come out a shade
-///   apart and a faint seam shows, the one in the book's own figure. Both balls are
-///   faceted, each triangle in its own shade. The floor, one face of two triangles, is
-///   two flat tones with a seam from corner to corner.
-/// - Faceted Gouraud shading, the light at the corners of every triangle with the
-///   triangle's own normal, gets the cube right: the two triangles of a face agree on
-///   the light at the corners they share, and the seam is gone. So is the floor's,
-///   which is now evenly dull: the lamp's light arrives at its four far corners at a
-///   grazing angle, and nothing is computed in between. The balls are as faceted as
-///   before, each triangle lit by its own normal, with a slight gradient across it.
-/// - Gouraud shading gets the cube and the matte ball right. The balls' triangles carry
-///   the normals of a sphere at their corners, the light computed with those runs
-///   smoothly across the edges, and the matte ball is round. The shiny ball is round
-///   too and has lost its highlights: they are smaller than its triangles, and what the
-///   corners catch of them is a dim smear. The cube and the floor, which state no
-///   normals, are what they were.
-/// - Phong shading gets all of it right: two highlights on the shiny ball, the lamp's
-///   and the sun's, round and sharp, and a pool of light on the floor under the lamp.
-///   What stays wrong is what no shading can mend, the corners in the balls' outlines.
+/// - The cube has flat faces. Flat shading leaves a faint seam across each face a lamp
+///   lights, its two triangles a shade apart, the one in the book's own figure; lit at
+///   the corners, from faceted Gouraud shading on, the two triangles agree where they
+///   meet and the cube is right.
+/// - The matte ball has few triangles, 128, and the normals of a sphere at their
+///   corners. It is faceted until those normals are read: round from Gouraud shading
+///   on.
+/// - The cylinder is round one way and flat at its ends, twelve sides and two caps.
+///   Its sides are strips until Gouraud shading, which rounds them and keeps the rim a
+///   sharp edge, a vertex there having the side's normal in the side's triangles and
+///   none in the cap's. Its highlight, a streak down its side, is smeared over a whole
+///   strip until Phong shading.
+/// - The coarse shiny ball is the matte one with highlights, which are smaller than its
+///   triangles: Gouraud shading rounds it and loses them, a dim smear being all the
+///   corners catch, and Phong shading shows four, one per lamp and the sun's.
+/// - The fine shiny ball has nine times the triangles, 1152, each smaller than a
+///   highlight. Under Gouraud shading it has its highlights, a little soft: more
+///   triangles are the other way to mend what Gouraud shading gets wrong, at their
+///   price.
+/// - The three tiles are alike, two triangles each, and over the middle of each hangs a
+///   lamp: 0.9 above the left one, 0.4 above the middle one and 0.18 above the right
+///   one. The nearer a lamp is to its tile, the more light the middle of the tile gets
+///   and the less its corners do, where the light arrives at a slant. So every shading
+///   model that computes the light at the corners, or once per triangle, shows the
+///   tiles darker from left to right, the darkest under the nearest lamp, which is the
+///   wrong way round (the book's Figure 13-7). Phong shading gives each its pool of
+///   light, smaller and sharper the lower the lamp (Figure 13-10).
+/// - The floor is one face of two triangles under all of it: two tones with a seam
+///   under flat shading, evenly dull after that, and lit around the tiles, where the
+///   lamps are, under Phong shading alone.
 ///
-/// The lamp is a point light at (1.5, 0.9, -1.9), in front of the shiny ball, and a
-/// small ball marks the spot: its color is far beyond the scale, so it shows the same
-/// glowing yellow whatever the lights and the shading make of it. The camera stands at
-/// (0, 5.4, -7.4) and looks down on the stage at the angle of the 3-4-5 triangle, about
-/// 36.9 degrees, by a rotation matrix written out by hand; the balls are octahedra
-/// subdivided and pushed out to a sphere. So nothing in the picture's geometry calls cos
-/// or sin. At distance 1 on a 16:9 canvas the floor, 10 x 8, is all in view and no
-/// triangle is cut by the camera's clipping planes, which would have its pieces lit one
-/// by one. Clears the canvas to a dark background first; depends on the viewport, so
-/// render_demo's --distance zooms it.
+/// What stays wrong under all four is what no shading can mend, the corners in the
+/// outlines of the balls and the cylinder.
+///
+/// A small ball marks each lamp: its color is far beyond the scale, so it shows the same
+/// glowing yellow whatever the lights and the shading make of it. The tiles' color is
+/// beyond the scale too, by less, which shows them as a longer exposure would. The
+/// camera stands at (0, 6.6, -9.05) and looks down on the stage at the angle of the
+/// 3-4-5 triangle, about 36.9 degrees, by a rotation matrix written out by hand; the
+/// balls are octahedra subdivided and pushed out to a sphere, and the cylinder's outline
+/// is a regular 12-gon, whose corners need a square root and no more. So nothing in the
+/// picture's geometry calls cos or sin. At distance 1 on a 16:9 canvas the floor,
+/// 13.2 x 9, is all in view and no triangle is cut by the camera's clipping planes,
+/// which would have its pieces lit one by one. Clears the canvas to a dark background
+/// first; depends on the viewport, so render_demo's --distance zooms it.
 void DrawShadingScene(Canvas& canvas, const Viewport& viewport, ShadingModel shading_model);
 
 /// The coordinate axes through the origin, a dot at the origin and a colored dot in

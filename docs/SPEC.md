@@ -2022,8 +2022,8 @@ Golden-image tests:
   projected vertices clear the pixel boundaries, so that a `libm` off by a few ulps
   still draws the same pixels. The clipping scene is the second, and the first whose
   picture is filled: section 15 records its margin, and what had to be moved off the
-  pixel boundaries to get one. The shading scene, though its camera is turned and two
-  of its models are spheres, calls neither: its vertices come from additions,
+  pixel boundaries to get one. The shading scene, though its camera is turned and most
+  of its models are round, calls neither: its vertices come from additions,
   multiplications, divisions and square roots, all of which IEEE arithmetic rounds one
   way (section 9 says how). What differs between platforms in its four references is
   `pow`, in the specular term of the shiny ball, by an amount far inside the test's
@@ -2054,10 +2054,10 @@ Golden-image tests:
   byte what they were. `filled` is also the one reference that would notice a triangle
   listed the wrong way round, and only in the cube; the other models are drawn without
   culling, and their winding was checked once, outside the tests (section 15). The four
-  shading references pin one scene under the four shading models: the same 26216
+  shading references pin one scene under the four shading models: the same 24729
   pixels are covered in each, and what differs is the light. They are drawn with
-  culling, so they would notice a triangle of the sphere or of the floor listed the
-  wrong way round. Shading changed no other reference: the fourteen from before it are
+  culling, so they would notice a triangle of a sphere, of the cylinder, of a tile or of
+  the floor listed the wrong way round. Shading changed no other reference: the fourteen from before it are
   byte for byte what they were.
 
 ## 9. Demo application
@@ -2171,61 +2171,89 @@ a cube, at half the work, and the depth buffer between the cubes. The ties of 3.
 along the edges of faces turned away, lines one pixel wide that the depth buffer alone
 left in this picture, are gone with those faces; section 15 counts them. The `shading`
 scene is the picture of the Shading chapter and the first under lights:
-`DrawShadingScene(canvas, viewport, shading_model)` draws five instances of five models
-with `RenderScene(..., camera, lights, shading_model, &depth_buffer)`, and
+`DrawShadingScene(canvas, viewport, shading_model)` draws twelve instances of eight
+models with `RenderScene(..., camera, lights, shading_model, &depth_buffer)`, and
 `--shading flat|gouraud-faceted|gouraud|phong` chooses the shading model, Phong when it
 is not given. It is one scene made to be drawn four times, the chapter's four pictures:
-every object in it is right from one shading model on and wrong before it, so that from
-flat to faceted Gouraud to Gouraud to Phong each step leaves fewer of them looking
-wrong. The stage is a floor in the plane y = 0, 10 x 8 around the
-world's origin, one face of two triangles. On it stand, from left to right, a blue cube
-at (-3.6, 1, 2.2), the cube of the objects scene in one color; a matte green ball of
-radius 1.2 at (-0.5, 1.2, 1.5); and a shiny red ball of the same size at
-(2.7, 1.2, 0.6), with the specular exponent 30. The lights are an ambient light of 0.2,
-a directional light of 0.25 toward (-1, 2, -1.5), a sun high up to the left and behind
-the camera, and a point light of 0.65 at (1.5, 0.9, -1.9), a lamp in front of the shiny
-ball and less than a unit above the floor. A ball of radius 0.14 marks where the lamp
-is. Its color is (2550, 2040, 300), ten times off the scale, so that the ambient light
-alone saturates its red and green: it is the same glowing yellow under every shading
-model, a color that the lights cannot dim rather than a surface that emits light. The
-camera stands at (0, 5.4, -7.4), in front of the stage and above it, turned about X to
-look down on it by about 36.9 degrees, with the clipping planes of its viewport; the
-scene is drawn through a depth buffer and with back-face culling, 322 of its 718
-triangles.
-Under flat shading the cube is nearly right: its top, which the lamp is below, is one
-shade, and on each of the two sides that the lamp lights the two triangles come out 7
-and 8 levels of 255 apart, a faint seam across the face, the one in the book's own
-figure. The balls show their 288 triangles each, every one in a shade of its own, one
-of the shiny ball's bright with what its center caught of a highlight. The floor is two
-flat tones, (191, 183, 167) and (105, 101, 92) at 1920 x 1080, with a seam from corner
-to corner. Under faceted Gouraud shading, with the light at the corners of every
-triangle and the triangle's own normal there, the cube has no seams and is as good as
-it gets: the two triangles of a face agree on the light at the corners they share. The
-floor has lost its seam the same way and is evenly dull, between (93, 90, 81) and
-(108, 104, 94), as it stays until Phong shading. The balls are as faceted as they
-were: 288 triangles each, now with a slight gradient across every one. This is the
-picture the book reaches first and finds wanting, the sphere that still looks faceted.
-Under Gouraud shading, which lights the same corners with the normals the balls state
-there, the matte ball is round, the light running on smoothly across its triangles'
-edges, and nothing else has changed: the cube and the floor state no normals and are
-pixel for pixel what they were. The shiny ball is round too and has lost its highlights, which are smaller than its
-triangles: a dim smear is what the corners catch of them. The floor is evenly dull: the
-lamp's light reaches its four corners at a grazing angle, and nothing is computed in
-between. Under Phong shading the shiny ball has its two highlights, the lamp's and the
-sun's, round and sharp, and the floor has a pool of light under the lamp, more than
-twice as bright at its middle as the same pixels under Gouraud shading. What is left is
-what no shading mends: the corners in the outlines of the balls.
+every object in it is there for something that one shading model gets right and the one
+before it does not, so that from flat to faceted Gouraud to Gouraud to Phong each step
+leaves fewer of them looking wrong.
+The stage is a floor in the plane y = 0, 13.2 x 9 around the world's origin, one face
+of two triangles, and on it three rows. At the back, at z = 2.75: a blue cube, the cube
+of the objects scene in one color, at x = -5.45; a matte green ball of radius 1.1 with
+128 triangles at x = 0; and a shiny purple ball of the same size with 1152 triangles at
+x = 5.45. In front of the gaps between them, at z = 0.35: an orange cylinder of radius
+0.95 and height 2.09 with twelve sides at x = -2.25, and a shiny red ball of radius 1.1
+with 128 triangles at x = 2.25. The shiny balls have the specular exponent 50 and the
+cylinder 30. In front of those, at z = -2.95, lie three tiles, 1.9 x 1.9 and two
+triangles each, 0.02 above the floor at x = -3.95, 0 and 3.95, and over the middle of
+each hangs a lamp, a point light of 0.45: 0.9 above the left tile, 0.4 above the middle
+one and 0.18 above the right one. The other lights are an ambient light of 0.15 and a
+directional light of 0.2 toward (-1, 2, -1.5), a sun high up to the left and behind the
+camera. A ball of radius 0.07 marks each lamp. Its color is (2550, 2040, 300), ten
+times off the scale, so that the ambient light alone saturates its red and green: it
+is the same glowing yellow under every shading model, a color that the lights cannot
+dim rather than a surface that emits light. The tiles' color is off the scale as well,
+(300, 293, 273), which shows them as a longer exposure would and makes the differences
+between them easier to see; the middle of a pool of light saturates. The camera stands
+at (0, 6.6, -9.05), in front of the stage and above it, turned about X to look down on
+it by about 36.9 degrees, with the clipping planes of its viewport; the scene is drawn
+through a depth buffer and with back-face culling, 789 of its 1692 triangles.
+What each object is there to show:
+the cube has flat faces, and flat shading leaves a seam across each face that a lamp
+lights, its two triangles 8 and 9 levels of 255 apart, the one in the book's own
+figure; from faceted Gouraud shading on, with the light at the corners, the two
+triangles of a face agree on the light where they meet and the cube is as good as it
+gets. The matte ball is faceted under flat shading, every triangle in a shade of its
+own, and as faceted under faceted Gouraud shading, with a slight gradient across every
+triangle, the sphere that still looks faceted in the book; it is round from Gouraud
+shading on, which reads the normals of a sphere that its triangles state at their
+corners. The cylinder is twelve strips until Gouraud shading rounds them, and its rim
+stays a sharp edge, because a vertex on the rim has the round side's normal as a corner
+of a side and none, so the cap's own, as a corner of the cap: the reason a normal
+belongs to the corner of a triangle. Its highlight, which on a cylinder is a streak
+down the side, is smeared across a whole strip under Gouraud shading and narrow under
+Phong. The red ball is round under Gouraud shading and has lost its highlights, which
+are smaller than its triangles: a dim smear is what the corners catch of them. Phong
+shading shows four, one for each lamp and one for the sun. The purple ball has nine
+times the triangles, each smaller than a highlight, and keeps its highlights under
+Gouraud shading, a little soft: more triangles mend what Gouraud shading gets wrong,
+at their price in triangles.
+The tiles are the book's Figure 13-7 as three frames side by side. They are alike, and
+only the height of the lamp over each differs. The nearer a lamp is to its tile, the
+more light the middle of the tile gets from it and the less its corners do, where the
+light arrives at more and more of a slant: the cosine at a corner is 0.56 under the
+lamp at 0.9, 0.29 under the one at 0.4 and 0.13 under the one at 0.18. Every shading
+model that computes the light at the corners, or once per triangle, therefore shows
+the tiles darker from left to right, the darkest under the nearest lamp, the wrong way
+round: under Gouraud shading in either form they average 181, 164 and 136 of 255 in
+red at 1920 x 1080, and under flat shading each is two triangles with a seam between
+them besides. Phong shading gives every tile a pool of light that saturates in the
+middle, about as wide as the lamp is high: broad and soft under the first lamp, a
+small sharp spot under the last (Figure 13-10). A lamp also lights the tiles of its
+neighbours, the highest lamp the most, which lightens the middle tile on its left side;
+the order of the three is the lamps' own doing all the same. The floor, under all of
+this, is two tones with a seam from corner to corner under flat shading and evenly
+dull from then on, until Phong shading lights it around the tiles, where the lamps
+are. What is left under all four is what no shading mends: the corners in the outlines
+of the balls and the cylinder.
 The balls are made without trigonometry. `Sphere(n, color)` takes the octahedron
 `|x| + |y| + |z| = n`, which has a vertex at every point of whole numbers on it and
 `n^2` small triangles on each of its eight faces, and pushes every vertex out to the
 unit sphere by normalizing it; a vertex is its own normal there, and a triangle is
 listed clockwise as seen from outside by exchanging two of its corners if its normal
-points inward. The balls have n = 6, 288 triangles on 146 vertices, and the bulb n = 4.
+points inward. The coarse balls have n = 4, 128 triangles on 66 vertices, the fine one
+n = 12, 1152 on 578, and a bulb n = 3. `Cylinder(height, color)` has a regular 12-gon
+for its outline, whose corners at multiples of 30 degrees have only 0, 1/2,
+`sqrt(3) / 2` and 1 for coordinates: 24 triangles around the side, with the normals of
+the round surface, and 12 in each cap, with none, on 26 vertices.
 The camera's orientation is written out as a matrix, the rotation about X with the
 cosine 4/5 and the sine 3/5 of the 3-4-5 triangle, instead of being computed from an
 angle. So no vertex of this picture passes through `cos` or `sin`, and its geometry is
-the same to the bit on every platform that follows IEEE 754 (section 15 has the
-margins all the same). At the default distance on a 16:9 canvas the whole floor is in
+the same to the bit on every platform that follows IEEE 754. The positions are a
+little off the round numbers they started as (2.75 for 2.7, 5.45 for 5.4), because
+with the round ones the top of a ball projected exactly onto the border between two
+pixels (section 15). At the default distance on a 16:9 canvas the whole floor is in
 view and no triangle is cut by a clipping plane, which matters to this picture: a cut
 floor would be lit as its pieces (3.13), more of them than its two triangles. The
 `axes` scene draws the coordinate axes and corner dots; it exercises the canvas without
@@ -2251,7 +2279,7 @@ so that three runs can be told apart:
 
 ```
 rendered 'shading' (gouraud-faceted shading) at 1920x1080 -> faceted.png
-render time: 23.17 ms
+render time: 27.60 ms
 ```
 
 The time is that of the
@@ -2334,10 +2362,10 @@ Targets apply to Release builds on a single core. Debug builds have no targets.
 | clipping demo (47 instances, 1626 triangles, shaded)| 1920 x 1080 | under 150 ms; about 50 ms measured               |
 | clipping demo                                    | 320 x 180   | under 20 ms; about 2 ms measured                 |
 | filled demo (15 instances, 78 of 180 triangles drawn, depth buffer)| 1920 x 1080 | under 60 ms; about 16 ms measured |
-| shading demo, flat (5 instances, 322 of 718 triangles drawn, depth buffer) | 1920 x 1080 | under 70 ms; about 21 ms measured |
-| shading demo, Gouraud, faceted or with the model's normals | 1920 x 1080 | under 80 ms; about 25 ms measured      |
-| shading demo, Phong (the light at 950565 pixels and more) | 1920 x 1080 | under 200 ms; about 57 ms measured      |
-| shading demo, each of the four                   | 320 x 180   | under 10 ms; 1.1, 1.3, 1.2 and 2.6 ms measured   |
+| shading demo, flat (12 instances, 789 of 1692 triangles drawn, 5 lights, depth buffer) | 1920 x 1080 | under 70 ms; about 23 ms measured |
+| shading demo, Gouraud, faceted or with the model's normals | 1920 x 1080 | under 80 ms; about 27 ms measured      |
+| shading demo, Phong (the light at 891120 pixels and more) | 1920 x 1080 | under 250 ms; about 74 ms measured      |
+| shading demo, each of the four                   | 320 x 180   | under 15 ms; 1.7, 2.1, 2.1 and 3.8 ms measured   |
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
@@ -2706,8 +2734,9 @@ Measurements and known behaviours of the implementation, recorded 2026-11-02, up
 filled triangles and the reorganisation into layers, 2026-11-05 with shaded triangles,
 the perspective projection and objects made of triangles, 2026-11-09 with models,
 instances and scenes and, the same day, with model and camera transforms,
-2026-11-16 with clipping and shaded objects, 2026-11-20 with back-face culling, and
-2026-11-24 with the lighting layer and with shading.
+2026-11-16 with clipping and shaded objects, 2026-11-20 with back-face culling,
+2026-11-24 with the lighting layer and with shading, and 2026-11-25 with the shading
+demo as it is now, the larger of its two scenes.
 
 - Catch2 is pinned to v3.16.1.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
@@ -2974,54 +3003,80 @@ instances and scenes and, the same day, with model and camera transforms,
   scene at 1920 x 1080, run alternately from the build before and the build after,
   printed 249 to 264 ms before and 241 to 248 ms after, the same within the noise of a
   single run.
-- The shading demo has 5 instances of 5 models and 718 triangles: 2 in the floor, 12 in
-  the cube, 288 in each ball and 128 in the bulb. Back-face culling leaves 322, and at
-  the default distance on a 16:9 canvas the clipping cuts none of them: the bounding
-  spheres of the floor and of the cube reach across a plane, which costs a look at their
-  triangles and no more. It covers 26216 of the 57600 pixels at 320 x 180 and 950565 of
-  2073600 at 1920 x 1080, the same pixels under each shading model.
+- The shading demo has 12 instances of 8 models and 1692 triangles: 2 in the floor, 12 in
+  the cube, 48 in the cylinder, 128 in each of the two coarse balls, 1152 in the fine
+  one, 2 in each of the three tiles and 72 in each of the three bulbs. Back-face culling
+  leaves 789, and at the default distance on a 16:9 canvas the clipping cuts none of
+  them. It covers 24729 of the 57600 pixels at 320 x 180 and 891120 of 2073600 at
+  1920 x 1080, the same pixels under each shading model. This is the demo's second
+  scene, of 2026-11-25. The first, of the day before, had one lamp low over the floor,
+  a cube and two balls, 5 instances and 718 triangles; it had no pair of faces at
+  different distances from a light to compare, which is what the three tiles are for,
+  and neither a cylinder nor a second count of triangles.
 - Render times of the shading demo, as `render_demo` prints them, nine runs of each of
-  the four in one session on 2026-11-24, Release, the smallest, the median and the
-  largest: at 1920 x 1080 flat shading 20.3, 20.9 and 24.0 ms, faceted Gouraud 23.6,
-  25.2 and 26.6 ms, Gouraud 23.7, 24.8 and 27.6 ms, Phong 56.6, 57.1 and 61.2 ms; at
-  320 x 180 flat 0.88, 1.10 and 1.23 ms, faceted Gouraud 1.05, 1.27 and 1.49 ms,
-  Gouraud 0.99, 1.15 and 1.60 ms, Phong 2.38, 2.55 and 3.05 ms. (A session earlier the
-  same day gave medians of 22.4, 26.9 and 61.1 ms for flat, Gouraud and Phong at
-  1920 x 1080: the machine's state moves these by a few milliseconds, and figures are
-  to be compared within one session.) Flat shading computes the light 322 times a
-  picture and both forms of Gouraud shading 966 times; they differ by what
-  `DrawShadedTriangle` costs over `DrawFilledTriangle`, a list of intensities per row,
-  and the two forms of Gouraud shading do not differ measurably. Phong shading computes
-  the light at every pixel it sets, three lights and for the shiny ball up to two `pow`
-  calls each time, and allocates four lists per row: about 36 ms more than flat shading
-  for the 950565 pixels covered, some 38 ns a pixel. Much of what is left of the flat
-  figure is not shading: clearing the canvas and making a depth buffer of 16.6 MB, as
-  in the filled demo.
-- How the four shading references differ, of the 26216 pixels they all cover: flat and
-  faceted Gouraud on 24061, by more than 8 levels on 20630, most of them the floor,
-  which goes from two tones to one dull one; faceted Gouraud and Gouraud on 3423, by
-  more than 8 levels on 1043, all of them on the two balls but 44 in the blue of the
-  bulb, which has normals too, the cube and the floor being pixel for pixel the same;
-  Gouraud and Phong on 24457, by more than 8 levels on
-  14995, the pool of light on the floor and the highlights.
-- The shading demo's geometry calls neither `cos` nor `sin` (section 9), so the margins
-  that the camera and clipping demos needed are not what keeps it reproducible. They
-  were measured all the same, in a scratch program that included the demo source: no
-  projected coordinate of the 322 triangles drawn comes closer to a pixel boundary than
-  7.6e-4 pixels at 320 x 180 and 3.2e-3 at 1920 x 1080, and the nearest vertex is 5.96
-  in front of the camera. The same program checked the winding: every triangle of the
-  balls, the bulb and the cube has its normal pointing away from the model's middle, the
-  floor's point up, no triangle is without area, and every stated normal is the unit
-  vector to its vertex.
-- A ball of the shading demo is the octahedron `|x| + |y| + |z| = 6` normalized, not the
+  the four in one session on 2026-11-25, Release, the smallest, the median and the
+  largest: at 1920 x 1080 flat shading 22.1, 23.4 and 25.6 ms, faceted Gouraud 26.0,
+  26.9 and 29.0 ms, Gouraud 26.0, 26.9 and 30.2 ms, Phong 72.4, 73.7 and 77.3 ms; at
+  320 x 180 flat 1.64, 1.74 and 1.80 ms, faceted Gouraud 2.01, 2.08 and 2.22 ms,
+  Gouraud 1.75, 2.11 and 2.26 ms, Phong 3.19, 3.84 and 4.05 ms. The machine's state
+  moves these by a few milliseconds from one session to the next, and figures are to be
+  compared within one. Flat shading computes the light 789 times a picture and both
+  forms of Gouraud shading 2367 times; they differ by what `DrawShadedTriangle` costs
+  over `DrawFilledTriangle`, a list of intensities per row, and the two forms of
+  Gouraud shading do not differ measurably. Phong shading computes the light at every
+  pixel it sets, five lights and for a shiny surface up to four `pow` calls each time,
+  and allocates four lists per row: about 50 ms more than flat shading for the 891120
+  pixels covered, some 56 ns a pixel. Much of what is left of the flat figure is not
+  shading: clearing the canvas and making a depth buffer of 16.6 MB, as in the filled
+  demo. (The first scene, with three lights and fewer shiny pixels, took 21, 25, 25 and
+  57 ms, 38 ns a pixel more under Phong shading than under flat.)
+- How the four shading references differ, of the 24729 pixels they all cover: flat and
+  faceted Gouraud on 22761, by more than 8 levels on 13004, the floor and the tiles
+  losing their seams among them; faceted Gouraud and Gouraud on 3575, by more than 8
+  levels on 1950, all of them on the three balls, the cylinder and the bulbs, which
+  are the models that state normals, the cube, the tiles and the floor being pixel for
+  pixel the same; Gouraud and Phong on 23329, by more than 8 levels on 13737, the pools
+  of light on the tiles and the floor and the highlights.
+- The tiles of the shading demo by the numbers, at 1920 x 1080, in red: under Gouraud
+  shading in either form the left tile, whose lamp is 0.9 above it, averages 181, the
+  middle one, lamp at 0.4, 164, and the right one, lamp at 0.18, 136; its own lamp
+  reaches a tile's corners at a cosine of 0.56, 0.29 and 0.13. Under flat shading the
+  darker triangle of each tile is 225, 213 and 167. Under Phong shading every tile
+  reaches 255 under its lamp and falls to 178, 159 and 131 at its darkest.
+- The shading demo's geometry calls neither `cos` nor `sin` (section 9), so no `libm`
+  can move a vertex of it. A coordinate exactly on the border between two pixels is
+  still worth avoiding, since one bit of difference in how a product and a sum are
+  rounded together would decide the pixel, and the scene's first layout had some: with
+  the camera at (0, 6.6, -9) and the back row at z = 2.7, the top of a ball of radius
+  1.1 is at (x, 3.5, 12) in the camera's coordinates, which for the ball at x = 5.4
+  projects to x = 81 exactly at 320 x 180, and for every ball of the row to
+  y = 315 - 1e-13 at 1920 x 1080, where exact arithmetic says 315. Round numbers again
+  (the clipping demo's note above). A scratch program that included the demo source
+  tried 576 layouts a twentieth of a unit off the round one, and the one in the code
+  has the widest margins: no projected coordinate of the 789 triangles drawn comes
+  closer to a pixel boundary than 3.1e-3 pixels at 320 x 180 and 9.8e-4 at 1920 x 1080,
+  and the nearest vertex is 7.6 in front of the camera. The boundaries are the whole
+  numbers other than 0: pixels are found by truncation toward zero (decision 8), so
+  every coordinate between -1 and 1 is pixel 0, and the many vertices of this scene
+  with x = 0 are in no danger. The same program checked the winding: every triangle of
+  the balls, the bulbs, the cylinder and the cube has its normal pointing away from the
+  model's middle, the floor's and the tiles' point up, no triangle is without area, and
+  every stated normal is a unit vector that points out of its triangle's front.
+- A ball of the shading demo is the octahedron `|x| + |y| + |z| = n` normalized, not the
   book's sphere, which stacks rings of vertices by `cos` and `sin` and has a ring of
   coincident vertices and triangles without area at each pole. Lit triangles without
   area are skipped (3.13), so the book's sphere would draw as well.
 - The cube of the shading demo is "nearly right" under flat shading by a number: at
-  1920 x 1080 its top is one color, (26, 53, 88), its front (48, 96, 159) and
-  (46, 92, 152) and its right side (47, 94, 155) and (44, 89, 147), the two triangles of
-  a face 7 and 8 levels apart in blue. The lamp is about 6 units from those faces;
-  nearer, the seam grows.
+  1920 x 1080 its front is (72, 144, 240) and (69, 139, 231) and its right side
+  (51, 102, 171) and (48, 97, 163), the two triangles of a face 9 and 8 levels apart in
+  blue; its top, which every lamp is below, is one color. The lamps are 5 to 10 units
+  from those faces; nearer, the seam grows.
+- The colors of the shading demo are darker than the earlier pictures' on purpose. The
+  illumination equation has no falloff with distance, so three lamps light a face that
+  is turned toward all of them about three times as much as one does, and with an
+  ambient light and a sun besides the light on the front of a ball passes 1.2: a color
+  with a channel above 210 would saturate there and lose its shading. The highlights
+  of the shiny balls saturate, as highlights may.
 - Shading changed no picture that is drawn without lights: the fourteen earlier
   references and the fifteen pictures at 640 x 360 and at 321 x 181 are byte for byte
   what they were, compared with renders of the build before it. `TransformModel` now

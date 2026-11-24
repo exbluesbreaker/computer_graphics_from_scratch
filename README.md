@@ -72,14 +72,14 @@ drawing took:
 
 ```
 rendered 'shading' (gouraud-faceted shading) at 1920x1080 -> faceted.png
-render time: 23.17 ms
+render time: 27.60 ms
 ```
 
 The time is the render alone, without writing the file, to a hundredth of a
 millisecond; it is a single run, so compare several before trusting a small difference.
 The first line names the shading model for the `shading` scene, the one picture it
-changes, so the four can be told apart: at 1920 x 1080 they take about 21 ms (flat),
-25 ms (Gouraud, in either form) and 57 ms (Phong) on the development machine.
+changes, so the four can be told apart: at 1920 x 1080 they take about 23 ms (flat),
+27 ms (Gouraud, in either form) and 74 ms (Phong) on the development machine.
 
 Scenes: `reflective` (three shiny spheres on a shiny yellow floor with ambient, point and
 directional lights; the lights show up as highlights, the spheres cast shadows and mirror
@@ -123,36 +123,57 @@ instances, the camera scene, the clipping scene, the filled cubes and the shadin
 `--shading flat|gouraud-faceted|gouraud|phong` chooses how the `shading` scene is lit
 (Phong when it is not given; the other scenes do not read it). These are the four
 pictures of the book's chapter, in its order: flat shading, Gouraud shading before the
-model has normals, Gouraud shading with them, and Phong shading. The scene is a floor with a blue cube, a
-matte green ball and a shiny red ball on it, under a little ambient light, a sun and a
-lamp that hangs low over the floor in front of the shiny ball; a small yellow ball marks
-the lamp. It is composed so that every object is right from one shading model on and
-wrong before it, and each step up leaves fewer of them looking wrong:
+model has normals, Gouraud shading with them, and Phong shading.
 
-| | cube | matte ball | shiny ball | floor under the lamp |
+The scene is a floor with five solids on it and, in front of them, three lamps hanging
+low over three tiles, under a little ambient light and a sun; a small yellow ball marks
+each lamp. Every object is there for something that one shading model gets right and
+the one before it does not:
+
+| object | `flat` | `gouraud-faceted` | `gouraud` | `phong` |
 |---|---|---|---|---|
-| `flat`: the light once per triangle | nearly right: a faint seam across each lit face | faceted | faceted | two flat tones, a seam from corner to corner |
-| `gouraud-faceted`: the light at the corners, interpolated; every corner has its own triangle's normal | right | still faceted | still faceted | evenly dull, no light under the lamp |
-| `gouraud`: the same with the normals of the model's surface at the corners | right | right | round, but the highlights are a dim smear | evenly dull, no light under the lamp |
-| `phong`: the normals interpolated, the light at every pixel | right | right | right: two sharp highlights | right: a pool of light under the lamp |
+| blue cube: flat faces | faint seam across each lit face | right | right | right |
+| green ball: matte, 128 triangles | faceted | faceted | right | right |
+| orange cylinder: round sides, flat ends, shiny | strips | strips | round, sharp rim; highlight smeared | right: a streak of highlight |
+| red ball: shiny, 128 triangles | faceted | faceted | round, highlights lost | right: four highlights |
+| purple ball: shiny, 1152 triangles | fine facets | fine facets | nearly right: highlights a little soft | right |
+| three tiles, lamps at 0.9, 0.4 and 0.18 above them | a seam across each; darker the lower the lamp | no seam; darker the lower the lamp | the same | right: a pool of light on each, sharper the lower the lamp |
+| floor: one face of two triangles | two tones, a seam from corner to corner | evenly dull | evenly dull | lit around the tiles |
 
-What stays wrong under all four is the outline of the balls, which shows the corners of
-their triangles: shading changes how a surface is lit, not its shape.
+The modes compute the light once per triangle (`flat`), at the corners of every
+triangle with that triangle's own normal (`gouraud-faceted`), at the corners with the
+normals of the model's surface (`gouraud`), and at every pixel from interpolated normals
+(`phong`).
 
-The two Gouraud rows are one algorithm with two answers to "which normal does a corner
+The tiles show the artifact the book warns of (its Figure 13-7). The three are alike and
+only the height of the lamp over each differs. The nearer a lamp is to its tile, the
+more light the middle of the tile gets, and the less its four corners do, since the
+light reaches them at more and more of a slant. Gouraud shading computes the light at
+the corners and interpolates, so the tile under the nearest lamp comes out the darkest
+of the three, which is the wrong way round; only Phong shading, which lights every
+pixel, finds the bright spot under each lamp. The two shiny balls show the other way to
+mend Gouraud shading: with nine times the triangles, each smaller than a highlight, the
+purple ball keeps the highlights the red one loses.
+
+What stays wrong under all four is the outline of the balls and the cylinder, which
+shows the corners of their triangles: shading changes how a surface is lit, not its
+shape.
+
+The two Gouraud modes are one algorithm with two answers to "which normal does a corner
 have". Faceted Gouraud shading gives every corner the normal of its own triangle, so the
 triangles that meet at a vertex of a ball each light it differently and the facets stay.
 Gouraud shading reads the normals the model states, and a ball states those of a sphere.
-For a model that states none, like the cube and the floor, the two are the same picture.
+For a model that states none, like the cube, the tiles and the floor, the two are the
+same picture.
 
 In code, a scene is lit by handing `RenderScene` a list of lights and a `ShadingModel`
 in place of a triangle primitive:
 
 ```cpp
 const std::vector<cgfs::Light> lights = {
-    cgfs::AmbientLight{.intensity = 0.2},
-    cgfs::DirectionalLight{.intensity = 0.25, .direction = {-1.0, 2.0, -1.5}},
-    cgfs::PointLight{.intensity = 0.65, .position = {1.5, 0.9, -1.9}},
+    cgfs::AmbientLight{.intensity = 0.15},
+    cgfs::DirectionalLight{.intensity = 0.2, .direction = {-1.0, 2.0, -1.5}},
+    cgfs::PointLight{.intensity = 0.45, .position = {0.0, 0.42, -2.95}},
 };
 cgfs::DepthBuffer depth_buffer(canvas);
 cgfs::RenderScene(canvas, viewport, models, instances, camera, lights,

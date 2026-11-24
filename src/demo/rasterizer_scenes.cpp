@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <initializer_list>
 #include <map>
@@ -337,6 +338,75 @@ Model Sphere(int divisions, Color color) {
     }
     sphere.bounding_sphere = {.center = {0.0, 0.0, 0.0}, .radius = 1.0};
     return sphere;
+}
+
+/// A cylinder of radius 1 that stands on its origin, `height` tall, with twelve sides:
+/// a curved surface and two flat ones in one model.
+///
+/// Its outline is a regular 12-gon, whose corners are at multiples of 30 degrees and
+/// have only 0, 1/2, sqrt(3)/2 and 1 for coordinates: no cos and no sin here either.
+/// Each side is two triangles whose corners carry the normal of the round surface there,
+/// which points straight out from the axis. The two caps are fans around a center and
+/// state no normals: they are flat. So a vertex on the rim has the round surface's
+/// normal as a corner of a side and the cap's own as a corner of the cap, the same
+/// point facing two ways, which is why a normal belongs to a triangle's corner and not
+/// to a vertex. Lit by those normals the side is round and the rim is a sharp edge.
+Model Cylinder(double height, Color color) {
+    constexpr int kSides = 12;
+    constexpr double kHalf = 0.5;
+    const double half_root3 = std::sqrt(3.0) / 2.0;
+    // Around the axis from +X toward +Z: (cos, 0, sin) of 0, 30, 60, ... degrees.
+    const std::array<Vec3, kSides> around = {{
+        {1.0, 0.0, 0.0},
+        {half_root3, 0.0, kHalf},
+        {kHalf, 0.0, half_root3},
+        {0.0, 0.0, 1.0},
+        {-kHalf, 0.0, half_root3},
+        {-half_root3, 0.0, kHalf},
+        {-1.0, 0.0, 0.0},
+        {-half_root3, 0.0, -kHalf},
+        {-kHalf, 0.0, -half_root3},
+        {0.0, 0.0, -1.0},
+        {kHalf, 0.0, -half_root3},
+        {half_root3, 0.0, -kHalf},
+    }};
+
+    Model cylinder;
+    const Vec3 up{0.0, height, 0.0};
+    for (const Vec3 direction : around) {
+        cylinder.vertices.push_back(direction);       // 2k: on the bottom rim
+        cylinder.vertices.push_back(direction + up);  // 2k + 1: on the top rim
+    }
+    const std::size_t bottom_center = cylinder.vertices.size();
+    cylinder.vertices.push_back({0.0, 0.0, 0.0});
+    const std::size_t top_center = cylinder.vertices.size();
+    cylinder.vertices.push_back(up);
+
+    // A triangle of the cylinder with its corners in the order that makes its normal
+    // point along `outward`: clockwise as seen from outside.
+    const auto triangle = [&](std::array<std::size_t, 3> v, std::array<Vec3, 3> normals,
+                              Vec3 outward) {
+        const std::vector<Vec3>& p = cylinder.vertices;
+        if (Dot(TriangleNormal(p[v[0]], p[v[1]], p[v[2]]), outward) < 0.0) {
+            std::swap(v[1], v[2]);
+            std::swap(normals[1], normals[2]);
+        }
+        cylinder.triangles.push_back({.v = v, .color = color, .normals = normals});
+    };
+
+    for (std::size_t k = 0; k < kSides; ++k) {
+        const std::size_t next = (k + 1) % kSides;
+        const Vec3 here = around[k];
+        const Vec3 there = around[next];
+        // The side between two neighbouring corners of the outline, as two triangles.
+        triangle({2 * k, 2 * k + 1, 2 * next + 1}, {here, here, there}, here + there);
+        triangle({2 * k, 2 * next + 1, 2 * next}, {here, there, there}, here + there);
+        // A slice of each cap.
+        triangle({top_center, 2 * k + 1, 2 * next + 1}, {}, {0.0, 1.0, 0.0});
+        triangle({bottom_center, 2 * k, 2 * next}, {}, {0.0, -1.0, 0.0});
+    }
+    cylinder.bounding_sphere = MakeBoundingSphere(cylinder.vertices);
+    return cylinder;
 }
 
 /// A rectangular floor in the plane y = 0, `width` along X and `depth` along Z around
@@ -837,73 +907,111 @@ void DrawShadingScene(Canvas& canvas, const Viewport& viewport, ShadingModel sha
 
     canvas.Clear(kBackground);
 
-    // Five models, each there to be right from one shading model on and wrong before it.
+    // The models, each there for something that one shading model gets right and the
+    // one before it does not.
     //
-    // The floor is one face of two triangles, 10 x 8, with a lamp less than a unit above
-    // it: the large face with a light close to it that only lighting every pixel gets
-    // right. The cube has flat faces, which one light value per triangle is nearly enough
-    // for. The two balls have the normals of a sphere at the corners of their triangles,
-    // which lighting the corners is enough for as long as the ball is matte; the second
-    // ball is shiny, and a highlight is smaller than its triangles.
+    // The floor and the tile are flat faces of two triangles, the floor a large one. The
+    // cube has six flat faces, which one light value per triangle is nearly enough for.
+    // The cylinder is round one way and flat at its ends. The balls have the normals of
+    // a sphere at the corners of their triangles: one is matte and two are shiny, a
+    // highlight being smaller than a triangle of the coarse one and larger than a
+    // triangle of the fine one, which has nine times as many.
     //
-    // The bulb marks where the lamp is, and is not lit like the rest: its color is ten
-    // times too bright, so the ambient light alone takes its red and green to the top
-    // of the scale, and it glows the same under every shading model.
+    // The tile's color is past the top of the scale, which works as a longer exposure
+    // for it alone: the differences between three tiles under three dim lamps are easier
+    // to see. The bulb's is ten times too bright, so the ambient light alone takes its
+    // red and green to the top and it glows the same under every shading model: it marks
+    // where a lamp is, and is not lit like the rest.
     constexpr std::size_t kFloor = 0;
     constexpr std::size_t kCube = 1;
-    constexpr std::size_t kMatteBall = 2;
-    constexpr std::size_t kShinyBall = 3;
-    constexpr std::size_t kBulb = 4;
+    constexpr std::size_t kCylinder = 2;
+    constexpr std::size_t kMatteBall = 3;
+    constexpr std::size_t kShinyBall = 4;
+    constexpr std::size_t kFineBall = 5;
+    constexpr std::size_t kTile = 6;
+    constexpr std::size_t kBulb = 7;
+    constexpr double kTileSide = 1.9;
     std::vector<Model> models = {
-        Floor(10.0, 8.0, {206.0, 198.0, 180.0}), Painted(Cube(), {70.0, 140.0, 230.0}),
-        Sphere(6, {90.0, 200.0, 110.0}),         Sphere(6, {214.0, 52.0, 48.0}),
-        Sphere(4, {2550.0, 2040.0, 300.0}),
+        Floor(13.2, 9.0, {170.0, 163.0, 150.0}),
+        Painted(Cube(), {60.0, 120.0, 200.0}),
+        Cylinder(2.2, {205.0, 136.0, 54.0}),
+        Sphere(4, {80.0, 180.0, 100.0}),
+        Sphere(4, {196.0, 48.0, 44.0}),
+        Sphere(12, {150.0, 70.0, 186.0}),
+        Floor(kTileSide, kTileSide, {300.0, 293.0, 273.0}),
+        Sphere(3, {2550.0, 2040.0, 300.0}),
     };
     models[kCube].bounding_sphere = MakeBoundingSphere(models[kCube].vertices);
-    models[kShinyBall].specular = 30.0;
+    models[kCylinder].specular = 30.0;
+    models[kShinyBall].specular = 50.0;
+    models[kFineBall].specular = 50.0;
 
-    // The stage: the floor around the world's origin, the cube and the two balls standing
-    // on it in a row from left to right, and the lamp in front of the shiny ball, 0.9
-    // above the floor. The cube stands the farthest from the lamp, where the lamp's light
-    // changes least across a face.
-    constexpr Vec3 kLamp{1.5, 0.9, -1.9};
-    constexpr double kBallRadius = 1.2;
-    const std::vector<Instance> instances = {
+    // The stage, in three rows on the floor, which lies around the world's origin. At
+    // the back the cube, the matte ball and the fine shiny ball; in front of the gaps
+    // between them the cylinder and the coarse shiny ball; and in front of those the
+    // three tiles. The numbers are a little off the round ones on purpose: with round
+    // ones a corner of a ball came to lie exactly on the border between two pixels.
+    constexpr double kBackRow = 2.75;
+    constexpr double kMiddleRow = 0.35;
+    constexpr double kFrontRow = -2.95;
+    constexpr double kBallRadius = 1.1;
+    std::vector<Instance> instances = {
         {.model = kFloor},
-        {.model = kCube, .position = {-3.6, 1.0, 2.2}},
-        {.model = kMatteBall, .position = {-0.5, kBallRadius, 1.5}, .scale = kBallRadius},
-        {.model = kShinyBall, .position = {2.7, kBallRadius, 0.6}, .scale = kBallRadius},
-        {.model = kBulb, .position = kLamp, .scale = 0.14},
+        {.model = kCube, .position = {-5.45, 1.0, kBackRow}},
+        {.model = kMatteBall, .position = {0.0, kBallRadius, kBackRow}, .scale = kBallRadius},
+        {.model = kFineBall, .position = {5.45, kBallRadius, kBackRow}, .scale = kBallRadius},
+        {.model = kCylinder, .position = {-2.25, 0.0, kMiddleRow}, .scale = 0.95},
+        {.model = kShinyBall, .position = {2.25, kBallRadius, kMiddleRow}, .scale = kBallRadius},
     };
 
     // The lights, in the world's coordinates like the instances: a little light from
-    // everywhere, a sun high up to the left and behind the camera, and the lamp.
-    const std::vector<Light> lights = {
-        AmbientLight{.intensity = 0.2},
-        DirectionalLight{.intensity = 0.25, .direction = {-1.0, 2.0, -1.5}},
-        PointLight{.intensity = 0.65, .position = kLamp},
+    // everywhere, a sun high up to the left and behind the camera, and three lamps.
+    std::vector<Light> lights = {
+        AmbientLight{.intensity = 0.15},
+        DirectionalLight{.intensity = 0.2, .direction = {-1.0, 2.0, -1.5}},
     };
+
+    // The lamps hang in a row over the middles of three tiles that are all alike, each
+    // lamp lower than the one to its left: 0.9 above its tile, 0.4 and 0.18. The nearer
+    // a lamp is to its tile, the more light the middle of the tile gets from it and the
+    // less its corners do, where the light arrives at more and more of a slant. So a
+    // shading model that computes the light at the corners, or once per triangle, shows
+    // the tiles darker from left to right, the darkest under the lamp that is nearest;
+    // lit pixel by pixel each has a pool of light, smaller and sharper the lower the
+    // lamp. A tile lies a little above the floor, so that the depth buffer has no tie to
+    // settle between the two.
+    constexpr double kTileHeight = 0.02;
+    constexpr double kLampSpacing = 3.95;
+    constexpr std::array<double, 3> kLampHeights = {0.9, 0.4, 0.18};
+    for (std::size_t k = 0; k < kLampHeights.size(); ++k) {
+        const double x = kLampSpacing * (static_cast<double>(k) - 1.0);
+        const Vec3 lamp{x, kTileHeight + kLampHeights[k], kFrontRow};
+        instances.push_back({.model = kTile, .position = {x, kTileHeight, kFrontRow}});
+        instances.push_back({.model = kBulb, .position = lamp, .scale = 0.07});
+        lights.push_back(PointLight{.intensity = 0.45, .position = lamp});
+    }
 
     // The camera stands in front of the stage and above it and looks down on it: turned
     // about the X axis by the angle whose cosine and sine are 4/5 and 3/5, the angle of
     // the 3-4-5 triangle, about 36.9 degrees. Its forward axis (0, 0, 1) becomes
     // (0, -3/5, 4/5) and its up axis (0, 1, 0) becomes (0, 4/5, 3/5), the third and the
     // second column of the matrix. Written out rather than built from an angle so that
-    // no cos or sin is called: with the sphere's square roots, every vertex of this
-    // picture is plain IEEE arithmetic, which every platform rounds the same way.
+    // no cos or sin is called: with the square roots of the balls and the cylinder,
+    // every vertex of this picture is plain IEEE arithmetic, which every platform rounds
+    // the same way.
     constexpr double kCosine = 0.8;
     constexpr double kSine = 0.6;
     constexpr Mat4 kLookingDown{{{1.0, 0.0, 0.0, 0.0},
                                  {0.0, kCosine, -kSine, 0.0},
                                  {0.0, kSine, kCosine, 0.0},
                                  {0.0, 0.0, 0.0, 1.0}}};
-    const Camera camera{.position = {0.0, 5.4, -7.4},
+    const Camera camera{.position = {0.0, 6.6, -9.05},
                         .orientation = kLookingDown,
                         .clipping_planes = MakeClippingPlanes(viewport)};
 
     // Solid faces in any order: one depth buffer for the picture, and back-face culling,
-    // RenderScene's default. The floor is not a closed object, but it is only ever seen
-    // from above, which is its front.
+    // RenderScene's default. The floor and the tiles are not closed objects, but they are
+    // only ever seen from above, which is their front.
     DepthBuffer depth_buffer(canvas);
     RenderScene(canvas, viewport, models, instances, camera, lights, shading_model, &depth_buffer);
 }
