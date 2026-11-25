@@ -18,6 +18,7 @@ Model TransformModel(const Model& model, const Mat4& transform) {
         }
     }
     transformed.specular = model.specular;
+    transformed.texture = model.texture;
 
     // Where the unit vector along X ends up: its length is the transform's scale.
     const Vec3 x_axis{transform.m[0][0], transform.m[1][0], transform.m[2][0]};

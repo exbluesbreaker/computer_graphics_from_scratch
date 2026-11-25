@@ -63,7 +63,8 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
                  std::span<const Instance> instances, const Camera& camera,
                  std::span<const Light> lights, ShadingModel shading_model,
-                 DepthBuffer* depth_buffer, BackFaceCulling back_face_culling) {
+                 DepthBuffer* depth_buffer, BackFaceCulling back_face_culling,
+                 TextureMapping texture_mapping) {
     const Mat4 camera_matrix = MakeCameraMatrix(camera.position, camera.orientation);
     const std::vector<Model> clipped_scene =
         PlaceScene(models, instances, camera_matrix, camera, back_face_culling);
@@ -75,9 +76,11 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
         lights_in_camera.push_back(TransformLight(light, camera_matrix));
     }
 
-    // The perspective projection, the light and the triangles.
+    // The perspective projection, the light and the triangles, in their colors or in
+    // their models' textures.
     for (const Model& instance : clipped_scene) {
-        RenderObject(canvas, viewport, instance, lights_in_camera, shading_model, depth_buffer);
+        RenderObject(canvas, viewport, instance, lights_in_camera, shading_model, depth_buffer,
+                     texture_mapping);
     }
 }
 

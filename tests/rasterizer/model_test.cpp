@@ -1,6 +1,8 @@
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
+#include <cgfs/image/image_io.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/math/bounding_sphere.h>
 #include <cgfs/math/mat4.h>
 #include <cgfs/math/vec3.h>
@@ -292,4 +294,28 @@ TEST_CASE("TransformModel: the specular exponent is the model's", "[rasterizer]"
     shiny.specular = 50.0;
     CHECK(TransformModel(shiny, MakeTranslationMatrix({1.0, 2.0, 3.0})).specular == 50.0);
     CHECK(TransformModel(kTriangle, MakeScalingMatrix(2.0)).specular == kMatte);
+}
+
+TEST_CASE("Model: no texture unless it is given one", "[rasterizer]") {
+    CHECK(kTriangle.texture == nullptr);
+    const cgfs::Texture texture(cgfs::Image{.width = 1, .height = 1, .rgb = {1, 2, 3}});
+    Model painted = kTriangle;
+    painted.texture = &texture;
+    CHECK_FALSE(painted == kTriangle);
+}
+
+TEST_CASE("TransformModel: the texture and the texture coordinates are the model's",
+          "[rasterizer]") {
+    // A picture painted on a surface moves with it: the placed model points to the same
+    // texture, and its corners show the same points of it.
+    const cgfs::Texture texture(cgfs::Image{.width = 1, .height = 1, .rgb = {1, 2, 3}});
+    Model painted = kTriangle;
+    painted.texture = &texture;
+    painted.triangles[0].uvs = {cgfs::Uv{0.5, 0.0}, cgfs::Uv{1.0, 1.0}, cgfs::Uv{0.0, 1.0}};
+    const Model placed =
+        TransformModel(painted, MakeTranslationMatrix({1.0, 2.0, 3.0}) *
+                                    MakeOYRotationMatrix(35.0) * MakeScalingMatrix(0.75));
+    CHECK(placed.texture == &texture);
+    CHECK(placed.triangles[0].uvs == painted.triangles[0].uvs);
+    CHECK(TransformModel(kTriangle, MakeScalingMatrix(2.0)).texture == nullptr);
 }

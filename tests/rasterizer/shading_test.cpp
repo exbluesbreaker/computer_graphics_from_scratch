@@ -2,12 +2,15 @@
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/image/image_io.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/lighting/illumination.h>
 #include <cgfs/lighting/light.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/model.h>
 #include <cgfs/rasterizer/object.h>
 #include <cgfs/rasterizer/point.h>
+#include <cgfs/rasterizer/projection.h>
 #include <cgfs/rasterizer/shading.h>
 #include <cgfs/rasterizer/triangle.h>
 
@@ -18,6 +21,7 @@
 #include <vector>
 
 #include "rasterizer/pixel_helpers.h"
+#include "support/address_texture.h"
 #include "support/test_helpers.h"
 
 using cgfs::AmbientLight;
@@ -29,6 +33,8 @@ using cgfs::DirectionalLight;
 using cgfs::DrawFilledTriangle;
 using cgfs::DrawPhongTriangle;
 using cgfs::DrawShadedTriangle;
+using cgfs::DrawTexturedTriangle;
+using cgfs::Image;
 using cgfs::kMatte;
 using cgfs::Light;
 using cgfs::Model;
@@ -38,9 +44,13 @@ using cgfs::PointLight;
 using cgfs::RenderObject;
 using cgfs::Rgb8;
 using cgfs::ShadingModel;
+using cgfs::Texture;
+using cgfs::TextureMapping;
 using cgfs::ToRgb8;
+using cgfs::Uv;
 using cgfs::Vec3;
 using cgfs::Viewport;
+using cgfs_test::AddressTexture;
 using cgfs_test::Bytes;
 using cgfs_test::LitPixels;
 using namespace cgfs::colors;
@@ -521,5 +531,211 @@ TEST_CASE("RenderObject under lights: through a depth buffer the nearer triangle
         RenderObject(canvas, TestViewport(), two, lights, shading_model, &depth_buffer);
         CHECK(Bytes(canvas) == Bytes(Filled(kRed)));
         CHECK(depth_buffer.InvZ(0, 0) == 1.0);
+    }
+}
+
+// --- Painted with a texture --------------------------------------------------------------
+
+namespace {
+
+// Which point of the texture each corner of the face shows: the top the middle of the
+// texture's top edge, the two below its bottom-right and bottom-left corners.
+constexpr std::array<Uv, 3> kFaceUvs = {Uv{0.5, 0.0}, Uv{1.0, 1.0}, Uv{0.0, 1.0}};
+
+// The face painted with `texture`. Its color is not what is seen.
+Model TexturedFace(const Texture& texture, Color color = kWhite) {
+    Model face = Face(color);
+    face.triangles[0].uvs = kFaceUvs;
+    face.texture = &texture;
+    return face;
+}
+
+// The canvas points of a face's corners, as RenderObject hands them to a primitive: each
+// where its vertex is projected to, at its depth, showing its point of the texture, with
+// the intensity `h[k]`.
+std::array<Point, 3> TexturedCorners(const std::array<Vec3, 3>& vertices,
+                                     std::array<double, 3> h = {1.0, 1.0, 1.0}) {
+    std::array<Point, 3> points;
+    for (std::size_t k = 0; k < 3; ++k) {
+        points[k] = cgfs::ProjectVertex(TestViewport(), vertices[k]);
+        points[k].uv = kFaceUvs[k];
+        points[k].h = h[k];
+    }
+    return points;
+}
+
+// A fresh black canvas with a textured triangle drawn through those points.
+Canvas Textured(const std::array<Point, 3>& p, const Texture& texture,
+                TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect) {
+    Canvas canvas(kSize, kSize, kBlack);
+    DrawTexturedTriangle(canvas, p[0], p[1], p[2], texture, texture_mapping);
+    return canvas;
+}
+
+// The face leaning away from the camera: the same three pixels, the top corner at z = 1,
+// the right one at z = 2 and the left one at z = 4.
+const std::array<Vec3, 3> kLeaningCorners = {Vec3{0.0, 0.375, 1.0}, Vec3{0.75, -0.75, 2.0},
+                                             Vec3{-1.5, -1.5, 4.0}};
+
+Model LeaningTexturedFace(const Texture& texture) {
+    Model face = TexturedFace(texture);
+    face.vertices = {kLeaningCorners[0], kLeaningCorners[1], kLeaningCorners[2]};
+    return face;
+}
+
+}  // namespace
+
+TEST_CASE("RenderObject under lights: an object with a texture is painted with it, lit",
+          "[shading]") {
+    // Ambient light is the same everywhere, so every shading model draws the texture at
+    // half its brightness: the textured triangle through the projected corners, each
+    // with the intensity 0.5 and its texture coordinates.
+    const Texture texture = AddressTexture(16, 16);
+    const std::vector<Light> lights = {AmbientLight{.intensity = 0.5}};
+    const Canvas expected = Textured(TexturedCorners(kCorners, {0.5, 0.5, 0.5}), texture);
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        INFO("shading model " << static_cast<int>(shading_model));
+        CHECK(Bytes(Lit(TexturedFace(texture), lights, shading_model)) == Bytes(expected));
+    }
+    CHECK(LitPixels(expected).size() > 200);
+    // Two pixels right of the face's center, two thirds of the way down from its top:
+    // u = 7/12 and v = 2/3, the texel in column 9 of row 10, halved.
+    CHECK(expected.GetPixel(2, -4) == Rgb8{4, 5, 100});
+}
+
+TEST_CASE(
+    "RenderObject under lights: the light multiplies the texels, computed as each "
+    "shading model computes it",
+    "[shading]") {
+    const Texture texture = AddressTexture(16, 16);
+    const std::vector<Light> lights = LampInFrontOfPixel4_0(0.25);
+    const Model face = TexturedFace(texture);
+
+    // Flat shading: one light value, the center's, at all three corners.
+    const double at_center = LightAt(kCenter, kTowardCamera, lights);
+    CHECK(Bytes(Lit(face, lights, ShadingModel::kFlat)) ==
+          Bytes(Textured(TexturedCorners(kCorners, {at_center, at_center, at_center}), texture)));
+
+    // Gouraud shading, in both its forms for a face that states no normals: the light at
+    // each corner, interpolated over the texels.
+    const std::array<double, 3> at_corners = {LightAt(kCorners[0], kTowardCamera, lights),
+                                              LightAt(kCorners[1], kTowardCamera, lights),
+                                              LightAt(kCorners[2], kTowardCamera, lights)};
+    const Canvas gouraud = Textured(TexturedCorners(kCorners, at_corners), texture);
+    CHECK(Bytes(Lit(face, lights, ShadingModel::kGouraud)) == Bytes(gouraud));
+    CHECK(Bytes(Lit(face, lights, ShadingModel::kGouraudFaceted)) == Bytes(gouraud));
+
+    // Phong shading: the Phong triangle with the texture, which lights every texel it
+    // draws by itself.
+    std::array<Point, 3> p = TexturedCorners(kCorners);
+    for (Point& point : p) {
+        point.normal = kTowardCamera;
+    }
+    Canvas phong(kSize, kSize, kBlack);
+    DrawPhongTriangle(phong, TestViewport(), p[0], p[1], p[2], kWhite, kMatte, lights, nullptr,
+                      &texture);
+    CHECK(Bytes(Lit(face, lights, ShadingModel::kPhong)) == Bytes(phong));
+
+    // Three different pictures of the same texels.
+    CHECK(Bytes(Lit(face, lights, ShadingModel::kFlat)) != Bytes(gouraud));
+    CHECK(Bytes(phong) != Bytes(gouraud));
+}
+
+TEST_CASE("RenderObject under lights: a texture of one color is an object of that color",
+          "[shading]") {
+    // Whatever a shading model does to a color it does to a texel.
+    constexpr Color kOrange{255.0, 128.0, 0.0};
+    const Texture plain(Image{.width = 1, .height = 1, .rgb = {255, 128, 0}});
+    Model painted = TexturedFace(plain);
+    painted.specular = 20.0;
+    Model colored = Face(kOrange);
+    colored.specular = 20.0;
+    const std::vector<Light> lights = {
+        AmbientLight{.intensity = 0.1},
+        PointLight{.intensity = 0.8, .position = {0.125, 0.0, 0.75}}};
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        INFO("shading model " << static_cast<int>(shading_model));
+        CHECK(Bytes(Lit(painted, lights, shading_model)) ==
+              Bytes(Lit(colored, lights, shading_model)));
+    }
+}
+
+TEST_CASE("RenderObject under lights: the color of a textured triangle is not read", "[shading]") {
+    const Texture texture = AddressTexture(16, 16);
+    const std::vector<Light> lights = LampInFrontOfPixel4_0(0.25);
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        CHECK(Bytes(Lit(TexturedFace(texture, kRed), lights, shading_model)) ==
+              Bytes(Lit(TexturedFace(texture, kBlue), lights, shading_model)));
+    }
+}
+
+TEST_CASE(
+    "RenderObject under lights: without a texture the texture coordinates and the "
+    "mapping change nothing",
+    "[shading]") {
+    const std::vector<Light> lights = LampInFrontOfPixel4_0(0.25);
+    Model pinned = Face(kYellow);
+    pinned.triangles[0].uvs = kFaceUvs;
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        const Canvas expected = Lit(Face(kYellow), lights, shading_model);
+        CHECK(Bytes(Lit(pinned, lights, shading_model)) == Bytes(expected));
+        Canvas linear(kSize, kSize, kBlack);
+        RenderObject(linear, TestViewport(), pinned, lights, shading_model, nullptr,
+                     TextureMapping::kLinear);
+        CHECK(Bytes(linear) == Bytes(expected));
+    }
+}
+
+TEST_CASE(
+    "RenderObject under lights: the texture mapping is the caller's choice, "
+    "perspective-correct by default",
+    "[shading]") {
+    // A face that leans away from the camera, where the two mappings differ. Under full
+    // ambient light the picture is the textured triangle through the projected corners,
+    // which bring their depths along.
+    const Texture texture = AddressTexture(16, 16);
+    const std::vector<Light> lights = {AmbientLight{.intensity = 1.0}};
+    const Model face = LeaningTexturedFace(texture);
+    const std::array<Point, 3> corners = TexturedCorners(kLeaningCorners);
+    const Canvas correct = Textured(corners, texture, TextureMapping::kPerspectiveCorrect);
+    const Canvas linear = Textured(corners, texture, TextureMapping::kLinear);
+    REQUIRE(Bytes(correct) != Bytes(linear));
+    REQUIRE(LitPixels(correct) == LitPixels(linear));
+
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        INFO("shading model " << static_cast<int>(shading_model));
+        CHECK(Bytes(Lit(face, lights, shading_model)) == Bytes(correct));
+        Canvas asked_correct(kSize, kSize, kBlack);
+        RenderObject(asked_correct, TestViewport(), face, lights, shading_model, nullptr,
+                     TextureMapping::kPerspectiveCorrect);
+        CHECK(Bytes(asked_correct) == Bytes(correct));
+        Canvas asked_linear(kSize, kSize, kBlack);
+        RenderObject(asked_linear, TestViewport(), face, lights, shading_model, nullptr,
+                     TextureMapping::kLinear);
+        CHECK(Bytes(asked_linear) == Bytes(linear));
+    }
+}
+
+TEST_CASE("RenderObject under lights: through a depth buffer the nearer textured triangle shows",
+          "[shading]") {
+    // Two triangles on the same pixels in one object, the second twice as far and twice
+    // as large, painted with one texture: wherever both are, the near one's texels show.
+    const Texture texture = AddressTexture(16, 16);
+    const std::vector<Light> lights = {AmbientLight{.intensity = 1.0}};
+    Model both = TexturedFace(texture);
+    for (const Vec3 corner : kCorners) {
+        both.vertices.push_back(corner * 2.0);
+    }
+    // The far one shows the texture upside down, so that the two can be told apart.
+    both.triangles.push_back(
+        {.v = {3, 4, 5}, .color = kWhite, .uvs = {Uv{0.5, 1.0}, Uv{1.0, 0.0}, Uv{0.0, 0.0}}});
+    const Canvas near_alone = Lit(TexturedFace(texture), lights, ShadingModel::kFlat);
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        Canvas canvas(kSize, kSize, kBlack);
+        DepthBuffer depth_buffer(canvas);
+        RenderObject(canvas, TestViewport(), both, lights, shading_model, &depth_buffer);
+        CHECK(Bytes(canvas) == Bytes(near_alone));
+        // Painted in list order the later one shows.
+        CHECK(Bytes(Lit(both, lights, shading_model)) != Bytes(near_alone));
     }
 }

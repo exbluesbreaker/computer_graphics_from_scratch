@@ -58,10 +58,11 @@ add_subdirectory(third_party)
 # One folder per layer, listed in dependency order (CLAUDE.md explains the layers). The
 # math layer is header-only.
 add_library(cgfs STATIC
-    # image: colors, the pixel buffer, file formats
+    # image: colors, the pixel buffer, file formats, textures
     src/image/canvas.cpp
     src/image/depth_buffer.cpp
     src/image/image_io.cpp
+    src/image/texture.cpp
     # camera: how canvas pixels map into the world
     src/camera/viewport.cpp
     src/camera/camera.cpp
@@ -94,9 +95,13 @@ cgfs_set_warnings(cgfs)
 # library carries no demo content.
 add_library(cgfs_demo STATIC
     src/demo/rasterizer_scenes.cpp
-    src/demo/raytracer_scenes.cpp)
+    src/demo/raytracer_scenes.cpp
+    src/demo/textures.cpp)
 add_library(cgfs::demo ALIAS cgfs_demo)
 target_link_libraries(cgfs_demo PUBLIC cgfs::cgfs)
+# Where the demo pictures' textures are read from: the files stay in the source tree.
+target_compile_definitions(cgfs_demo
+    PRIVATE CGFS_TEXTURE_DIR="${PROJECT_SOURCE_DIR}/assets/textures")
 cgfs_set_warnings(cgfs_demo)
 
 # --- Applications ---------------------------------------------------------------------

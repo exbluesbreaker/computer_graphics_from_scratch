@@ -22,6 +22,7 @@ add_executable(cgfs_tests
     image/canvas_test.cpp
     image/depth_buffer_test.cpp
     image/image_io_test.cpp
+    image/texture_test.cpp
     camera/viewport_test.cpp
     camera/camera_test.cpp
     camera/clipping_planes_test.cpp
@@ -39,6 +40,7 @@ add_executable(cgfs_tests
     rasterizer/clipping_test.cpp
     rasterizer/shading_test.cpp
     rasterizer/scene_test.cpp
+    demo/textures_test.cpp
     demo/golden_test.cpp)
 # So that helpers are included by their path in the tree: "support/test_helpers.h".
 target_include_directories(cgfs_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

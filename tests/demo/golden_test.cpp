@@ -4,9 +4,12 @@
 #include <cgfs/camera/viewport.h>
 #include <cgfs/demo/rasterizer_scenes.h>
 #include <cgfs/demo/raytracer_scenes.h>
+#include <cgfs/demo/textures.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/image_io.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/rasterizer/shading.h>
+#include <cgfs/rasterizer/triangle.h>
 #include <cgfs/raytracer/raytracer.h>
 
 #include <catch2/catch_test_macros.hpp>
@@ -76,6 +79,20 @@ void CheckDrawingMatchesGolden(void (*draw)(cgfs::Canvas&), const std::string& f
 
     cgfs::Canvas canvas(golden.width, golden.height);
     draw(canvas);
+    CheckCanvasMatches(canvas, golden, path);
+}
+
+// Draws the textures scene, with the crate texture carried across its triangles by
+// `texture_mapping`, on a canvas of the reference image's size.
+void CheckTexturesSceneMatchesGolden(cgfs::TextureMapping texture_mapping,
+                                     const std::string& file) {
+    const std::filesystem::path path = GoldenPath(file);
+    const cgfs::Image golden = cgfs::ReadPpm(path);
+    const cgfs::Texture crate = cgfs::demo::CrateTexture();
+
+    cgfs::Canvas canvas(golden.width, golden.height);
+    cgfs::demo::DrawTexturesScene(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas), crate,
+                                  texture_mapping);
     CheckCanvasMatches(canvas, golden, path);
 }
 
@@ -197,4 +214,17 @@ TEST_CASE("shading scene matches the reference drawing under Phong shading", "[g
                                          cgfs::ShadingModel::kPhong);
         },
         "shading_phong_320x180.ppm");
+}
+
+// The textures scene is one scene and two pictures, one per way of carrying a texture
+// across a triangle.
+
+TEST_CASE("textures scene matches the reference drawing under perspective-correct mapping",
+          "[golden]") {
+    CheckTexturesSceneMatchesGolden(cgfs::TextureMapping::kPerspectiveCorrect,
+                                    "textures_perspective_correct_320x180.ppm");
+}
+
+TEST_CASE("textures scene matches the reference drawing under linear mapping", "[golden]") {
+    CheckTexturesSceneMatchesGolden(cgfs::TextureMapping::kLinear, "textures_linear_320x180.ppm");
 }

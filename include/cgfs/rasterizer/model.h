@@ -2,6 +2,7 @@
 
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/lighting/illumination.h>
 #include <cgfs/math/bounding_sphere.h>
 #include <cgfs/math/mat4.h>
@@ -31,11 +32,19 @@ namespace cgfs {
 /// the illumination equation (see SpecularReflection), as for a sphere of the ray tracer.
 /// A higher value gives a smaller, sharper highlight. The default, kMatte, is a surface
 /// without one. Only the drawing that lights reads it (see shading.h).
+///
+/// `texture` is the picture painted on the model, or null, the default, for none. With
+/// one, every triangle shows the part of it that its `uvs` pin it to, in place of its
+/// color (see Triangle), and the light is applied to that. The model does not own the
+/// texture, it points to it: a texture is large, and one serves every model and every
+/// instance that shows it, so it is kept by whoever builds the scene and must outlive
+/// the models that name it. Only the drawing that lights reads it (see shading.h).
 struct Model {
     std::vector<Vec3> vertices;
     std::vector<Triangle> triangles;
     BoundingSphere bounding_sphere;
     double specular = kMatte;
+    const Texture* texture = nullptr;
 
     bool operator==(const Model&) const = default;
 };
@@ -54,8 +63,9 @@ struct Model {
 /// which way and not how far. However long the model stated its normals, from here on
 /// they are unit vectors, which is what lets them be interpolated with one another: by
 /// the clipping, where a triangle is cut, and by Phong shading, across a triangle. A
-/// corner without a normal, the zero vector, stays without one. The specular exponent is
-/// the model's.
+/// corner without a normal, the zero vector, stays without one. The specular exponent
+/// and the texture are the model's, and so are the texture coordinates of the triangles:
+/// a picture painted on a surface moves with it.
 ///
 /// That factor is read off the matrix: the first column of the matrix is where the unit
 /// vector along X ends up (before the translation), so its length is how much longer a

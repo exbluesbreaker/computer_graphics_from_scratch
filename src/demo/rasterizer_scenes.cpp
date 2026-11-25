@@ -4,6 +4,7 @@
 #include <cgfs/camera/clipping_planes.h>
 #include <cgfs/image/color.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/lighting/light.h>
 #include <cgfs/math/bounding_sphere.h>
 #include <cgfs/math/mat4.h>
@@ -419,6 +420,96 @@ Model Floor(double width, double depth, Color color) {
     // Clockwise as seen from above: near left, far left, far right, near right.
     floor.triangles = {{{0, 1, 2}, color}, {{0, 2, 3}, color}};
     floor.bounding_sphere = MakeBoundingSphere(floor.vertices);
+    return floor;
+}
+
+/// The rotation about the Y axis by the angle that has this cosine and this sine:
+/// MakeOYRotationMatrix for an angle that is known by them rather than in degrees. A
+/// picture that turns its instances by the angles of whole-number right triangles (3-4-5,
+/// 5-12-13) needs no cos and no sin, and its vertices are then plain IEEE arithmetic,
+/// which every platform rounds the same way.
+constexpr Mat4 TurnedAboutY(double cosine, double sine) {
+    return {{{cosine, 0.0, -sine, 0.0},
+             {0.0, 1.0, 0.0, 0.0},
+             {sine, 0.0, cosine, 0.0},
+             {0.0, 0.0, 0.0, 1.0}}};
+}
+
+// The models of the textures picture. They are painted with a texture, so what matters
+// about them is which point of the picture every corner of every triangle shows.
+
+/// The color of a triangle that is painted with a texture. It is not seen, the texels
+/// taking its place: a middling brown, the average of the crate texture, for a drawing
+/// that does not read textures.
+constexpr Color kWood{142.0, 122.0, 92.0};
+
+/// Append the quadrilateral `corners` to the model as two triangles that show the whole
+/// of the model's texture between them. The corners are listed clockwise as seen from
+/// outside, the book's winding, starting with the one that shows the top-left corner of
+/// the texture; so they show its top-left, top-right, bottom-right and bottom-left
+/// corners, and the two triangles share the diagonal from the first to the third, as
+/// the two triangles of a face of the book's textured cube do.
+void AddTexturedFace(Model& model, std::array<std::size_t, 4> corners) {
+    constexpr Uv kTopLeft{0.0, 0.0};
+    constexpr Uv kTopRight{1.0, 0.0};
+    constexpr Uv kBottomRight{1.0, 1.0};
+    constexpr Uv kBottomLeft{0.0, 1.0};
+    model.triangles.push_back({.v = {corners[0], corners[1], corners[2]},
+                               .color = kWood,
+                               .uvs = {kTopLeft, kTopRight, kBottomRight}});
+    model.triangles.push_back({.v = {corners[0], corners[2], corners[3]},
+                               .color = kWood,
+                               .uvs = {kTopLeft, kBottomRight, kBottomLeft}});
+}
+
+/// A crate: a cube of side 2 that stands on its origin, with the whole of `texture` on
+/// each of its six faces, the right way up on the four walls. The book's textured cube.
+/// A vertex is a corner of three faces and a different corner of the picture on each,
+/// which is why texture coordinates belong to the corners of the triangles.
+Model Crate(const Texture& texture) {
+    Model crate;
+    crate.vertices = {
+        {-1.0, 0.0, -1.0}, {1.0, 0.0, -1.0},  // 0, 1: the front edge of the base
+        {1.0, 0.0, 1.0},   {-1.0, 0.0, 1.0},  // 2, 3: the back edge of the base
+        {-1.0, 2.0, -1.0}, {1.0, 2.0, -1.0},  // 4, 5: the front edge of the top
+        {1.0, 2.0, 1.0},   {-1.0, 2.0, 1.0},  // 6, 7: the back edge of the top
+    };
+    // Each face from its top-left corner, as someone who faces it from outside sees it.
+    AddTexturedFace(crate, {4, 5, 1, 0});  // front, z = -1
+    AddTexturedFace(crate, {5, 6, 2, 1});  // right, x = 1
+    AddTexturedFace(crate, {6, 7, 3, 2});  // back, z = 1
+    AddTexturedFace(crate, {7, 4, 0, 3});  // left, x = -1
+    AddTexturedFace(crate, {7, 6, 5, 4});  // top, y = 2, seen from above with +Z up
+    AddTexturedFace(crate, {0, 1, 2, 3});  // bottom, y = 0, seen from below with -Z up
+    crate.bounding_sphere = MakeBoundingSphere(crate.vertices);
+    crate.texture = &texture;
+    return crate;
+}
+
+/// A floor in the plane y = 0 paved with `texture`: `columns` x `rows` square tiles of
+/// side `tile`, each showing the whole texture with its top toward +Z. The floor is
+/// centered on the Z axis and runs from z = 0 to z = rows * tile. One model, long enough
+/// to be seen from right in front of the camera to far away.
+Model PavedFloor(const Texture& texture, int columns, int rows, double tile) {
+    Model floor;
+    const int corners_across = columns + 1;
+    for (int row = 0; row <= rows; ++row) {
+        for (int column = 0; column <= columns; ++column) {
+            floor.vertices.push_back({tile * (column - columns / 2.0), 0.0, tile * row});
+        }
+    }
+    const auto corner = [&](int row, int column) {
+        return static_cast<std::size_t>(row * corners_across + column);
+    };
+    for (int row = 0; row < rows; ++row) {
+        for (int column = 0; column < columns; ++column) {
+            // Clockwise as seen from above: far left, far right, near right, near left.
+            AddTexturedFace(floor, {corner(row + 1, column), corner(row + 1, column + 1),
+                                    corner(row, column + 1), corner(row, column)});
+        }
+    }
+    floor.bounding_sphere = MakeBoundingSphere(floor.vertices);
+    floor.texture = &texture;
     return floor;
 }
 
@@ -1014,6 +1105,83 @@ void DrawShadingScene(Canvas& canvas, const Viewport& viewport, ShadingModel sha
     // only ever seen from above, which is their front.
     DepthBuffer depth_buffer(canvas);
     RenderScene(canvas, viewport, models, instances, camera, lights, shading_model, &depth_buffer);
+}
+
+void DrawTexturesScene(Canvas& canvas, const Viewport& viewport, const Texture& texture,
+                       TextureMapping texture_mapping) {
+    constexpr Color kBackground{18.0, 20.0, 28.0};
+
+    canvas.Clear(kBackground);
+
+    // Two models and one texture, which both are painted with. What tells them apart
+    // is how large the texture is drawn.
+    //
+    // The crate is the size the texture was made for: at 1920 x 1080 a face of it is
+    // about as many pixels across as the texture has texels, 512, so a pixel shows
+    // about one texel and the picture on it looks the way the texture does.
+    //
+    // The floor is paved with the same texture, a tile 4 x 4, and runs from under the
+    // camera to the horizon, so it is drawn at every size there is. In front of the
+    // camera a texel covers several pixels each way and shows as a block of one color.
+    // Toward the horizon a pixel covers more and more texels, hundreds in the end, and
+    // shows whichever one of them its coordinates happen to fall in: the boards break up
+    // into dashes and the wood into noise. Somewhere near the crate the floor is right.
+    constexpr std::size_t kFloor = 0;
+    constexpr std::size_t kCrate = 1;
+    constexpr double kTile = 4.0;
+    constexpr int kTilesAcross = 48;
+    constexpr int kTilesDeep = 48;
+    const std::vector<Model> models = {
+        PavedFloor(texture, kTilesAcross, kTilesDeep, kTile),
+        Crate(texture),
+    };
+
+    // The floor is turned by the angle of the 5-12-13 triangle, about 22.6 degrees, so
+    // that its boards run across the picture at a slant, and the crate by that of the
+    // 3-4-5 triangle, about 36.9 degrees, which shows two of its faces. The floor's
+    // origin, the middle of its near edge, lies behind the camera and to its right, so
+    // that the floor is under the camera and everywhere the camera can see.
+    const std::vector<Instance> instances = {
+        {.model = kFloor,
+         .position = {13.95, 0.0, -30.0},
+         .orientation = TurnedAboutY(12.0 / 13.0, 5.0 / 13.0)},
+        {.model = kCrate,
+         .position = {1.75, 0.0, 5.05},
+         .orientation = TurnedAboutY(15.0 / 17.0, 8.0 / 17.0)},
+    };
+
+    // A little light from everywhere and a sun high up to the left and behind the
+    // camera, which lights the floor in full and the two faces of the crate that show
+    // differently, so that the crate has an edge between them. No lamps: under these
+    // two lights a flat face has one light value all over.
+    const std::vector<Light> lights = {
+        AmbientLight{.intensity = 0.4},
+        DirectionalLight{.intensity = 0.8, .direction = {-1.0, 2.0, -1.5}},
+    };
+
+    // The camera stands on the floor with its eye 1.6 above it, lower than the top of
+    // the crate, and looks down a little: turned about the X axis by the angle whose
+    // cosine and sine are 24/25 and 7/25, about 16.3 degrees, which puts the horizon
+    // three quarters of the way up the picture. Written out as a matrix, like the
+    // turns above and like the camera of the shading picture, so that no vertex of this
+    // picture goes through cos or sin.
+    constexpr double kCosine = 0.96;
+    constexpr double kSine = 0.28;
+    constexpr Mat4 kLookingDown{{{1.0, 0.0, 0.0, 0.0},
+                                 {0.0, kCosine, -kSine, 0.0},
+                                 {0.0, kSine, kCosine, 0.0},
+                                 {0.0, 0.0, 0.0, 1.0}}};
+    const Camera camera{.position = {0.0, 1.6, 0.0},
+                        .orientation = kLookingDown,
+                        .clipping_planes = MakeClippingPlanes(viewport)};
+
+    // Flat shading is exact for flat faces under an ambient and a directional light, and
+    // the cheapest: one light value per triangle, which multiplies its texels. One depth
+    // buffer for the picture, and back-face culling, RenderScene's default: the floor is
+    // only ever seen from above, which is its front.
+    DepthBuffer depth_buffer(canvas);
+    RenderScene(canvas, viewport, models, instances, camera, lights, ShadingModel::kFlat,
+                &depth_buffer, BackFaceCulling::kOn, texture_mapping);
 }
 
 void DrawAxesScene(Canvas& canvas) {

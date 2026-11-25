@@ -2,7 +2,9 @@
 
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/rasterizer/shading.h>
+#include <cgfs/rasterizer/triangle.h>
 
 namespace cgfs::demo {
 
@@ -194,6 +196,56 @@ void DrawFilledCubesScene(Canvas& canvas, const Viewport& viewport);
 /// which would have its pieces lit one by one. Clears the canvas to a dark background
 /// first; depends on the viewport, so render_demo's --distance zooms it.
 void DrawShadingScene(Canvas& canvas, const Viewport& viewport, ShadingModel shading_model);
+
+/// The picture of the Textures chapter, the first that is painted: a crate on a floor
+/// that runs to the horizon, both painted with `texture`, which is meant to be the crate
+/// texture (see CrateTexture in textures.h), drawn with RenderScene under an ambient
+/// light and a sun, through a depth buffer. The texture is carried across the triangles
+/// by `texture_mapping`: the scene is one to be drawn twice, the two pictures of the
+/// chapter's first half.
+///
+/// The two objects are painted with one texture by one method, nearest neighbor
+/// filtering, a pixel taking the color of the one texel its point of the texture falls
+/// in. What tells them apart is the size the texture is drawn at:
+///
+/// - The crate, a cube of side 2 with the whole texture on every face, stands about 5
+///   in front of the camera, turned to show two faces. At 1920 x 1080 a face is about
+///   340 pixels wide and 400 to 580 high for the 512 x 512 texels on it: between one and
+///   one and a half texels to a pixel. This is what the texture was made for, and the
+///   crate looks like its texture.
+/// - The floor is 48 x 48 tiles of 4 x 4, each with the whole texture on it, and reaches
+///   from under the camera to 190 away, so it is drawn at every size. At the bottom of
+///   the picture, less than 2 from the camera, a texel is 4 pixels wide and 3 high, and
+///   the wood is made of blocks of one color: the texture is drawn larger than it is,
+///   which is what bilinear filtering mends. Toward the horizon it is drawn smaller and
+///   smaller: halfway up the picture a pixel covers 2 texels in depth, at 40 away 120,
+///   and near the horizon more than a thousand, and each shows the one texel its point
+///   happens to fall in. The boards between the tiles break up into dashes and dots and
+///   the wood into noise, patterns that are not in the texture: what mipmapping mends.
+///   In between, around the crate, the floor is about right.
+///
+/// Neither is mended here: this is the texturing of the chapter up to its first
+/// filter.
+///
+/// With TextureMapping::kLinear the picture is the chapter's first, and wrong: u and v
+/// are interpolated over the picture of every triangle, so on every face that leans away
+/// from the camera, which is all of them, the two triangles of the face are each
+/// stretched their own way and the boards bend where the triangles meet: slightly on the
+/// crate, as in the book's figure, and into zigzags on the floor tiles near the camera,
+/// which lean the most. TextureMapping::kPerspectiveCorrect, the default, is the same
+/// scene with the boards straight.
+///
+/// The floor is turned by the angle of the 5-12-13 triangle and the crate by that of the
+/// 8-15-17 triangle, and the camera, at (0, 1.6, 0), looks down by that of the 7-24-25
+/// triangle, about 16 degrees, all three by rotation matrices written out from those
+/// numbers: nothing in the picture's geometry calls cos or sin. The camera has the
+/// clipping planes of its viewport, which cut the floor: a cut tile shows what the whole
+/// tile shows, its new corners having the texture coordinates of the tile at the cut.
+/// The two lights give every face one light value, so the scene is drawn with flat
+/// shading, which is then exact. Clears the canvas to a dark background first; depends
+/// on the viewport, so render_demo's --distance zooms it.
+void DrawTexturesScene(Canvas& canvas, const Viewport& viewport, const Texture& texture,
+                       TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
 
 /// The coordinate axes through the origin, a dot at the origin and a colored dot in
 /// each corner (red top-left, green top-right, blue bottom-left, black bottom-right): a

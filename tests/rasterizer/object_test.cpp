@@ -2,6 +2,7 @@
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/object.h>
 #include <cgfs/rasterizer/point.h>
@@ -331,6 +332,37 @@ TEST_CASE("RenderObject: a triangle primitive does not look at the normals", "[r
         RenderObject(expected, TestViewport(), vertices, plain, draw);
         Canvas canvas(kSize, kSize, kBlack);
         RenderObject(canvas, TestViewport(), vertices, with_normals, draw);
+        CHECK(Bytes(canvas) == Bytes(expected));
+        CHECK_FALSE(LitPixels(canvas).empty());
+    }
+}
+
+TEST_CASE("Triangle: its corners show the texture's origin unless it states otherwise",
+          "[rasterizer]") {
+    const Triangle triangle{{0, 1, 2}, kRed};
+    CHECK(triangle.uvs == std::array<cgfs::Uv, 3>{});
+    const Triangle pinned{.v = {0, 1, 2},
+                          .color = kRed,
+                          .uvs = {cgfs::Uv{0.0, 0.0}, cgfs::Uv{1.0, 0.0}, cgfs::Uv{1.0, 1.0}}};
+    CHECK_FALSE(triangle == pinned);
+    CHECK(pinned.h == std::array<double, 3>{1.0, 1.0, 1.0});
+    CHECK(pinned.normals == std::array<Vec3, 3>{});
+}
+
+TEST_CASE("RenderObject: a triangle primitive does not look at the texture coordinates",
+          "[rasterizer]") {
+    // Textures are for the drawing under lights, which is handed the model and its
+    // texture (see shading_test.cpp); with a primitive a triangle is drawn in its color.
+    const std::vector<Vec3> vertices = {{0.25, 0.25, 1.0}, {-0.25, 0.0, 1.0}, {0.125, -0.25, 1.0}};
+    const std::vector<Triangle> plain = {{{0, 1, 2}, kRed, {1.0, 0.25, 0.5}}};
+    std::vector<Triangle> pinned = plain;
+    pinned[0].uvs = {cgfs::Uv{0.0, 0.0}, cgfs::Uv{1.0, 0.0}, cgfs::Uv{1.0, 1.0}};
+    for (const cgfs::DrawTriangleFunction draw :
+         {DrawWireframeTriangle, DrawFilledTriangle, DrawShadedTriangle}) {
+        Canvas expected(kSize, kSize, kBlack);
+        RenderObject(expected, TestViewport(), vertices, plain, draw);
+        Canvas canvas(kSize, kSize, kBlack);
+        RenderObject(canvas, TestViewport(), vertices, pinned, draw);
         CHECK(Bytes(canvas) == Bytes(expected));
         CHECK_FALSE(LitPixels(canvas).empty());
     }

@@ -6,8 +6,11 @@
 #include <cgfs/camera/viewport.h>
 #include <cgfs/demo/rasterizer_scenes.h>
 #include <cgfs/demo/raytracer_scenes.h>
+#include <cgfs/demo/textures.h>
 #include <cgfs/image/canvas.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/rasterizer/shading.h>
+#include <cgfs/rasterizer/triangle.h>
 #include <cgfs/raytracer/raytracer.h>
 #include <cgfs/raytracer/scene.h>
 
@@ -35,11 +38,17 @@ void RenderScene(const cgfs::Scene& scene, double distance, cgfs::Canvas& canvas
     cgfs::RayTracer(scene, viewport).Render(canvas);
 }
 
-/// What the command line says about how a picture is to be drawn. A picture reads what
-/// applies to it: the 2D pictures nothing, and only the lit ones the shading model.
+/// What a picture is drawn with besides the canvas: what the command line says about how
+/// it is to be drawn, and the texture read for it. A picture reads what applies to it:
+/// the 2D pictures nothing, only the lit ones the shading model, and only the textured
+/// ones the texture mapping and the texture.
 struct Settings {
     double distance = 1.0;
     cgfs::ShadingModel shading_model = cgfs::ShadingModel::kPhong;
+    cgfs::TextureMapping texture_mapping = cgfs::TextureMapping::kPerspectiveCorrect;
+    /// The texture of a textured picture, which main reads before it starts the clock;
+    /// null for every other picture.
+    const cgfs::Texture* texture = nullptr;
 };
 
 /// A ray-traced demo scene in the shape the table wants.
@@ -69,13 +78,24 @@ void Lit(cgfs::Canvas& canvas, const Settings& settings) {
          settings.shading_model);
 }
 
+/// A rasterized 3D picture painted with a texture in the shape the table wants: projected
+/// like the others, with the texture main read for it, mapped as the command line chose.
+template <void (*Draw)(cgfs::Canvas&, const cgfs::Viewport&, const cgfs::Texture&,
+                       cgfs::TextureMapping)>
+void Textured(cgfs::Canvas& canvas, const Settings& settings) {
+    Draw(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas, 1.0, settings.distance),
+         *settings.texture, settings.texture_mapping);
+}
+
 /// One picture: its name on the command line, its line in the usage text, how to draw
-/// it, and whether the shading model changes it.
+/// it, whether the shading model changes it, and whether it is painted with the crate
+/// texture, which then has to be read first and whose mapping changes it.
 struct DemoScene {
     std::string_view name;
     std::string_view description;
     void (*draw)(cgfs::Canvas& canvas, const Settings& settings);
     bool lit = false;
+    bool textured = false;
 };
 
 /// The first row is the default.
@@ -108,6 +128,8 @@ constexpr DemoScene kScenes[] = {
      Projected<cgfs::demo::DrawFilledCubesScene>},
     {"shading", "solids and three lamps over three tiles, shaded as --shading says",
      Lit<cgfs::demo::DrawShadingScene>, true},
+    {"textures", "a wooden crate on a floor paved with the same texture, out to the horizon",
+     Textured<cgfs::demo::DrawTexturesScene>, false, true},
     {"axes", "the coordinate axes and corner dots (no ray tracing)",
      Rasterized<cgfs::demo::DrawAxesScene>},
 };
@@ -160,6 +182,31 @@ const ShadingChoice& FindShadingChoice(cgfs::ShadingModel shading_model) {
     return kShadingChoices[0];  // not reached: the table has every model
 }
 
+/// One way to carry a texture across a triangle: its name on the command line and its
+/// line in the usage text.
+struct TextureMappingChoice {
+    std::string_view name;
+    cgfs::TextureMapping texture_mapping;
+    std::string_view description;
+};
+
+/// In the order of the book's chapter: what is tried first, and what is right.
+constexpr TextureMappingChoice kTextureMappingChoices[] = {
+    {"linear", cgfs::TextureMapping::kLinear,
+     "u and v interpolated over the picture: planks bend on a face that leans away"},
+    {"perspective-correct", cgfs::TextureMapping::kPerspectiveCorrect,
+     "u/z and v/z interpolated and divided by 1/z at every pixel"},
+};
+
+const TextureMappingChoice& FindTextureMappingChoice(cgfs::TextureMapping texture_mapping) {
+    for (const TextureMappingChoice& choice : kTextureMappingChoices) {
+        if (choice.texture_mapping == texture_mapping) {
+            return choice;
+        }
+    }
+    return kTextureMappingChoices[0];  // not reached: the table has every mapping
+}
+
 // --- The command line -----------------------------------------------------------------
 
 struct Options {
@@ -183,7 +230,11 @@ std::string Usage() {
         out << (i > 0 ? "|" : "") << kShadingChoices[i].name;
     }
     out << "]\n"
-           "                   [--output PATH]\n"
+           "                   [--texture-mapping ";
+    for (std::size_t i = 0; i < std::size(kTextureMappingChoices); ++i) {
+        out << (i > 0 ? "|" : "") << kTextureMappingChoices[i].name;
+    }
+    out << "] [--output PATH]\n"
            "\n";
     std::string_view label = "  --scene     ";
     for (const DemoScene& scene : kScenes) {
@@ -203,7 +254,15 @@ std::string Usage() {
         label = "              ";
     }
     out << "              how the pictures under lights are shaded (default: "
-        << FindShadingChoice(defaults.settings.shading_model).name << ")\n"
+        << FindShadingChoice(defaults.settings.shading_model).name << ")\n";
+    label = "  --texture-mapping\n              ";
+    for (const TextureMappingChoice& choice : kTextureMappingChoices) {
+        out << label << std::left << std::setw(21) << (std::string(choice.name) + ":")
+            << choice.description << "\n";
+        label = "              ";
+    }
+    out << "              how a texture is carried across a triangle (default: "
+        << FindTextureMappingChoice(defaults.settings.texture_mapping).name << ")\n"
         << "  --output    output file, .png or .ppm (default: " << defaults.output << ")\n";
     return out.str();
 }
@@ -250,6 +309,18 @@ cgfs::ShadingModel ParseShadingModel(std::string_view name, const std::string& t
                              "'");
 }
 
+cgfs::TextureMapping ParseTextureMapping(std::string_view name, const std::string& text) {
+    std::string names;
+    for (const TextureMappingChoice& choice : kTextureMappingChoices) {
+        if (choice.name == text) {
+            return choice.texture_mapping;
+        }
+        names += (names.empty() ? "" : ", ") + std::string(choice.name);
+    }
+    throw std::runtime_error(std::string(name) + " expects one of " + names + ", got '" + text +
+                             "'");
+}
+
 // Returns nullopt when --help was requested. Throws std::runtime_error on bad input.
 std::optional<Options> ParseArgs(int argc, char** argv) {
     Options options;
@@ -272,6 +343,8 @@ std::optional<Options> ParseArgs(int argc, char** argv) {
             options.settings.distance = ParsePositiveDouble(arg, value);
         } else if (arg == "--shading") {
             options.settings.shading_model = ParseShadingModel(arg, value);
+        } else if (arg == "--texture-mapping") {
+            options.settings.texture_mapping = ParseTextureMapping(arg, value);
         } else if (arg == "--output") {
             options.output = value;
         } else {
@@ -296,21 +369,33 @@ int main(int argc, char** argv) {
                                      SceneNames() + ")");
         }
 
+        // A textured picture has its texture read here, before the clock starts: reading
+        // a file is not drawing.
+        Settings settings = options->settings;
+        std::optional<cgfs::Texture> texture;
+        if (scene->textured) {
+            texture.emplace(cgfs::demo::CrateTexture());
+            settings.texture = &*texture;
+        }
+
         // The render time is that of the drawing alone: the canvas exists before the
         // clock starts and the file is written after it stops. In hundredths of a
         // millisecond, since most of the rasterized pictures take only a few, and on a
         // line of its own, where it is easy to find and to compare between runs.
         cgfs::Canvas canvas(options->width, options->height);
         const auto start = std::chrono::steady_clock::now();
-        scene->draw(canvas, options->settings);
+        scene->draw(canvas, settings);
         const std::chrono::duration<double, std::milli> elapsed =
             std::chrono::steady_clock::now() - start;
         canvas.Save(options->output);
 
         std::cout << "rendered '" << scene->name << "'";
         if (scene->lit) {
-            std::cout << " (" << FindShadingChoice(options->settings.shading_model).name
-                      << " shading)";
+            std::cout << " (" << FindShadingChoice(settings.shading_model).name << " shading)";
+        }
+        if (scene->textured) {
+            std::cout << " (" << FindTextureMappingChoice(settings.texture_mapping).name
+                      << " texture mapping)";
         }
         std::cout << " at " << canvas.width() << "x" << canvas.height() << " -> " << options->output
                   << "\n"

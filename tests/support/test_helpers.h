@@ -3,6 +3,7 @@
 // Teaches Catch2 how to print the project's value types in assertion messages.
 
 #include <cgfs/image/color.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/lighting/light.h>
 #include <cgfs/math/mat4.h>
 #include <cgfs/math/plane.h>
@@ -64,10 +65,18 @@ struct StringMaker<cgfs::Rgb8> {
 };
 
 template <>
+struct StringMaker<cgfs::Uv> {
+    static std::string convert(const cgfs::Uv& uv) {
+        return "(u=" + std::to_string(uv.u) + ", v=" + std::to_string(uv.v) + ")";
+    }
+};
+
+template <>
 struct StringMaker<cgfs::Point> {
     static std::string convert(const cgfs::Point& p) {
         return "(" + std::to_string(p.x) + ", " + std::to_string(p.y) +
-               ", h=" + std::to_string(p.h) + ", 1/z=" + std::to_string(p.inv_z) + ")";
+               ", h=" + std::to_string(p.h) + ", 1/z=" + std::to_string(p.inv_z) +
+               ", uv=" + StringMaker<cgfs::Uv>::convert(p.uv) + ")";
     }
 };
 
@@ -80,7 +89,10 @@ struct StringMaker<cgfs::Triangle> {
                std::to_string(t.h[2]) +
                ", normals=" + StringMaker<cgfs::Vec3>::convert(t.normals[0]) + " " +
                StringMaker<cgfs::Vec3>::convert(t.normals[1]) + " " +
-               StringMaker<cgfs::Vec3>::convert(t.normals[2]) + ")";
+               StringMaker<cgfs::Vec3>::convert(t.normals[2]) +
+               ", uvs=" + StringMaker<cgfs::Uv>::convert(t.uvs[0]) + " " +
+               StringMaker<cgfs::Uv>::convert(t.uvs[1]) + " " +
+               StringMaker<cgfs::Uv>::convert(t.uvs[2]) + ")";
     }
 };
 

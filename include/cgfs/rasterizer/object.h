@@ -4,6 +4,7 @@
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/triangle.h>
 
@@ -14,7 +15,7 @@
 namespace cgfs {
 
 /// One triangle of an object: the indices of its three corners in the object's vertex
-/// list, its color, and an intensity and a normal at each corner.
+/// list, its color, and an intensity, a normal and texture coordinates at each corner.
 ///
 /// A triangle does not hold its corners, it names them, so a vertex that several
 /// triangles meet at (every vertex of a closed surface) is stored once and projected
@@ -42,11 +43,21 @@ namespace cgfs {
 /// its own and the triangle's is used, which is right for every flat face: a cube says
 /// nothing. The drawing that does not light (RenderObject with a triangle primitive)
 /// does not read the normals.
+///
+/// `uvs[k]` is the point of the model's texture that the corner `v[k]` shows (see Uv and
+/// Texture): the book's `uvs`. The three of them pin the triangle onto the texture, and
+/// every point of the triangle shows the point of the texture that lies between them in
+/// the same proportions. They belong to the corner of the triangle and not to the
+/// vertex, like the normals: the vertex at a corner of a crate is the top-right corner
+/// of the picture on one face and the top-left corner of the picture on the next. They
+/// default to the texture's origin, and nothing reads them unless the model has a
+/// texture (see Model), in which case the texture is drawn in place of `color`.
 struct Triangle {
     std::array<std::size_t, 3> v{};
     Color color;
     std::array<double, 3> h{1.0, 1.0, 1.0};
     std::array<Vec3, 3> normals{};
+    std::array<Uv, 3> uvs{};
 
     bool operator==(const Triangle&) const = default;
 };

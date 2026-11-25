@@ -1,12 +1,14 @@
 #pragma once
 
+#include <cgfs/image/texture.h>
 #include <cgfs/math/vec3.h>
 
 namespace cgfs {
 
 /// A point on the canvas, in the canvas's centered integer coordinates (see Canvas),
-/// with an intensity for the shaded primitives, a depth for the depth-buffered ones and
-/// a normal for the one that lights every pixel.
+/// with an intensity for the shaded primitives, a depth for the depth-buffered ones, a
+/// normal for the one that lights every pixel and texture coordinates for the textured
+/// ones.
 ///
 /// The rasterizer works in 2D: everything it draws is made of these, and the 3D part
 /// of the pipeline ends by producing them (see ProjectVertex in projection.h).
@@ -28,12 +30,18 @@ namespace cgfs {
 /// projection of, in the camera's coordinates. Only DrawPhongTriangle reads it, to
 /// interpolate it across the triangle the way the others interpolate h, and whoever
 /// calls that sets it. It defaults to the zero vector: no normal.
+///
+/// `uv` is the point of a texture that the vertex this point is the projection of shows
+/// (see Uv). Only the primitives that paint a texture read it, DrawTexturedTriangle and
+/// DrawPhongTriangle when it is given one, to carry it across the triangle to every
+/// pixel, and whoever calls them sets it. It defaults to the texture's origin.
 struct Point {
     int x = 0;
     int y = 0;
     double h = 1.0;
     double inv_z = 0.0;
     Vec3 normal;
+    Uv uv;
 
     bool operator==(const Point&) const = default;
 };

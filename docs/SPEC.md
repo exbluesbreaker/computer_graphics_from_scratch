@@ -20,8 +20,10 @@ shaded, and scenes of instances of models, each with a model transform, seen fro
 movable camera, clipped in 3D to what that camera can see and, where asked, drawn
 through a depth buffer that removes the hidden surfaces and lit by the same lights and
 the same equation as the ray tracer's spheres, with flat, Gouraud or Phong shading,
-Gouraud shading in both of the forms the book shows it in; section 13 lists what comes
-next.
+Gouraud shading in both of the forms the book shows it in, and painted with textures,
+images whose points are pinned to the corners of the triangles and carried across them
+to every pixel, by the linear mapping the book starts with or perspective-correct;
+section 13 lists what comes next.
 
 ## 2. Goals and non-goals
 
@@ -180,8 +182,9 @@ the ray tracer is involved. A `Point` is a canvas position in the centered integ
 coordinates of 3.1 together with an intensity `h`, a multiplier for the color that only
 the shaded triangle reads; it defaults to 1, the full color. It also carries a depth,
 `inv_z`, which the filled and the shaded triangle read when they are given a depth
-buffer (3.12) and which nothing reads otherwise, and a `normal`, which only the Phong
-triangle reads (3.13).
+buffer (3.12) and which nothing reads otherwise, a `normal`, which only the Phong
+triangle reads (3.13), and texture coordinates, `uv`, which only the primitives that
+paint a texture read (3.14).
 
 - `Interpolate(i0, d0, i1, d1)` returns the values of a dependent variable `d` at the
   integers `i0, i0 + 1, ..., i1`, given `d = d0` at `i0` and `d = d1` at `i1`: that is
@@ -277,14 +280,16 @@ triangles, each naming three of the vertices by index and carrying a color. The
 indirection stores a vertex once however many triangles meet at it (a cube is eight
 vertices and twelve triangles, not thirty-six vertices) and projects it once.
 
-- `Triangle` is `{v, color, h, normals}`, with `v` an array of three indices into the
+- `Triangle` is `{v, color, h, normals, uvs}`, with `v` an array of three indices into the
   object's vertex list and `h` an array of three intensities, `h[k]` the intensity of
   the triangle at its corner `v[k]`: the `h` of 3.6, a multiplier for the color. It is 1
   at every corner by default, the full color. The intensity belongs to the corner of the
   triangle, not to the vertex, so two triangles that meet at a vertex may be differently
   bright there, as two faces of a cube are (section 14, decision 14). `normals` is an
   array of three normals, one per corner in the same way, none by default; only the
-  drawing under lights reads them (3.13).
+  drawing under lights reads them (3.13). `uvs` is an array of three texture
+  coordinates, one per corner in the same way, the texture's origin by default; only the
+  drawing of a model that has a texture reads them (3.14).
 - `RenderObject(viewport, vertices, triangles, draw_triangle = DrawWireframeTriangle,
   depth_buffer = none)`
   first projects every vertex with `ProjectVertex` (3.7) into a list `projected`
@@ -506,7 +511,8 @@ coordinates, as `TransformModel` returns it; a scene is a list of those.
   the corner in front toward the corner behind, so two triangles that share the cut side
   compute the same point bit for bit; it is appended to `vertices` and named by index.
   The new corner's intensity is `hA + t (hB - hA)`, its normal `NA + t (NB - NA)`, no
-  normal where neither corner had one and not normalized (3.13), and the color is the
+  normal where neither corner had one and not normalized (3.13), its texture coordinates
+  `uvA + t (uvB - uvA)`, each of the two by itself (3.14), and the color is the
   triangle's.
   The book's `ClipTriangle` returns the list; this one appends to it, as the book's own
   demo code does.
@@ -853,11 +859,187 @@ Scenes under lights:
   triangle can differ in shade when a point light is near.
 - The interpolation of the normals, like that of `h`, is linear on the canvas and so not
   quite linear over the triangle in space unless the triangle is parallel to the
-  viewport; only `1/z` is. Section 13 says what removes the difference.
+  viewport; `1/z` is, and so are the texture coordinates of 3.14, which are carried
+  across a triangle perspective-correct. The book corrects those and nothing else, and
+  so does this (section 14, decision 19).
 - Shading does not change the outline of an object: a sphere made of triangles keeps its
   corners along its silhouette, however smoothly its inside is lit.
 
-### 3.14 Numeric conventions
+### 3.14 Rasterizer: textures
+
+A crate could be modelled plank by plank and nail by nail, with a great many triangles.
+Painting a picture of planks and nails onto the twelve triangles of a cube is far
+cheaper and, from a little way off, looks the same. The picture is a texture. This is
+the first half of the book's Textures chapter, "Painting a Crate" and
+"Perspective-Correct Texture Mapping", up to the first of its filters. The filters,
+bilinear filtering, mipmapping and trilinear filtering, are not implemented (section
+13): a texture is looked up by nearest neighbor filtering and by nothing else, and what
+that looks like where a texture is drawn larger or smaller than it is belongs to the
+behaviour described here.
+
+Textures and their coordinates:
+
+- `Texture` is an image to paint with: `width` x `height` texels, texture elements,
+  three bytes each, row by row from the top, the bytes of an `Image` (5.4). It is made
+  from an `Image` and throws `std::invalid_argument` when a dimension is not positive or
+  the buffer does not hold `width * height * 3` bytes.
+- A point of a texture is a `Uv`, `{u, v}`: real numbers from 0 to 1 whatever the size
+  of the texture, `u` from its left edge to its right edge and `v` from its top edge to
+  its bottom edge, with the origin at the top-left corner, as in the book. A model
+  that says a corner shows `(1, 0)` means the top-right corner of whatever image it is
+  painted with. The default is the origin.
+- `GetTexel(u, v)` is the color of the texel the point falls in:
+
+  ```
+  tx = u * width     rounded down, then kept within 0 .. width - 1
+  ty = v * height    rounded down, then kept within 0 .. height - 1
+  ```
+
+  and the result is the texel in column `tx` of row `ty`, counted from the top-left
+  corner, as a `Color` with channels 0..255. Rounding down is the book's nearest
+  neighbor filtering: every point of a texel has the texel's color, and how near the
+  next texel is does not show. A texel covers `u` from `tx / width` up to, not
+  including, `(tx + 1) / width`. The right and bottom edges, `u = 1` and `v = 1`, would
+  be column `width` and row `height`, one past the last, and belong to the last texel
+  instead; so does every coordinate beyond an edge, which is taken to the texel at that
+  edge. Nothing repeats and nothing wraps around. The corners of a model are at exactly
+  0 and 1, and a coordinate interpolated between them can come out a rounding error
+  outside, so what happens there has to be defined; the book does not say (section 14,
+  decision 19). Precondition: `u` and `v` are not NaN, asserted.
+
+The model:
+
+- `Triangle.uvs[k]` (3.8) is the point of the texture that the corner `v[k]` shows, the
+  book's `uvs`. The three of them pin the triangle onto the texture, and every point of
+  the triangle shows the point of the texture that lies between them in the same
+  proportions. Like a normal it belongs to the corner of the triangle and not to the
+  vertex: a vertex of a crate is the top-right corner of the picture on one face and the
+  top-left corner of the picture on the next.
+- `Model.texture` is the texture the model is painted with: a pointer, null by default,
+  which is no texture. The model does not own it. A texture is large, and one serves
+  every model and every instance that shows it, so it is kept by whoever builds the
+  scene and must outlive the models that name it. The book's demo has a texture per
+  triangle; here it is the model's, like the specular exponent (section 14, decision
+  19).
+- `TransformModel` (3.10) hands the pointer on and leaves the texture coordinates as
+  they are: a picture painted on a surface moves with it. Back-face culling (3.12)
+  reads neither.
+- `ClipTriangle` (3.11) gives a new corner the texture coordinates
+  `uvA + t (uvB - uvA)`, by the fraction `t` of its position. A texture lies evenly on
+  its triangle in space, `u` and `v` being linear in the point, and the cut is made in
+  space, so these are exactly the coordinates the whole triangle has at the crossing
+  point: the pieces show the part of the picture that the triangle showed there.
+
+From the corners to a pixel. `TextureMapping` is `kLinear` or `kPerspectiveCorrect`, the
+chapter's two ways, in its order.
+
+- `DrawTexturedTriangle(P0, P1, P2, texture, texture_mapping = kPerspectiveCorrect,
+  depth_buffer = none)` fills the triangle as `DrawFilledTriangle` does, the same pixels
+  (3.6), and sets a pixel to
+
+  ```
+  pixel = texture.GetTexel(u, v) * h
+  ```
+
+  with `h` the intensity of `DrawShadedTriangle`, interpolated from the points' `h` as
+  there, and `(u, v)` found from the points' `uv` by the mapping. Four quantities
+  travel along the sides and along every row with x, each by the calls of 3.13
+  (`EdgeInterpolate` along the sides, `Interpolate` along a row): `h`, `1/z` and, for
+  each of the two texture coordinates, what the mapping carries.
+- Linear mapping carries `u` and `v` themselves, like `h`: the chapter's first step,
+  "attribute mapping". It takes the texture coordinates to change by equal steps over
+  the picture of the triangle, and they do not, unless the triangle is parallel to the
+  viewport. Halfway along the picture of an edge that runs from `z = 1` to `z = 4` is
+  the point of the edge at `z = 1.6` (3.12), a fifth of the way along it; with `u` from
+  0 to 1 along the edge, linear mapping shows `u = 1/2` there, where `1/5` belongs. The
+  two triangles of a face are each wrong in their own way, so a straight line of the
+  texture comes out bent where they meet: the book's "deformed" crate.
+- Perspective-correct mapping carries `u/z` and `v/z`, which do change by equal steps.
+  On the triangle `u` is a linear function of the point `(X, Y, Z)` of its plane,
+  `u = a X + b Y + c Z + e`. The point is seen at `x = X d / Z`, `y = Y d / Z` on the
+  viewport; putting `X = x Z / d` and `Y = y Z / d` in and dividing by `Z` gives
+
+  ```
+  u / Z = (a x + b y) / d + c + e (1 / Z)
+  ```
+
+  and `1/Z` is linear in `x` and `y` (3.12), so `u/Z` is, and `v/Z` likewise. At a
+  vertex the carried value is `uv.u * inv_z` (and `uv.v * inv_z`), the point's `1/z`
+  being what it has of its depth; at a pixel, with `1/z` interpolated beside them,
+
+  ```
+  u = (u/z) / (1/z)      v = (v/z) / (1/z)
+  ```
+
+  On the edge above `u/z` runs from 0 to 1/4 and is 1/8 halfway, `1/z` is 5/8 there,
+  and `u` is 1/5. For a triangle parallel to the viewport `1/z` is one value, `u/z` is
+  `u` times it, and the two mappings are the same picture.
+- The intensity `h` is interpolated over the picture under both mappings, as in
+  `DrawShadedTriangle`.
+- With a depth buffer a pixel is set only where `UpdateIfCloser(x, y, 1/z)` says so, as
+  in 3.12; without one every pixel is set. Preconditions: under perspective-correct
+  mapping every point has `inv_z > 0`, asserted, as the projection of a vertex in front
+  of the camera has; linear mapping reads the depths only for a depth buffer.
+- `DrawPhongTriangle` (3.13) takes a texture and a mapping as two more parameters, none
+  and perspective-correct by default. With a texture the two texture coordinates travel
+  with its other quantities in the same way, and the pixel is
+  `texture.GetTexel(u, v) * ComputeIllumination(P, N, V, s, lights)`; its `color` is
+  then not read.
+
+Painting an object. The book's sentence is "fetch the texel, apply shading, and paint
+the pixel with the resulting color": the texel takes the place of the triangle's color
+and the light multiplies it.
+
+- `RenderObject` under lights (3.13) takes `texture_mapping = kPerspectiveCorrect` as a
+  last parameter. For an object with a texture, each corner's point gets
+  `uv = triangle.uvs[k]`, the light is computed as 3.13 says, and the triangle is drawn
+  by
+
+  ```
+  flat                       DrawTexturedTriangle, h = i at all three corners
+  Gouraud, in both forms     DrawTexturedTriangle, h = hk at corner k
+  Phong                      DrawPhongTriangle with the texture
+  ```
+
+  The triangle's `color` is not read. An object without a texture is drawn exactly as
+  in 3.13, whatever texture coordinates its triangles state and whatever the mapping.
+  A texture of one color gives, under every shading model, the picture of the same
+  object in that color.
+- `RenderScene` under lights takes the mapping as a last parameter as well and hands it
+  to `RenderObject` for every instance. The textures are not a list of the scene: each
+  model points to its own.
+- The drawing with a triangle primitive (3.8, the first `RenderScene` and
+  `RenderObject`) knows nothing of textures and draws every triangle in its color.
+- A triangle cut by a clipping plane is, under perspective-correct mapping, textured as
+  the whole triangle was: its new corners have the whole triangle's texture coordinates
+  at those points, and the mapping is linear over the triangle in space. (It is not
+  pixel for pixel the same picture in general: a new corner is truncated to a whole
+  pixel like any vertex, section 15.) Under linear mapping each piece is distorted by
+  itself, differently from the whole.
+
+What nearest neighbor filtering looks like. A texture looks like itself where it is
+drawn at about its own size, a texel to a pixel. Nothing in the mapping looks at how
+many texels a pixel covers or how many pixels a texel does.
+
+- Drawn larger than it is, a texel covers several pixels, all of which get its one
+  color: the texture shows as blocks with sharp borders. A texture of 2 x 2 texels on a
+  face of 8 x 8 pixel steps is four blocks.
+- Drawn smaller, a pixel covers several texels and shows the one its own point falls
+  in; the others are never looked at. Sixteen texels across 4 pixel steps show the
+  texels in columns 0, 4, 8 and 12 and, at the far edge, the last. Which texels are
+  picked depends on where the triangle happens to lie on the pixels, so fine detail
+  turns into noise, and a regular pattern, sampled at a regular step that does not
+  match it, into patterns that are not in the texture.
+- A surface that leans away is drawn smaller along the direction it leans in than
+  across it: on a floor seen from a height `H` a pixel at the distance `D` covers about
+  `D / H` times as much floor in depth as across. So a floor is drawn too small in
+  depth long before it is across.
+- Mending the first takes bilinear filtering, and the second mipmapping, with trilinear
+  filtering for the seams between its levels: the rest of the book's chapter. The
+  `textures` demo (section 9) is composed to show both, next to an object the texture
+  suits.
+
+### 3.15 Numeric conventions
 
 - All geometry and color math uses `double`. Switching to `float` would be a deliberate
   decision rather than a detail, because it changes the golden images.
@@ -875,27 +1057,34 @@ CMakePresets.json         dev / release configure, build and test presets
 CLAUDE.md                 design principles and the folder-structure rules
 README.md                 build instructions and project overview
 docs/SPEC.md              this document
+assets/
+    textures/wooden_crate.ppm   the texture of the textures demo: 512 x 512, binary PPM
+    textures/README.md          where it came from, and how the PPM was made of the JPEG
+                                that lies beside it
 include/cgfs/             public headers: one folder per layer, one file per concept
     math/vec3.h  mat4.h  plane.h  bounding_sphere.h  triangle_normal.h
-    image/color.h  pixel_index.h  canvas.h  depth_buffer.h  image_io.h
+    image/color.h  pixel_index.h  canvas.h  depth_buffer.h  image_io.h  texture.h
     camera/viewport.h  camera.h  clipping_planes.h
     lighting/light.h  illumination.h
     raytracer/scene.h  raytracer.h
     rasterizer/point.h  interpolate.h  line.h  triangle.h  projection.h  object.h
     rasterizer/model.h  instance.h  culling.h  clipping.h  shading.h  scene.h
-    demo/raytracer_scenes.h  rasterizer_scenes.h
-                          the demo pictures shared by render_demo and the golden tests
+    demo/raytracer_scenes.h  rasterizer_scenes.h  textures.h
+                          the demo pictures shared by render_demo and the golden tests,
+                          and the texture they are painted with
 src/<layer>/              implementation files, mirroring include/cgfs/<layer>/
 apps/
     render_demo.cpp       command-line renderer for the demo pictures
 tests/
     CMakeLists.txt
-    support/test_helpers.h      Catch2 printers for Vec3/Mat4/Plane/Color/Rgb8/Point/Triangle/
-                                Light, a temp-file helper
+    support/test_helpers.h      Catch2 printers for Vec3/Mat4/Plane/Color/Rgb8/Uv/Point/
+                                Triangle/Light, a temp-file helper
+    support/address_texture.h   a texture whose every texel says where it is, for the
+                                image and the rasterizer tests
     math/vec3_test.cpp  mat4_test.cpp  plane_test.cpp  bounding_sphere_test.cpp
     math/triangle_normal_test.cpp
     image/color_test.cpp  pixel_index_test.cpp  canvas_test.cpp  depth_buffer_test.cpp
-    image/image_io_test.cpp
+    image/image_io_test.cpp  texture_test.cpp
     camera/viewport_test.cpp  camera_test.cpp  clipping_planes_test.cpp
     lighting/light_test.cpp  illumination_test.cpp
     raytracer/raytracer_test.cpp
@@ -903,7 +1092,7 @@ tests/
     rasterizer/object_test.cpp  model_test.cpp  instance_test.cpp  culling_test.cpp
     rasterizer/clipping_test.cpp  shading_test.cpp  scene_test.cpp
     rasterizer/pixel_helpers.h
-    demo/golden_test.cpp
+    demo/golden_test.cpp  textures_test.cpp
     demo/golden/          reference renders of the demo pictures (PPM)
 third_party/
     CMakeLists.txt
@@ -922,14 +1111,15 @@ on the ones below it:
 
 ```
 math         vec3, mat4, plane, bounding_sphere, triangle_normal    vector algebra and plain geometry
-image        color, pixel_index, canvas, depth_buffer, image_io     colors, the pixel buffer, the depth buffer, file formats
+image        color, pixel_index, canvas, depth_buffer, image_io,    colors, the pixel buffer, the depth buffer, file formats,
+             texture                                                textures
 camera       viewport, camera, clipping_planes                      how canvas pixels map into the world
 lighting     light, illumination                                    the lights and the illumination equation
 raytracer    scene, raytracer                                       the ray tracing renderer
 rasterizer   point, interpolate, line, triangle, projection,        the rasterizing renderer
              object, model, instance, culling, clipping, shading,
              scene
-demo         raytracer_scenes, rasterizer_scenes                    the demo pictures
+demo         raytracer_scenes, rasterizer_scenes, textures          the demo pictures and their textures
 ```
 
 - `math/vec3`: `Vec3` and its free functions, header-only, `constexpr` where possible.
@@ -946,7 +1136,10 @@ demo         raytracer_scenes, rasterizer_scenes                    the demo pic
   `image/canvas`: the pixel buffer. `image/depth_buffer`: `DepthBuffer`, a `1/z` per
   pixel of a canvas, for hidden-surface removal; in this layer because it depends on
   nothing but the canvas's size and coordinates. `image/image_io`: PPM writer and
-  reader, PNG writer; used by `Canvas::Save` and the tests.
+  reader, PNG writer; used by `Canvas::Save` and the tests. `image/texture`: `Texture`,
+  an image to paint triangles with, looked up by nearest neighbor filtering, and `Uv`,
+  a point of it; in this layer because a texture is an image and needs nothing but
+  `Image` and `Color`.
 - `camera/viewport`: pixel to viewport-point mapping and field of view. Used by the ray
   tracer and by the rasterizer's projection. `camera/camera`: `Camera`, a position, an
   orientation and a list of clipping planes, and `MakeCameraMatrix`; plain data for
@@ -962,21 +1155,23 @@ demo         raytracer_scenes, rasterizer_scenes                    the demo pic
 - `raytracer/scene`: plain data: spheres, the lights of the lighting layer, background
   color. `raytracer/raytracer`: intersection, the lighting of a point with its shadows,
   the render loop.
-- `rasterizer/point`: `Point`, with its intensity `h`, its depth `inv_z` and its
-  `normal`, and `ToPixel`, the one conversion
+- `rasterizer/point`: `Point`, with its intensity `h`, its depth `inv_z`, its
+  `normal` and its texture coordinates `uv`, and `ToPixel`, the one conversion
   from interpolated coordinates to pixels. `rasterizer/interpolate`: `Interpolate`, the
   building block. `rasterizer/line`: `DrawLine`. `rasterizer/triangle`:
   `DrawWireframeTriangle`, `DrawFilledTriangle` and `DrawShadedTriangle`, the last two
   through a depth buffer when they are given one, the signature the three share,
-  `DrawTriangleFunction`, and `DrawPhongTriangle`, which lights every pixel.
+  `DrawTriangleFunction`, `DrawTexturedTriangle`, which paints a texture, with
+  `TextureMapping`, the two ways of carrying one across a triangle, and
+  `DrawPhongTriangle`, which lights every pixel, of a color or of a texture.
   `rasterizer/projection`: `ViewportToCanvas` and `ProjectVertex`, from a `Vec3` seen
   through a `Viewport` to the `Point` the primitives draw, the start of the 3D pipeline,
   and `UnprojectVertex`, the way back.
-  `rasterizer/object`: `Triangle`, three vertex indices, a color and an intensity and a
-  normal per corner, and `RenderObject`, which projects an object's vertex list and
+  `rasterizer/object`: `Triangle`, three vertex indices, a color and an intensity, a
+  normal and texture coordinates per corner, and `RenderObject`, which projects an object's vertex list and
   draws its triangles with the primitive it is given; the first use of the projection.
   `rasterizer/model`: `Model`, the vertex list and the triangle list of an object,
-  stored once, with a bounding sphere and a specular exponent, `TransformModel`, the
+  stored once, with a bounding sphere, a specular exponent and a texture, `TransformModel`, the
   model under a transform, and `RenderModel`, which draws that through `RenderObject`. `rasterizer/instance`:
   `Instance`, a model index with a position, an orientation and a scale,
   `MakeModelMatrix`, its model matrix, and `RenderInstance`. `rasterizer/culling`:
@@ -985,17 +1180,21 @@ demo         raytracer_scenes, rasterizer_scenes                    the demo pic
   `ClipScene`, `ClipInstance`, `ClipInstanceAgainstPlane`, `ClipTrianglesAgainstPlane`
   and `ClipTriangle`, what a list of planes leaves of a scene. `rasterizer/shading`:
   `ShadingModel`, flat, Gouraud in two forms or Phong, and `RenderObject` under lights, which draws
-  an object's triangles in their colors times the light computed for them.
+  an object's triangles in their colors, or in the object's texture, times the light
+  computed for them.
   `rasterizer/scene`: `RenderScene`, every instance of a model list and an instance
   list, in order, as a camera sees them: transformed, culled, clipped, projected and
   drawn, with a triangle primitive or under lights.
 - `demo/raytracer_scenes`: the ray-traced demo scenes, each a function returning a
   `Scene`. `demo/rasterizer_scenes`: the rasterized demo pictures, each a function that
   draws into a canvas. Either way the app and the golden tests render exactly the same
-  thing.
+  thing. `demo/textures`: `CrateTexture`, the texture of the textures picture, read from
+  its file in `assets/textures/`. The pictures themselves read no files: a picture that
+  is painted with a texture is handed it.
 
-The canvas knows nothing about 3D, and the depth buffer nothing about triangles. The
-viewport knows nothing about spheres, and a light nothing about what it lights. The tracer
+The canvas knows nothing about 3D, and the depth buffer and a texture nothing about
+triangles. The viewport knows nothing about spheres, and a light nothing about what it
+lights. The tracer
 and the rasterizer write to the canvas only through `PutPixel`, and neither knows the
 other exists. `CLAUDE.md` states the design principles and the rules that keep the tree
 in this shape: a new layer is a new folder under `include/cgfs/`, `src/` and `tests/`
@@ -1007,13 +1206,15 @@ and a line in the table above.
 |-------------------|--------------------|-----------------------------------------------------------------------------------|
 | `cgfs`            | static library     | the renderer: every layer under `src/` and `include/cgfs/` except `demo`          |
 | `cgfs::cgfs`      | alias              | the name the demo library links against                                           |
-| `cgfs_demo`       | static library     | `src/demo/`, the demo pictures; links `cgfs::cgfs` publicly                       |
+| `cgfs_demo`       | static library     | `src/demo/`, the demo pictures and their textures; links `cgfs::cgfs` publicly    |
 | `cgfs::demo`      | alias              | the name the app and the tests link against                                       |
 | `stb_image_write` | static library     | the stb implementation, built without the project's warning flags; system include |
 | `render_demo`     | executable         | `apps/render_demo.cpp`                                                            |
 | `cgfs_tests`      | executable (CTest) | all `tests/<layer>/*_test.cpp`                                                    |
 
-`BUILD_SHARED_LIBS` is respected but not used by default.
+`BUILD_SHARED_LIBS` is respected but not used by default. `cgfs_demo` is compiled with
+`CGFS_TEXTURE_DIR`, the place of `assets/textures/` in the source tree, as the tests are
+with `CGFS_GOLDEN_DIR`: the demo's texture stays where it is and is read from there.
 
 ## 5. Public API
 
@@ -1142,14 +1343,41 @@ public:
 };
 ```
 
-### 5.4 `image/image_io.h`
+### 5.4 `image/image_io.h`, `image/texture.h`
 
 ```cpp
 struct Image { int width = 0, height = 0; std::vector<std::uint8_t> rgb; };
 void  WritePpm(const std::filesystem::path&, int width, int height, std::span<const std::uint8_t> rgb);
 void  WritePng(const std::filesystem::path&, int width, int height, std::span<const std::uint8_t> rgb);
 Image ReadPpm(const std::filesystem::path&);   // binary P6 with maxval 255; used by golden tests
+
+// texture.h (section 3.14)
+struct Uv {                          // a point of a texture: u to the right, v down, 0..1
+    double u = 0.0;
+    double v = 0.0;                  // the origin, the top-left corner, by default
+    bool operator==(const Uv&) const = default;
+};
+
+class Texture {                      // an image to paint triangles with
+public:
+    explicit Texture(Image image);
+    // throws std::invalid_argument when a dimension is not positive or the buffer is not
+    // width * height * 3 bytes
+
+    int width() const;
+    int height() const;
+
+    Color GetTexel(double u, double v) const;
+    // the texel in column floor(u * width) of row floor(v * height), counted from the
+    // top-left corner; a coordinate at or beyond an edge gives the edge's texel
+};
 ```
+
+A texture is made of an `Image`, what `ReadPpm` returns, so reading one from a file is
+`Texture(ReadPpm(path))` and there is no loader of its own. It is a class for the reason
+the canvas and the depth buffer are: its size and its bytes have to stay in step.
+`GetTexel` takes the two coordinates as the book's `getTexel(u, v)` does; `Uv` is what
+a triangle and a point carry.
 
 ### 5.5 `camera/viewport.h`, `camera/camera.h`, `camera/clipping_planes.h`
 
@@ -1290,6 +1518,8 @@ struct Point {                 // canvas coordinates, intensity and depth (secti
     double h = 1.0;            // multiplier for the color; read by DrawShadedTriangle only
     double inv_z = 0.0;        // 1/z of the projected vertex; read through a depth buffer
     Vec3 normal;               // of the surface at the vertex; read by DrawPhongTriangle only
+    Uv uv;                     // the point of a texture the vertex shows; read by the
+                               // primitives that paint one (section 3.14)
     bool operator==(const Point&) const = default;
 };
 constexpr int ToPixel(double coordinate);    // truncation toward zero (section 3.6)
@@ -1313,11 +1543,20 @@ void DrawShadedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color colo
 using DrawTriangleFunction = void (*)(Canvas& canvas, Point p0, Point p1, Point p2, Color color,
                                       DepthBuffer* depth_buffer);
 // the signature of the three, for whoever draws many triangles
+enum class TextureMapping { kLinear, kPerspectiveCorrect };
+// what carries a texture across a triangle: u and v, or u/z and v/z (section 3.14)
+void DrawTexturedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, const Texture& texture,
+                          TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect,
+                          DepthBuffer* depth_buffer = nullptr);
+// texture.GetTexel(u, v) * h at every pixel, (u, v) from the points' uv by the mapping;
+// perspective-correct mapping needs inv_z > 0 at every point
 void DrawPhongTriangle(Canvas& canvas, const Viewport& viewport, Point p0, Point p1, Point p2,
                        Color color, double specular, std::span<const Light> lights,
-                       DepthBuffer* depth_buffer = nullptr);
+                       DepthBuffer* depth_buffer = nullptr, const Texture* texture = nullptr,
+                       TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
 // color * ComputeIllumination at every pixel, from the interpolated 1/z and normals; the
-// lights in the camera's coordinates; every point with inv_z > 0 and a normal (section 3.13)
+// lights in the camera's coordinates; every point with inv_z > 0 and a normal (section
+// 3.13); with a texture, its texel in the place of color (section 3.14)
 
 // projection.h
 Point ViewportToCanvas(const Viewport& viewport, double x, double y);  // truncated (section 3.7)
@@ -1331,6 +1570,7 @@ struct Triangle {                     // one face of an object (section 3.8)
     Color color;
     std::array<double, 3> h{1.0, 1.0, 1.0};  // the intensity at each corner
     std::array<Vec3, 3> normals{};    // the surface's normal at each corner; zero: the triangle's
+    std::array<Uv, 3> uvs{};          // the point of the model's texture each corner shows
     bool operator==(const Triangle&) const = default;
 };
 void RenderObject(Canvas& canvas, const Viewport& viewport, std::span<const Vec3> vertices,
@@ -1345,11 +1585,13 @@ struct Model {                        // an object's shape, described once (sect
     std::vector<Triangle> triangles;
     BoundingSphere bounding_sphere;   // around the vertices; the default contains everything
     double specular = kMatte;         // the exponent of the surface's highlight (section 3.13)
+    const Texture* texture = nullptr; // what the model is painted with; not owned; null: its
+                                      // triangles' colors (section 3.14)
     bool operator==(const Model&) const = default;
 };
 Model TransformModel(const Model& model, const Mat4& transform);
 // transform * every vertex, the same triangles with their normals turned and at unit length,
-// the sphere moved and scaled along (sections 3.11 and 3.13)
+// the sphere moved and scaled along, the same texture (sections 3.11, 3.13 and 3.14)
 void RenderModel(Canvas& canvas, const Viewport& viewport, const Model& model,
                  const Mat4& transform);  // RenderObject on TransformModel's vertices (section 3.10)
 
@@ -1387,9 +1629,11 @@ enum class ShadingModel { kFlat, kGouraudFaceted, kGouraud, kPhong };
 void RenderObject(Canvas& canvas, const Viewport& viewport, const Model& object,
                   std::span<const Light> lights,
                   ShadingModel shading_model = ShadingModel::kPhong,
-                  DepthBuffer* depth_buffer = nullptr);
+                  DepthBuffer* depth_buffer = nullptr,
+                  TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
 // the object, a Model in the camera's coordinates, under lights in the same coordinates:
-// every triangle in its color times the light computed per triangle, per corner or per pixel
+// every triangle in its color times the light computed per triangle, per corner or per
+// pixel; an object with a texture in its texels times that light (section 3.14)
 
 // scene.h
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
@@ -1405,9 +1649,11 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
                  std::span<const Light> lights,
                  ShadingModel shading_model = ShadingModel::kPhong,
                  DepthBuffer* depth_buffer = nullptr,
-                 BackFaceCulling back_face_culling = BackFaceCulling::kOn);
+                 BackFaceCulling back_face_culling = BackFaceCulling::kOn,
+                 TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
 // the same steps under lights, which are given in the world's coordinates and taken into
 // the camera's with the scene; every instance drawn by RenderObject with the shading model
+// and, where its model has a texture, the texture mapping
 ```
 
 One header per primitive. Free functions that take the canvas as their first parameter,
@@ -1457,6 +1703,18 @@ book's demo's default and the one of them that is right everywhere, and a caller
 wants a cheaper one says so. `DrawPhongTriangle` does not have the signature the other three primitives
 share and is not a `DrawTriangleFunction`: it needs the viewport, to find the point a
 pixel shows, and the lights.
+Textures arrived the same way again (section 14, decision 19). The texture coordinates
+of a point and of a triangle's corners and the texture of a model are fields with
+defaults, the origin, the origin and none, so every point, triangle and model written
+before them is what it was and is drawn as it was. `DrawTexturedTriangle` is a fifth
+primitive beside the four; like `DrawPhongTriangle` it is not a `DrawTriangleFunction`,
+taking a texture where they take a color. The mapping is a defaulted last parameter of
+it, of `DrawPhongTriangle` together with the texture, and of the `RenderObject` and the
+`RenderScene` that light, whose tenth parameter it is: a scene type is nearer than it
+was (decision 11). The texture reaches the primitives by the model, which the lit
+`RenderObject` is handed whole; the `RenderObject` and `RenderScene` that take a triangle
+primitive are handed vertices and triangles, or draw through a `DrawTriangleFunction`,
+and do not paint.
 
 ## 6. Build system
 
@@ -1518,6 +1776,13 @@ or newer is expected to work and should be tried before each milestone is closed
 
 Anything else needs a line in this table and a reason. PPM output has no dependency at
 all, so the renderer stays usable even if `stb` is dropped.
+
+The texture of the `textures` demo, `assets/textures/wooden_crate.ppm`, is content and
+not a dependency: only the demo layer reads it, the library knows of no file, and no
+library is added to read it. It is a picture by another author, kept beside the JPEG it
+was converted from once, outside the build, since `ReadPpm` reads PPM and nothing reads
+JPEG; `assets/textures/README.md` records its origin. A picture that is not ours needs
+its author's leave to be passed on, which that file is the place to record.
 
 ## 8. Testing
 
@@ -1585,6 +1850,16 @@ Unit tests:
   value; a 5 x 3 buffer has exactly the pixels of a 5 x 3 canvas.
 - `image_io`: PPM write then read round-trips the bytes; PNG write produces a file that
   starts with the PNG signature.
+- `texture`: a `Uv` is the origin unless given; an image without pixels, or with a byte
+  too few or too many, throws; a texture has the size of its image; a texel is three
+  bytes of the image as a color; the origin is the top-left corner, `u` runs right and
+  `v` down; on a texture of 4 x 2 texels `u` = 0.24 is the first texel and 0.25 the
+  second, a texel starting at its left and at its top edge; every point of a texel has
+  the texel's color, nine points of each of sixteen texels; `u = 1` and `v = 1` give the
+  last column and the last row; a coordinate a rounding error outside an edge, far
+  outside it, at `1e300` or infinite is taken to the edge, and nothing wraps around; a
+  picture of four texels and the same picture with every texel repeated 2 x 2 show the
+  same color at the same `(u, v)`; a texture of one texel has one color everywhere.
 - `viewport`: a table of points for a 1920 x 1080 canvas and a 1 x 1 x 1 viewport
   (center, top-right `(0.5, 0.5, 1)`, bottom-left, quarter); the aspect-matched
   viewport maps the top-right corner to `(16/18, 0.5, 1)`; `Fov()` of the default
@@ -1739,7 +2014,37 @@ Unit tests:
     depth 4 show a triangle four times as large, a lamp in front of its point lighting
     the pixel in full; through a depth buffer the nearer of two shows in either order,
     the picture of the filled triangles, and the buffer holds what a filled triangle
-    leaves in it, 0.625 halfway along a side from `1/z` = 1 to 1/4.
+    leaves in it, 0.625 halfway along a side from `1/z` = 1 to 1/4. With a texture:
+    under ambient light of 1 and of 0.5 it is the canvas of `DrawTexturedTriangle` with
+    that light as every vertex's intensity, under both mappings; under a lamp close to
+    the face a texture of one color gives the canvas of the same triangle in that
+    color, shiny; the color is not read, and the mapping is perspective-correct unless
+    given.
+  - `DrawTexturedTriangle` (a 32 x 32 canvas; textures whose every texel has the color
+    (column, row, 200), so that a pixel shows which texel it was painted with): a
+    texture of one color gives the canvas of `DrawShadedTriangle` in that color, for
+    the eleven shapes of the shaded test with three intensities, under both mappings;
+    on the right triangle (0, 0), (8, 0), (0, 8) that shows the texture's origin,
+    top-right and bottom-left corners, linear mapping shows the texel in column x of
+    row y of an 8 x 8 texture at the pixel `(x, y)`, the edges `u = 1` and `v = 1`
+    showing the last column and row, with points that have no depth; the same triangle
+    with `1/z` = 1, 1/4 and 1/2 shows under perspective-correct mapping, at every pixel,
+    the texel of `u = (x/32) / (1/z)`, `v = (y/16) / (1/z)` with
+    `1/z = 1 - 3x/32 - y/16`, the columns 0, 0, 0, 1, 1, 2, 3, 5, 7 along the bottom
+    side, where linear mapping shows 0 to 7 and 7 (a fifth of the way through the
+    texture halfway along the side, not half), and the rows 0, 0, 1, 1, 2, 3, 4, 6, 7 up
+    the left side, while linear mapping draws the picture it draws without depths; for
+    a triangle at one depth, 1, 2 or 4, the two mappings give one canvas; all six
+    vertex orders give one canvas under both mappings, and exchanging the texture
+    coordinates of two vertices gives another; the two triangles of a face of 8 x 8
+    pixel steps show an 8 x 8 texture texel for pixel, its top row along the top and
+    its first column down the left, in either order of drawing; a 2 x 2 texture on the
+    same face is four blocks of one color, and a 16 x 16 texture on a face of 4 pixel
+    steps shows the texels in columns and rows 0, 4, 8, 12 and 15 and no others; the
+    texel is multiplied by the intensity and truncated, (3, 4, 200) at 0.5 giving
+    (1, 2, 100), and clamped by the canvas at 2; through a depth buffer the nearer of
+    two shows in either order, the picture of the filled triangles, and the buffer
+    holds what a filled triangle leaves in it; a face larger than the canvas fills it.
   - `ViewportToCanvas`: the viewport test's table the other way round (the default
     viewport on 1920 x 1080); a 2 x 1 viewport scales each axis by its own ratio;
     truncation toward zero (`33.7 -> 33`, `-33.7 -> -33`, `0.5` and `-0.5` to 0); the
@@ -1780,7 +2085,8 @@ Unit tests:
     the far one first; the buffer holds 1/2 where only the far one is; two objects
     drawn through one shared buffer hide each other and through a buffer each the
     later one shows; a wireframe is drawn whole. A `Triangle` states no normals unless
-    given, and the three primitives draw the same picture whatever normals it states.
+    given, and the three primitives draw the same picture whatever normals it states;
+    the same for its texture coordinates, the texture's origin unless given.
   - `RenderModel` (same canvas and viewport; a lopsided triangle in its own plane
     z = 0): a translation to z = 1 gives the wireframe of its corners and the canvas of
     `RenderObject` on the vertices moved by hand; the transform is applied before the
@@ -1800,7 +2106,9 @@ Unit tests:
     while it moves the vertices; a quarter turn about Y takes normals along +X, +Y and
     +Z to +Z, +Y and -X; the normals come out at unit length under a scaling by 0.5 or
     by 3, under the identity when the model states them 4, 0.25 and 5 long, and turned,
-    scaled and moved at once; a corner without a normal stays without one.
+    scaled and moved at once; a corner without a normal stays without one. A model has
+    no texture unless given one, and a transformed model points to its model's texture
+    and has its texture coordinates.
   - `RenderInstance` (same canvas and viewport; the model's triangle lies in its own
     plane z = 0 and is placed at z = 1): at `(0, 0, 1)` it gives the wireframe of its
     corners and the canvas of `RenderObject` on the vertices moved by hand; a position
@@ -1835,7 +2143,14 @@ Unit tests:
     `NA + 1/2 (NC - NA)`, exactly and not normalized; with two in front both pieces get
     the two normals interpolated half way; a triangle without normals is cut into
     pieces without normals, whichever corner the list starts from and in either
-    winding; a triangle kept whole keeps its normals.
+    winding; a triangle kept whole keeps its normals. Texture coordinates: with one
+    corner in front the two new corners get `uvA + 1/4 (uvB - uvA)` and
+    `uvA + 1/2 (uvC - uvA)`, exactly; with two in front both pieces get the two
+    coordinates interpolated half way; for both shapes and all six corner orders every
+    corner of every piece has, within `1e-12`, the texture coordinates of the place it
+    is at in the triangle, a texture with (0, 0), (1, 0) and (0, 1) at the corners; a
+    triangle kept whole keeps its coordinates and one that states none is cut into
+    pieces that state none.
     `ClipTrianglesAgainstPlane` keeps the order and appends the new vertices after the
     old. `ClipInstanceAgainstPlane` (a 2 x 2 square of two triangles with its bounding
     sphere): in front it is returned equal to itself, behind nothing is returned, and
@@ -1948,7 +2263,16 @@ Unit tests:
     corner and along it at two, cut by the plane `x = 0`, is under Phong shading the
     whole one with everything behind the plane removed, within one level, 135 on the
     cut, under Gouraud shading 135 on the cut where the whole triangle has 95, and under
-    flat and faceted Gouraud shading one shade over the same pixels.
+    flat and faceted Gouraud shading one shade over the same pixels. Painted with a
+    texture: an instance of a textured model, turned 40 degrees so that it leans, scaled
+    and placed off the axis, is for each shading model and each mapping the canvas of
+    `RenderObject` on its placed model; the mapping is perspective-correct unless given,
+    linear mapping lights the same pixels of a leaning triangle with other texels and a
+    triangle that faces the camera with the same; four instances of three models, two
+    with a texture each and one with none, are each painted with their model's; and a
+    textured triangle parallel to the viewport, cut by the plane `x = 0`, is under both
+    mappings pixel for pixel the whole one with everything behind the plane removed, the
+    new corners on the cut showing the texels (8, 4) and (8, 7) of a 16 x 8 texture.
   - Shading, `RenderObject` under lights (one triangle on the viewport plane that faces
     the camera, its corners on the pixels (0, 12), (12, -12) and (-12, -12) and its
     center on (0, -4)): Phong shading by default; under ambient light alone every
@@ -1987,6 +2311,24 @@ Unit tests:
     on a line, or two at one place, draw nothing, nor does an empty object; every
     triangle is lit in its own color; and through a depth buffer the nearer of two
     triangles shows under all four, where painted in list order the later one does.
+    Painted with a texture (the same face, its top showing the middle of the texture's
+    top edge and the corners below its bottom corners): under ambient light of 0.5 every
+    shading model draws the canvas of `DrawTexturedTriangle` through the projected
+    corners with the intensity 0.5, (4, 5, 100) where the texel (9, 10, 200) shows;
+    under a lamp flat shading draws it with the light at the center as all three
+    intensities, Gouraud shading in both forms with the light at each corner, and Phong
+    shading as `DrawPhongTriangle` with the texture, three different pictures; a texture
+    of one color gives under every shading model the canvas of the face in that color,
+    shiny and under a lamp; the color of a textured triangle is not read; without a
+    texture the texture coordinates and the mapping change nothing; a face leaning from
+    z = 1 to z = 2 and 4 is drawn perspective-correct by default and as asked, and
+    linear when asked, each the canvas of the primitive with that mapping, the same
+    pixels with other texels; and through a depth buffer the nearer of two textured
+    triangles shows under all four.
+
+- `demo`: the crate texture is 512 x 512 texels, and seven of them, the four corners
+  among them, have the colors of the file as it was converted, so that a texture
+  converted again or replaced does not change the textured pictures unnoticed.
 
 Golden-image tests:
 
@@ -2005,12 +2347,16 @@ Golden-image tests:
   `clipping_320x180.ppm`, `filled_320x180.ppm` and the four of the shading scene,
   `shading_flat_320x180.ppm`, `shading_gouraud_faceted_320x180.ppm`,
   `shading_gouraud_320x180.ppm` and
-  `shading_phong_320x180.ppm`, are the rasterizer's demos (section
+  `shading_phong_320x180.ppm`, and the two of the textures scene,
+  `textures_perspective_correct_320x180.ppm` and `textures_linear_320x180.ppm`, are the
+  rasterizer's demos (section
   9): every pixel of them comes from `DrawLine`, `DrawFilledTriangle`,
-  `DrawShadedTriangle` or `DrawPhongTriangle`, the objects' through `RenderObject`, the
+  `DrawShadedTriangle`, `DrawPhongTriangle` or `DrawTexturedTriangle`, the objects'
+  through `RenderObject`, the
   instances', the camera
-  scene's, the clipping scene's, the filled cubes' and the shading scene's through
-  `RenderScene`, the last two
+  scene's, the clipping scene's, the filled cubes', the shading scene's and the textures
+  scene's through
+  `RenderScene`, the last three
   through a depth buffer and with back-face culling as well. The 2D
   scenes compute their
   vertices with integer arithmetic and their colors and intensities without any `libm`
@@ -2027,7 +2373,14 @@ Golden-image tests:
   multiplications, divisions and square roots, all of which IEEE arithmetic rounds one
   way (section 9 says how). What differs between platforms in its four references is
   `pow`, in the specular term of the shiny ball, by an amount far inside the test's
-  tolerance.
+  tolerance. The textures scene calls neither `cos` nor `sin` either, its three turns
+  being matrices written out from the sides of whole-number right triangles, and no
+  `pow`: additions, multiplications, divisions and the square roots that normalize the
+  light and the clipping planes. That matters more for it than for any picture before:
+  a pixel shows one texel, and a texture coordinate that came out differently in its
+  last bit, at a pixel where it is within that of the border between two texels, would
+  show the neighbouring texel, a difference of any size. Section 15 has the margins of
+  its vertices.
 - `golden_test.cpp` renders the same scenes and compares every channel of every pixel
   with the reference image. The test passes when no channel differs by more than 1. The
   tolerance absorbs floating-point differences between compilers and standard
@@ -2039,6 +2392,9 @@ Golden-image tests:
   and `render_demo --scene shading --shading <flat|gouraud-faceted|gouraud|phong> ...`
   for the four of the shading scene, the second into
   `shading_gouraud_faceted_320x180.ppm`,
+  and `render_demo --scene textures --texture-mapping <perspective-correct|linear> ...`
+  for the two of the textures scene, into
+  `textures_perspective_correct_320x180.ppm` and `textures_linear_320x180.ppm`,
   from a Release build, and the pictures are reviewed before they are committed. The
   `flat` reference doubles as a regression test: neither the specular nor the shadow code
   path may change the output of an ambient-only scene, `diffuse` pins the shadows of
@@ -2058,17 +2414,26 @@ Golden-image tests:
   pixels are covered in each, and what differs is the light. They are drawn with
   culling, so they would notice a triangle of a sphere, of the cylinder, of a tile or of
   the floor listed the wrong way round. Shading changed no other reference: the fourteen from before it are
-  byte for byte what they were.
+  byte for byte what they were. The two textures references pin one scene under the
+  two mappings: the same 47420 pixels are covered in each, and they differ on 46780 of
+  them, almost every pixel of the floor showing another texel. They are 320 x 180 for a
+  scene composed at 1920 x 1080, six times smaller each way, so in them the crate, too,
+  is drawn far smaller than its texture: they pin the arithmetic, and the picture to
+  look at is the large one. They are drawn with culling, so they would notice a face of
+  the crate or a tile of the floor listed the wrong way round, and a face whose picture
+  was pinned on upside down or mirrored. Textures changed no other reference: the
+  eighteen from before them are byte for byte what they were.
 
 ## 9. Demo application
 
 `render_demo` renders one of the demo pictures to a file:
 
 ```
-render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|filled|shading|axes] [--width N] [--height N] [--distance D] [--shading flat|gouraud-faceted|gouraud|phong] [--output PATH]
+render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|filled|shading|textures|axes] [--width N] [--height N] [--distance D] [--shading flat|gouraud-faceted|gouraud|phong] [--texture-mapping linear|perspective-correct] [--output PATH]
 ```
 
-Defaults: `reflective`, 1920 x 1080, distance 1, Phong shading, `render.png`. The `mirrorball` scene is
+Defaults: `reflective`, 1920 x 1080, distance 1, Phong shading, perspective-correct
+texture mapping, `render.png`. The `mirrorball` scene is
 the project's own composition, built from the same features as the book's scene: a chrome
 ball ringed by six colored spheres of different finishes on a dark polished floor,
 marbles in front, spheres floating above, two point lights for crossing shadows and a
@@ -2256,15 +2621,86 @@ with the round ones the top of a ball projected exactly onto the border between 
 pixels (section 15). At the default distance on a 16:9 canvas the whole floor is in
 view and no triangle is cut by a clipping plane, which matters to this picture: a cut
 floor would be lit as its pieces (3.13), more of them than its two triangles. The
+`textures` scene is the picture of the Textures chapter up to its first filter, and the
+first that is painted: `DrawTexturesScene(canvas, viewport, texture, texture_mapping)`
+draws two instances of two models, a crate and a floor, both painted with the one
+texture it is handed, with
+`RenderScene(..., camera, lights, ShadingModel::kFlat, &depth_buffer, BackFaceCulling::kOn, texture_mapping)`,
+and `--texture-mapping linear|perspective-correct` chooses the mapping,
+perspective-correct when it is not given. The texture is the crate texture,
+`CrateTexture()` of the demo layer: 512 x 512 texels, the side of a wooden crate, a
+frame of four boards around upright planks with one plank nailed across from the
+top-left corner to the bottom-right one. It is one scene with two things to show.
+The first is one texture drawn at the size it suits and at every other size, by one
+method, nearest neighbor filtering (3.14). The crate is a cube of side 2 standing on
+its origin, the whole texture on each of its six faces, the right way up on the four
+walls: the book's textured cube. It stands at (1.75, 0, 5.05), turned about Y by the
+angle of the 8-15-17 triangle, about 28.1 degrees, which shows the camera two of its
+faces about equally. At 1920 x 1080 the edge between those two is 584 pixels high and
+their far edges 404 and 479, and they are 316 to 353 pixels wide, for the 512 x 512
+texels on each: about one and a half texels to a pixel across and about one up and
+down. That is the size the texture was made for, and the crate looks like its
+texture. The floor is 48 x 48 tiles of 4 x 4 in the plane y = 0, each showing the whole
+texture, 192 x 192 in all, turned by the angle of the 5-12-13 triangle, about 22.6
+degrees, so that its boards cross the picture at a slant, and placed with the middle
+of its near edge at (13.95, 0, -30), behind the camera, so that it lies under the
+camera and reaches the horizon wherever the camera looks. It is one object drawn at
+every size there is. At the bottom of the picture, 1.7 from the camera's foot, a texel
+is 4 pixels wide and 3 high, and the wood is made of blocks of one color: the texture
+is drawn larger than it is. Three tenths of the way up, 3 away, it is about right in
+depth and still two and a half times too large across. From there on it is drawn
+smaller and smaller in depth: in the middle row of the picture, 5.5 away, a pixel covers 2.4 texels in depth
+and 0.7 across; a tenth of the picture higher, 8.6 away, 5.6 and 1; at 18 away 25 and
+2; at 41 away 120 and 5; and under the horizon, 150 away, more than 1600 and 17. Each
+pixel shows the one texel its point falls in, so the boards of the tiles' frames, some
+sixty texels wide, are hit by one row of pixels and missed by the next and break up
+into dashes and then dots, and the wood between them turns into noise, patterns that
+are not in the texture. The first is what bilinear filtering mends and the second
+what mipmapping mends, with trilinear filtering for the seams between its levels: the
+rest of the book's chapter, of which nothing is implemented, so that this picture is
+what those steps will change.
+The second thing is the chapter's first half itself, the two mappings. Drawn with
+`--texture-mapping linear` the same scene is the book's Figure 14-3: every face leans
+away from the camera, so on every face the two triangles are each stretched their own
+way and a straight board bends where they meet. On the crate that is slight, a kink in
+the plank across each face and a frame that is wider at one end, as in the book, where
+it takes a close look. On the floor near the camera, where one tile reaches from 2
+away to 6 away, the boards run in zigzags. Perspective-correct mapping, the default, straightens
+all of it (Figure 14-5). At 1920 x 1080 the two pictures cover the same 1701644 pixels
+and differ on 1691163 of them.
+The lights are an ambient light of 0.4 and a directional light of 0.8 toward
+(-1, 2, -1.5), the sun of the shading scene; they light the floor at 0.99 and the two
+faces of the crate that show at 0.87 and 0.65, so that the crate has an edge between
+them. Under those two a flat face has one light value all over, which is why the scene
+is drawn with flat shading, there exact and the cheapest. The camera stands at
+(0, 1.6, 0), its eye lower than the top of the crate, so that the crate's top, which
+it would see at a grazing angle and far too small in one direction, does not show; it
+is turned about X to look down by the angle of the 7-24-25 triangle, about 16.3
+degrees, which puts the horizon 29% of the picture's height above its middle. All
+three turns are matrices written out from the sides of their triangles, by
+`TurnedAboutY(cosine, sine)` and, for the camera, in place, so that as in the shading
+scene no vertex passes through `cos` or `sin`. The camera has the clipping planes of
+its viewport, and they cut the floor, of whose 4608 triangles 2314 are left at
+1920 x 1080: this is the first picture in which a cut face is not lit or shaded
+differently for being cut, a cut tile showing, under perspective-correct mapping, what
+the whole tile shows (3.14). The scene is drawn through a depth buffer and with
+back-face culling, which leaves 4 of the crate's 12 triangles and all of the floor's.
+The floor's place is 13.95 and not 14 because with 14 a corner that the left clipping
+plane cut landed exactly on the border between two rows of pixels (section 15). The
 `axes` scene draws the coordinate axes and corner dots; it exercises the canvas without
 ray tracing. For the ray-traced scenes, the cube, the objects, the instances, the camera
-scene, the clipping scene, the filled cubes and the shading scene the viewport width
+scene, the clipping scene, the filled cubes, the shading scene and the textures scene
+the viewport width
 always matches the canvas aspect ratio,
-and `--distance` zooms them (in the clipping scene and the shading scene it moves the
+and `--distance` zooms them (in the clipping scene, the shading scene and the textures
+scene it moves the
 near plane out with the viewport as well); it has no effect on the 2D pictures.
-`--shading` has an effect on the shading scene alone, the one picture under the
-rasterizer's lights; its four values are `flat`, `gouraud-faceted`, `gouraud` and
-`phong`. The output format follows
+`--shading` has an effect on the shading scene alone, the one picture whose shading
+model is a choice; its four values are `flat`, `gouraud-faceted`, `gouraud` and
+`phong`. `--texture-mapping` has an effect on the textures scene alone, the one
+picture that is painted; its two values are `linear` and `perspective-correct`. The
+texture of the textures scene is not a choice of the command line: the program reads
+it, with `CrateTexture()`, before it starts to draw. The output format follows
 the extension. After every render the program prints two lines: what it drew, at what
 size and into which file, and under it the render time, on a line of its own, where it
 is easy to find and to compare between runs:
@@ -2282,8 +2718,16 @@ rendered 'shading' (gouraud-faceted shading) at 1920x1080 -> faceted.png
 render time: 27.60 ms
 ```
 
+and for a picture that is painted, the texture mapping:
+
+```
+rendered 'textures' (linear texture mapping) at 1920x1080 -> linear.png
+render time: 62.64 ms
+```
+
 The time is that of the
 drawing alone, from the canvas that already exists to the canvas that is not yet saved,
+and for a painted picture from the texture that has already been read,
 in milliseconds to two decimals: most of the rasterized pictures take a few
 milliseconds or less, and in whole milliseconds they all took "0 ms" or "1 ms". It is
 one run on a machine that is doing other things, good for telling 5 ms from 50 and not
@@ -2292,9 +2736,11 @@ non-zero with a message on bad arguments or I/O failure. Argument parsing is han
 is added for it. The scene table in `render_demo.cpp` is the single list of pictures: the
 usage text, the default and the dispatch are derived from it, so a new picture is a new
 row. The shading models are a table of the same kind, each with its name on the command
-line and a line of the usage text, and what the command line says about how a picture is
-drawn, the distance and the shading model, reaches a picture as one small struct of
-which each reads what applies to it.
+line and a line of the usage text, and so are the texture mappings. What a picture is
+drawn with besides the canvas, the distance, the shading model and the texture mapping
+that the command line says and, for a row of the table that is marked as painted, the
+texture that the program has read, reaches a picture as one small struct of which each
+reads what applies to it.
 
 ## 10. Code style and conventions
 
@@ -2318,14 +2764,21 @@ which each reads what applies to it.
 ## 11. Error handling
 
 - Constructor preconditions (canvas size, depth buffer size, viewport dimensions and
-  distance must be positive) throw `std::invalid_argument`.
-- File I/O failures throw `std::runtime_error` with the path in the message.
+  distance must be positive; a texture's image must have positive dimensions and a
+  buffer of their size) throw `std::invalid_argument`.
+- File I/O failures throw `std::runtime_error` with the path in the message. That
+  includes the demo layer's `CrateTexture`, which reads a file: a texture that is
+  missing or is not a PPM is reported with its path before anything is drawn. The
+  picture functions read no files.
 - The ray tracer's render loop, intersection and lighting code never throw and never
   allocate. The rasterizer's `Interpolate` returns a `std::vector`, as in the book: one
   allocation per line, a few per triangle, one per row of a shaded triangle and one more
   per row of a triangle drawn through a depth buffer, and four per row of a Phong
-  triangle, for `1/z` and the three components of the normal; the
-  primitives can only throw if an allocation fails. `RenderScene` builds the scene in
+  triangle, for `1/z` and the three components of the normal, four per row of a
+  textured triangle, for `h`, `1/z` and the two texture coordinates, and six per row of
+  a Phong triangle with a texture; the
+  primitives can only throw if an allocation fails. `Texture::GetTexel` allocates
+  nothing and does not throw. `RenderScene` builds the scene in
   the camera's coordinates as a list of models, one per instance, and clipping returns
   new lists; both allocate per instance, and neither throws otherwise. Back-face
   culling removes triangles from those lists in place and allocates nothing. Under
@@ -2343,7 +2796,12 @@ which each reads what applies to it.
   camera where a pixel is taken back to its point (`UnprojectVertex`). That the normals
   an object states are unit vectors, or interpolated between unit vectors, is a
   precondition of `RenderObject` under lights that `TransformModel` and the clipping
-  see to and nothing checks; so is that the normals of one triangle do not cancel.
+  see to and nothing checks; so is that the normals of one triangle do not cancel. For
+  textures, a texture coordinate that is not a number is asserted where the texel is
+  looked up (`Texture::GetTexel`), and a point without a depth where perspective-correct
+  mapping would divide by it (`DrawTexturedTriangle`). A coordinate outside `[0, 1]` is
+  no error: it is taken to the edge (3.14). That a model's texture outlives the model
+  is a precondition nothing checks.
 
 ## 12. Performance
 
@@ -2366,6 +2824,8 @@ Targets apply to Release builds on a single core. Debug builds have no targets.
 | shading demo, Gouraud, faceted or with the model's normals | 1920 x 1080 | under 80 ms; about 27 ms measured      |
 | shading demo, Phong (the light at 891120 pixels and more) | 1920 x 1080 | under 250 ms; about 74 ms measured      |
 | shading demo, each of the four                   | 320 x 180   | under 15 ms; 1.7, 2.1, 2.1 and 3.8 ms measured   |
+| textures demo, either mapping (2 instances, 2318 of 4620 triangles drawn, a 512 x 512 texture, depth buffer) | 1920 x 1080 | under 200 ms; about 63 ms measured |
+| textures demo, either mapping                    | 320 x 180   | under 20 ms; about 6 ms measured                 |
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
@@ -2406,11 +2866,23 @@ section 4 is meant to absorb these steps as additions:
   `RenderObject` under lights with the book's three shading models, flat, Gouraud and
   Phong, Gouraud in both the forms the chapter shows it in, with the triangles' own
   normals and with the model's, and Phong through `DrawPhongTriangle`, which lights
-  every pixel. Next, in the
-  book's order: textures (which need perspective-correct interpolation, and with it the
-  intensities and the normals of a triangle will be interpolated over the triangle in
-  space rather than over its picture, and those of a clipped triangle will stop
-  depending on where it was cut). The rasterizer casts no shadows and mirrors nothing;
+  every pixel; and textures, the first half of the book's chapter: `Texture`, an image
+  looked up by nearest neighbor filtering, texture coordinates at the corners of a
+  model's triangles, carried through the clipping, a texture per model, and
+  `DrawTexturedTriangle`, which carries the coordinates across a triangle by the linear
+  mapping the chapter starts with or perspective-correct, under every shading model.
+  Next, in the book's order, the second half of that chapter, the filters, each of
+  which mends something the `textures` demo shows: bilinear filtering, for a texture
+  drawn larger than it is (the blocks at the bottom of that picture); mipmapping, for
+  one drawn smaller (the noise toward its horizon); and trilinear filtering, for the
+  seams between the levels of a mipmap. All three change what `GetTexel` returns or
+  which texture it is asked, and so the two `textures` references. Perspective-correct
+  interpolation is applied to texture coordinates only, as in the book; applying it to
+  the intensities and the normals as well, so that they too are interpolated over the
+  triangle in space and those of a clipped triangle stop depending on where it was
+  cut, is possible now that the primitives carry `1/z`, and is not planned: it is not
+  the book's, and it would change the clipping and shading references. The rasterizer
+  casts no shadows and mirrors nothing;
   the book leaves both to the ray tracer. Rotations about X and
   Z are added the way `MakeOYRotationMatrix` is, when a scene needs them; the one
   scene that tilts its camera about X writes the matrix out (section 9).
@@ -2726,6 +3198,89 @@ The judgment calls behind this design, so they are not relitigated by accident.
       lights, steps of an earlier chapter (decision 14).
     - No shadows: the book's rasterizer has none, and `ComputeIllumination` has no scene
       to ask. The `shading` demo is composed without them in mind (section 9).
+19. Textures follow the first half of the book's chapter and its demo, and stop where
+    the chapter's first filter begins. These are the calls that fit them to this code.
+    - The step is "Painting a Crate" and "Perspective-Correct Texture Mapping" and no
+      more: a texel is looked up by nearest neighbor filtering, and bilinear filtering,
+      mipmapping and trilinear filtering are left for steps of their own (section 13).
+      What nearest neighbor filtering does to a texture drawn larger or smaller than it
+      is is therefore not a defect to be worked around here but the behaviour of this
+      step, stated in 3.14, pinned by unit tests and shown by the demo, so that each of
+      the next steps has something to change.
+    - Both of the chapter's mappings are there, as a parameter, `TextureMapping`, where
+      the book's demo has a global switch (`UsePerspectiveCorrectDepth`). The linear
+      one is wrong and is kept for the reason `kGouraudFaceted` is (decision 18): the
+      chapter draws a picture with it, and seeing the planks bend and then straighten
+      is the chapter's first half. The default is perspective-correct everywhere.
+    - Perspective-correct mapping is applied to the texture coordinates and to nothing
+      else, as in the book and in its demo, which goes on interpolating the intensity
+      and the normal over the picture. Doing it for those too was what the roadmap
+      expected of this step; it would have changed the clipping and the shading
+      references for something the book does not do (section 13).
+    - `u/z` at a vertex is `uv.u * inv_z`, a multiplication by the `1/z` the point
+      carries (decision 15), where the demo divides by the vertex's `z`. The two differ
+      in the last bit, and the primitives here know no `z`.
+    - The texture is the model's, not the triangle's. The demo's
+      `Triangle(indexes, color, normals, texture, uvs)` has one per triangle, the same
+      one for every triangle of its cube. One per model is what a crate needs, it is
+      where the specular exponent is (decision 18), and a field per triangle would be
+      copied through every stage of the pipeline. A model with two textures is two
+      models.
+    - A model points to its texture: `const Texture*`, null for none. Not a copy, a
+      texture being three quarters of a megabyte here and `TransformModel` copying the
+      model once per instance. And not an index into a texture list of the scene, the
+      way an instance names its model (decision 11): that would add a list to the
+      parameters of `RenderScene` and of `RenderObject`, which have enough, for a
+      lifetime that is easy to keep, the textures being made before the scene and
+      outliving the call that draws it. The cost is that lifetime, a precondition
+      nothing checks, like the scene's of the ray tracer (5.8).
+    - `Texture` is in `image/`, made of an `Image`, and keeps the image's bytes rather
+      than a `Color` per texel: 786 KB for the crate instead of 6 MB, converted three
+      bytes at a time when a texel is asked for.
+    - `GetTexel` multiplies by the size and rounds down, as the book says, and then
+      keeps the result inside the texture, which the book does not mention. Its demo
+      computes `(u * iw) | 0` and indexes with it, so that `u = 1`, which every face of
+      its cube has along one edge, reads the first texel of the next row, and at the
+      bottom-right corner of the texture a texel beyond the image. Here the edge
+      belongs to the last texel and everything beyond an edge to the edge. Nothing
+      repeats: a floor is paved by geometry, a face per tile with the whole texture on
+      it, which is what the book's per-triangle coordinates describe.
+    - Texture coordinates are a `Uv` per corner of a triangle, where decision 14
+      expected them, beside the intensities and the normals, and reach the primitives
+      on the `Point`, as `h`, `inv_z` and the normal do (decision 9).
+    - One new primitive, `DrawTexturedTriangle`, draws a textured triangle for flat
+      shading and for both forms of Gouraud shading: the texel times an interpolated
+      intensity, which for flat shading is one value at three corners. Phong shading
+      got the texture as a defaulted parameter of `DrawPhongTriangle` instead of a
+      primitive of its own, because the texel and the light of a pixel meet in one
+      loop and a copy of that loop would be a second place to keep right. The shading
+      models stay calls of primitives (decision 18); the demo has one `RenderTriangle`
+      with a branch for the texture inside its loop. The new primitive is in
+      `triangle.h` with the others and shares their helpers.
+    - Only the drawing under lights paints. The `RenderObject` and `RenderScene` that
+      take a triangle primitive draw through a `DrawTriangleFunction`, a function
+      pointer whose signature has a color and no room for a texture, and are steps of
+      earlier chapters (decision 14). A textured scene without lighting is one under an
+      ambient light of 1.
+    - The demo's texture is a file, `assets/textures/wooden_crate.ppm`, read at run
+      time by the demo layer's `CrateTexture`. A PPM because `ReadPpm` exists and a
+      JPEG decoder does not, and is not something to write for one picture or to take
+      a dependency for (section 7): the picture was converted once, outside the build.
+      A file rather than an array compiled in because 786 KB of numbers is no source
+      code. Its place is compiled into the demo library (`CGFS_TEXTURE_DIR`), as the
+      golden directory is into the tests, so the pictures are found from any working
+      directory and the program has no option for it.
+    - The picture functions do not read the file: `DrawTexturesScene` takes a
+      `const Texture&`, as it takes the viewport. A picture is then drawing and
+      nothing else, cannot fail halfway for a missing file, and can be drawn with any
+      texture; and `render_demo` reads the texture before it starts its clock, so that
+      the time it prints is still that of the drawing.
+    - The demo is one scene and one texture on two objects, rather than a good texture
+      and a bad one: what goes wrong is the size a texture is drawn at, and one floor
+      under one camera has every size. The scene is composed at 1920 x 1080, where the
+      crate comes out at about a texel to a pixel; its references are six times
+      smaller, which a reference has to be to stay small, and show a crate that is
+      drawn too small as well (section 8).
 
 ## 15. Implementation notes
 
@@ -2736,7 +3291,7 @@ the perspective projection and objects made of triangles, 2026-11-09 with models
 instances and scenes and, the same day, with model and camera transforms,
 2026-11-16 with clipping and shaded objects, 2026-11-20 with back-face culling,
 2026-11-24 with the lighting layer and with shading, and 2026-11-25 with the shading
-demo as it is now, the larger of its two scenes.
+demo as it is now, the larger of its two scenes, and, the same day, with textures.
 
 - Catch2 is pinned to v3.16.1.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
@@ -3084,6 +3639,81 @@ demo as it is now, the larger of its two scenes.
   all zero and stay so, and a `Point` is 24 bytes larger; neither shows in the timings
   (the clipping demo 55 ms against 54, the filled demo 18.7 against 19, medians of nine
   single runs at 1920 x 1080).
+- The textures demo has 2 instances of 2 models and 4620 triangles: 4608 in the floor,
+  on 2401 vertices, and 12 in the crate, on 8. Back-face culling leaves 4612, all of
+  the floor's and 4 of the crate's, the two faces that show. The clipping then cuts
+  the floor, which reaches under and behind the camera and beyond both sides of the
+  picture: 2314 of its triangles are left at 1920 x 1080, on 1422 vertices, and 2318
+  at 320 x 180, on 1424 (the planes are half a pixel outside the viewport, and a pixel
+  is larger there). The picture covers 1701644 of the 2073600 pixels at 1920 x 1080
+  and 47420 of 57600 at 320 x 180, the same pixels under both mappings; the rest is
+  the sky.
+- Render times of the textures demo, as `render_demo` prints them, nine runs each in
+  one session on 2026-11-25, Release, the smallest, the median and the largest: at
+  1920 x 1080 60.6, 63.3 and 65.5 ms perspective-correct and 59.3, 62.6 and 65.8 ms
+  linear; at 320 x 180 5.2, 6.2 and 7.6 ms and 5.1, 5.8 and 7.6 ms. The two divisions
+  per pixel of perspective-correct mapping do not show beside the rest: four lists
+  per row and a texel fetched from a 786 KB texture at every pixel, 1.7 million of
+  them at the large size. At the small size most of the time is not pixels: 4620
+  triangles are placed and 4608 of them clipped against five planes whatever the size
+  of the canvas. Reading the texture, 786447 bytes, took 0.65 ms the first time in a
+  process, 0.34 the second and 0.04 ms after that, in a loop of five; `render_demo`
+  does it before its clock starts.
+- How large the texture is drawn in the textures demo, measured at 1920 x 1080 by
+  taking the points of the floor that two neighbouring pixels show, up the middle
+  column of the picture; a tile is 4 across for 512 texels, so a texel is 1/128 of a
+  unit. In texels per pixel, across and in depth, with the distance of the floor
+  point from the camera's foot: at the bottom row, 1.73 away, 0.25 and 0.33, a texel
+  4 pixels wide and 3 high; three tenths of the way up, 3.06 away, 0.40 and 0.85;
+  in the middle row, 5.49 away, 0.68 and 2.4; a tenth of the height above it, 8.59
+  away, 1.0 and 5.6; at 18.5 away 2.2 and 25; at 41.2 away 4.7 and 121; and 12 pixels
+  under the horizon, 148 away, 17 and 1642. The ratio of the two is the distance to
+  the point over the camera's height, 1.6 (3.14). The crate's two faces are 316 to
+  353 pixels wide there and 404 to 584 high: 1.5 to 1.6 texels per pixel across and
+  0.9 to 1.3 up and down. At 320 x 180 every figure is six times as many texels per
+  pixel: the crate's faces are 53 to 59 pixels wide.
+- The textures demo's geometry calls neither `cos` nor `sin` (section 9), like the
+  shading demo's, and its coordinates were checked the same way, by a scratch program
+  that included the demo source. With the floor's origin at the round (14, 0, -30) a
+  corner that the left clipping plane cuts off a tile, (-106.72, 33.33, 120) in the
+  camera's coordinates, projected to y = 300 at 1920 x 1080 give or take 6e-14 pixels,
+  the border between two rows. Of 25 places for the floor a twentieth of a unit apart,
+  each with nine for the crate, (13.95, 0, -30) has the widest margins, and the crate's
+  place makes no difference to them, the floor having all the vertices that come
+  near: no projected coordinate of the 2318 triangles drawn comes closer to a pixel
+  boundary than 3.6e-4 pixels at 1920 x 1080 and 4.3e-4 at 320 x 180, and the nearest
+  vertex is 2.1 in front of the camera. The same program checked the winding: every
+  triangle of the crate has its normal pointing away from the crate's middle, and
+  every triangle of the floor has it pointing up.
+- A textured picture has a second kind of border, between two texels: a pixel whose
+  texture coordinate times the size of the texture is a whole number shows one texel
+  or its neighbour by the last bit. A scratch program drew the demo with a copy of
+  `GetTexel` that kept count. Under perspective-correct mapping no coordinate of the
+  55537 lookups at 320 x 180 comes closer to such a border than 2.2e-6 texels, and
+  none of the 1954518 at 1920 x 1080 closer than 2e-7, where the rounding of a
+  coordinate is about 1e-13 of it: the quotient of two running sums lands on nothing
+  in particular. Under linear mapping it does: 1738 of the lookups at 320 x 180 are
+  within 1e-6 texels of a border and 1731 of those within 1e-12, and at 1920 x 1080
+  11360 and 10474. A coordinate that runs from 0 to 1 by equal steps over n rows or
+  pixels is k/n after k of them, and 512 k/n is a whole number for every k when n is a
+  power of two and for some k when n is any other even number: the small tiles in the
+  distance. Which texel such a pixel shows is decided by the running sums of
+  `Interpolate`, additions after one division, which IEEE arithmetic rounds one way
+  everywhere, so the linear reference is as reproducible as the others; it is the
+  one that would notice if `Interpolate` computed its values any other way.
+- Textures changed no picture that is not painted: the eighteen earlier references
+  and the nineteen pictures at 640 x 360, at 321 x 181 and at 1920 x 1080 are byte for
+  byte what they were, compared with renders of the build before them. A `Point` is
+  16 bytes larger and a `Triangle` 48, and `DrawPhongTriangle` asks at every pixel
+  whether it has a texture; none of it shows in the timings, medians of nine single
+  runs at 1920 x 1080 taken alternately from the two builds: the clipping demo 52.3 ms
+  before and 53.7 after, the filled demo 18.5 and 18.5, the shading demo 23.2 and 23.8
+  flat, 28.2 and 27.8 Gouraud and 77.6 and 76.1 Phong.
+- The crate texture is a picture by another author, converted once from the JPEG that
+  lies beside it (`assets/textures/README.md`). The PPM is what the build reads and
+  what the tests pin, seven texels of it: converting the JPEG again with another
+  decoder may give bytes that differ by a level here and there, and with them two
+  references.
 - The `.clang-format` file is in place and clang-format 18 is now installed on the
   development machine, but the sources were formatted by hand to its rules and
   `clang-format --dry-run` still reports a handful of differences in older files. A

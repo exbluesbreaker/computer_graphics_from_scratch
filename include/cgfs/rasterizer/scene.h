@@ -85,7 +85,7 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
 ///                    TransformLight(L, M_camera)
 ///     culled, clipped as above
 ///     for each instance C of clipped:
-///                    RenderObject(C, lit_by, shading_model, depth_buffer)
+///                    RenderObject(C, lit_by, shading_model, depth_buffer, texture_mapping)
 ///
 /// `lights` are given in the world's coordinates, where the instances are placed and the
 /// camera stands. The light on a surface depends on where the surface, the lights and
@@ -112,11 +112,21 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
 /// its pieces: each piece has its own corners, with the normals of the whole triangle
 /// interpolated to them, and under flat shading its own center.
 ///
+/// A model with a texture (see Model) is painted with it wherever it is placed: its
+/// instances show the texture in place of the colors of their triangles, lit like
+/// everything else. The textures are not part of the lists here; a model points to its
+/// own, which must be there while the scene is drawn. `texture_mapping` is how texture
+/// coordinates are carried across a triangle (see TextureMapping): perspective-correct
+/// unless the caller asks for the linear mapping, which is wrong for every face that
+/// leans away from the camera and is there to show that. It changes nothing in a scene
+/// without textures.
+///
 /// Preconditions: as above.
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
                  std::span<const Instance> instances, const Camera& camera,
                  std::span<const Light> lights, ShadingModel shading_model = ShadingModel::kPhong,
                  DepthBuffer* depth_buffer = nullptr,
-                 BackFaceCulling back_face_culling = BackFaceCulling::kOn);
+                 BackFaceCulling back_face_culling = BackFaceCulling::kOn,
+                 TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
 
 }  // namespace cgfs

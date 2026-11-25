@@ -3,6 +3,8 @@
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/image/image_io.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/lighting/illumination.h>
 #include <cgfs/lighting/light.h>
 #include <cgfs/math/vec3.h>
@@ -10,12 +12,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <utility>
 #include <vector>
 
 #include "rasterizer/pixel_helpers.h"
+#include "support/address_texture.h"
 #include "support/test_helpers.h"
 
 using cgfs::AmbientLight;
@@ -28,17 +32,23 @@ using cgfs::DrawFilledTriangle;
 using cgfs::DrawLine;
 using cgfs::DrawPhongTriangle;
 using cgfs::DrawShadedTriangle;
+using cgfs::DrawTexturedTriangle;
 using cgfs::DrawWireframeTriangle;
+using cgfs::Image;
 using cgfs::kMatte;
 using cgfs::Light;
 using cgfs::Point;
 using cgfs::PointLight;
 using cgfs::Rgb8;
+using cgfs::Texture;
+using cgfs::TextureMapping;
 using cgfs::ToRgb8;
 using cgfs::Vec3;
 using cgfs::Viewport;
+using cgfs_test::AddressTexture;
 using cgfs_test::Bytes;
 using cgfs_test::LitPixels;
+using cgfs_test::PixelOf;
 using cgfs_test::PixelsOf;
 using namespace cgfs::colors;
 
@@ -814,4 +824,450 @@ TEST_CASE("DrawPhongTriangle: the depth buffer remembers the triangle as for a f
         }
     }
     CHECK(lit_depths.InvZ(4, 0) == 0.625);  // halfway along the bottom side: z = 1.6
+}
+
+// --- Painted with a texture --------------------------------------------------------------
+//
+// The textures of these tests say in every texel where it is (AddressTexture): a pixel
+// drawn at full intensity shows the column of its texel in its red channel and the row
+// in its green one.
+
+namespace {
+
+constexpr TextureMapping kBothMappings[] = {TextureMapping::kLinear,
+                                            TextureMapping::kPerspectiveCorrect};
+
+// The same point showing the point (u, v) of the texture.
+Point Showing(Point p, double u, double v) {
+    p.uv = {u, v};
+    return p;
+}
+
+// A fresh black canvas with one textured triangle on it.
+Canvas CanvasWithTexturedTriangle(Point p0, Point p1, Point p2, const Texture& texture,
+                                  TextureMapping texture_mapping) {
+    Canvas canvas(32, 32, kBlack);
+    DrawTexturedTriangle(canvas, p0, p1, p2, texture, texture_mapping);
+    return canvas;
+}
+
+// The right triangle with the vertical side x = 0 and the hypotenuse from (8, 0) to
+// (0, 8), pinned onto a texture by its corners: the right angle shows the texture's
+// origin, the corner along x its top-right corner and the corner along y its
+// bottom-left one. On the canvas u then runs with x and v with y.
+const Point kTexturedA = Showing({0, 0}, 0.0, 0.0);
+const Point kTexturedB = Showing({8, 0}, 1.0, 0.0);
+const Point kTexturedC = Showing({0, 8}, 0.0, 1.0);
+
+// A fresh black canvas with a square face on it, the pixels from (0, 0) to (side, side),
+// as the two triangles of a model's face: the corners show the texture's top-left,
+// top-right, bottom-right and bottom-left corners, clockwise from the top left, and the
+// triangles share the diagonal from the top left to the bottom right.
+Canvas CanvasWithTexturedFace(int side, const Texture& texture, bool lower_triangle_first = false) {
+    const Point top_left = Showing({0, side}, 0.0, 0.0);
+    const Point top_right = Showing({side, side}, 1.0, 0.0);
+    const Point bottom_right = Showing({side, 0}, 1.0, 1.0);
+    const Point bottom_left = Showing({0, 0}, 0.0, 1.0);
+    Canvas canvas(32, 32, kBlack);
+    if (lower_triangle_first) {
+        DrawTexturedTriangle(canvas, top_left, bottom_right, bottom_left, texture,
+                             TextureMapping::kLinear);
+    }
+    DrawTexturedTriangle(canvas, top_left, top_right, bottom_right, texture,
+                         TextureMapping::kLinear);
+    if (!lower_triangle_first) {
+        DrawTexturedTriangle(canvas, top_left, bottom_right, bottom_left, texture,
+                             TextureMapping::kLinear);
+    }
+    return canvas;
+}
+
+}  // namespace
+
+TEST_CASE("DrawTexturedTriangle: a texture of one color is the shaded triangle in that color",
+          "[rasterizer]") {
+    static_assert(Point{3, 4}.uv == cgfs::Uv{0.0, 0.0}, "a Point shows the texture's origin");
+
+    // The shapes of the shaded-triangle test, the rows without pixels among them, each
+    // with three intensities and at one depth. Whatever the texture coordinates, every
+    // texel is the one color, so what is left is the fill and the intensities.
+    constexpr Color kOrange{255.0, 128.0, 0.0};
+    const Texture plain(Image{.width = 1, .height = 1, .rgb = {255, 128, 0}});
+    const Point triangles[][3] = {
+        {{0, 0}, {4, 0}, {0, 4}},               // a right triangle
+        {{-3, -2}, {4, 1}, {0, 5}},             // a general one
+        {{0, 0}, {4, 4}, {0, 4}},               // the long side on the left
+        {{0, 0}, {-4, 4}, {0, 4}},              // the long side on the right
+        {{0, 6}, {0, 0}, {2, 2}},               // fractional x on the short sides
+        {{-2, 0}, {2, 0}, {0, 2}},              // flat bottom
+        {{-2, 2}, {2, 2}, {0, 0}},              // flat top
+        {{0, 0}, {0, 3}, {0, 6}},               // collinear
+        {{-100, -100}, {100, -100}, {0, 100}},  // beyond the canvas
+        {{0, 0}, {3, 0}, {1, 1}},               // a skipped lower row
+        {{-6, -6}, {-6, -5}, {-5, 2}},          // a skipped apex row
+    };
+    for (const TextureMapping texture_mapping : kBothMappings) {
+        for (const auto& [p0, p1, p2] : triangles) {
+            INFO("triangle (" << p0.x << ", " << p0.y << ") (" << p1.x << ", " << p1.y << ") ("
+                              << p2.x << ", " << p2.y << "), mapping "
+                              << static_cast<int>(texture_mapping));
+            Point a = Showing(AtDepth(p0, 0.5), 0.0, 0.0);
+            Point b = Showing(AtDepth(p1, 0.5), 1.0, 0.0);
+            Point c = Showing(AtDepth(p2, 0.5), 0.0, 1.0);
+            a.h = 0.25;
+            b.h = 0.5;
+            c.h = 1.0;
+            Canvas shaded(32, 32, kBlack);
+            DrawShadedTriangle(shaded, a, b, c, kOrange);
+            CHECK(Bytes(CanvasWithTexturedTriangle(a, b, c, plain, texture_mapping)) ==
+                  Bytes(shaded));
+        }
+    }
+}
+
+TEST_CASE(
+    "DrawTexturedTriangle: linear mapping interpolates u and v along the sides and then "
+    "along every row",
+    "[rasterizer]") {
+    // Every value is a multiple of 1/8, so the interpolation is exact: u = x / 8 and
+    // v = y / 8 at the pixel (x, y), which on a texture of 8 x 8 texels is the texel in
+    // column x of row y. The corners along the axes show u = 1 and v = 1, the far edges
+    // of the texture, which belong to its last column and row. The points have no depth:
+    // linear mapping does not ask for one.
+    const Texture texture = AddressTexture(8, 8);
+    const Canvas canvas = CanvasWithTexturedTriangle(kTexturedA, kTexturedB, kTexturedC, texture,
+                                                     TextureMapping::kLinear);
+    for (int y = 0; y <= 8; ++y) {
+        for (int x = 0; x + y <= 8; ++x) {
+            INFO("pixel (" << x << ", " << y << ")");
+            CHECK(canvas.GetPixel(x, y) == PixelOf(std::min(x, 7), std::min(y, 7)));
+        }
+    }
+    CHECK(LitPixels(canvas).size() == 45);  // the pixels of the filled triangle
+}
+
+TEST_CASE(
+    "DrawTexturedTriangle: perspective-correct mapping interpolates u/z and v/z and "
+    "divides by 1/z",
+    "[rasterizer]") {
+    // The same triangle leaning away from the camera: the right angle at z = 1, the
+    // corner along x at z = 4 and the corner along y at z = 2. Over the canvas
+    // 1/z = 1 - 3x/32 - y/16, u/z = x/32 and v/z = y/16, all exact, and the texture
+    // coordinates of a pixel are the quotients.
+    const Texture texture = AddressTexture(8, 8);
+    const Point a = AtDepth(kTexturedA, 1.0);
+    const Point b = AtDepth(kTexturedB, 0.25);
+    const Point c = AtDepth(kTexturedC, 0.5);
+    const Canvas canvas =
+        CanvasWithTexturedTriangle(a, b, c, texture, TextureMapping::kPerspectiveCorrect);
+    for (int y = 0; y <= 8; ++y) {
+        for (int x = 0; x + y <= 8; ++x) {
+            const double inv_z = 1.0 - 3.0 * x / 32.0 - y / 16.0;
+            const double u = (x / 32.0) / inv_z;
+            const double v = (y / 16.0) / inv_z;
+            INFO("pixel (" << x << ", " << y << "): (u, v) = (" << u << ", " << v << ")");
+            CHECK(canvas.GetPixel(x, y) == ToRgb8(texture.GetTexel(u, v)));
+        }
+    }
+    CHECK(LitPixels(canvas).size() == 45);
+
+    // Along the bottom side, which runs from z = 1 to z = 4, u = x / (32 - 3x): the
+    // texture is drawn out near the camera and crowded together far from it. Halfway
+    // along the picture of the side is a fifth of the way along the side, z = 1.6, and
+    // shows u = 1/5, the second texel of eight; linear mapping shows the fifth there.
+    const int along_bottom[] = {0, 0, 0, 1, 1, 2, 3, 5, 7};
+    for (int x = 0; x <= 8; ++x) {
+        INFO("pixel (" << x << ", 0)");
+        CHECK(canvas.GetPixel(x, 0) == PixelOf(along_bottom[x], 0));
+    }
+    // Along the left side, from z = 1 to z = 2, v = y / (16 - y).
+    const int along_left[] = {0, 0, 1, 1, 2, 3, 4, 6, 7};
+    for (int y = 0; y <= 8; ++y) {
+        INFO("pixel (0, " << y << ")");
+        CHECK(canvas.GetPixel(0, y) == PixelOf(0, along_left[y]));
+    }
+
+    // Linear mapping does not look at the depths and draws the picture of the test
+    // above, which is right only for a triangle that does not lean.
+    const Canvas linear = CanvasWithTexturedTriangle(a, b, c, texture, TextureMapping::kLinear);
+    CHECK(Bytes(linear) == Bytes(CanvasWithTexturedTriangle(kTexturedA, kTexturedB, kTexturedC,
+                                                            texture, TextureMapping::kLinear)));
+    CHECK(linear.GetPixel(4, 0) == PixelOf(4, 0));
+    CHECK(Bytes(linear) != Bytes(canvas));
+}
+
+TEST_CASE(
+    "DrawTexturedTriangle: for a triangle parallel to the viewport the two mappings are "
+    "one picture",
+    "[rasterizer]") {
+    // With one depth at all three vertices u/z is u times a constant, and dividing by
+    // 1/z gives u back. The depths are powers of two, so it comes back exactly.
+    const Texture texture = AddressTexture(16, 16);
+    for (const double inv_z : {1.0, 0.5, 0.25}) {
+        INFO("1/z = " << inv_z);
+        const Point a = AtDepth(Showing({-9, -7}, 0.1, 0.9), inv_z);
+        const Point b = AtDepth(Showing({10, -2}, 0.95, 0.7), inv_z);
+        const Point c = AtDepth(Showing({-1, 11}, 0.4, 0.05), inv_z);
+        const Canvas linear = CanvasWithTexturedTriangle(a, b, c, texture, TextureMapping::kLinear);
+        const Canvas correct =
+            CanvasWithTexturedTriangle(a, b, c, texture, TextureMapping::kPerspectiveCorrect);
+        CHECK(Bytes(correct) == Bytes(linear));
+        CHECK(LitPixels(linear).size() > 100);
+    }
+}
+
+TEST_CASE(
+    "DrawTexturedTriangle: the vertex order does not matter and the texture coordinates "
+    "stay with their vertices",
+    "[rasterizer]") {
+    const Texture texture = AddressTexture(16, 16);
+    for (const TextureMapping texture_mapping : kBothMappings) {
+        INFO("mapping " << static_cast<int>(texture_mapping));
+        const Point a = AtDepth(Showing({-9, -7}, 0.1, 0.9), 1.0);
+        Point b = AtDepth(Showing({10, -2}, 0.95, 0.7), 0.5);
+        Point c = AtDepth(Showing({-1, 11}, 0.4, 0.05), 0.25);
+        const auto draw = [&](Point p0, Point p1, Point p2) {
+            return Bytes(CanvasWithTexturedTriangle(p0, p1, p2, texture, texture_mapping));
+        };
+        const std::vector<std::uint8_t> reference = draw(a, b, c);
+        CHECK(draw(a, c, b) == reference);
+        CHECK(draw(b, a, c) == reference);
+        CHECK(draw(b, c, a) == reference);
+        CHECK(draw(c, a, b) == reference);
+        CHECK(draw(c, b, a) == reference);
+
+        // Exchanging the texture coordinates of two vertices is another picture.
+        std::swap(b.uv, c.uv);
+        CHECK(draw(a, b, c) != reference);
+    }
+}
+
+TEST_CASE(
+    "DrawTexturedTriangle: the two triangles of a face show the whole texture, the right "
+    "way up",
+    "[rasterizer]") {
+    // A face of 8 x 8 pixel steps and a texture of 8 x 8 texels: every texel on a pixel
+    // of its own, the texture's top row along the top of the face and its first column
+    // down the left side. The face's last column and its bottom row are at u = 1 and
+    // v = 1, and show the last texels once more.
+    const Texture texture = AddressTexture(8, 8);
+    const Canvas canvas = CanvasWithTexturedFace(8, texture);
+    for (int y = 0; y <= 8; ++y) {
+        for (int x = 0; x <= 8; ++x) {
+            INFO("pixel (" << x << ", " << y << ")");
+            CHECK(canvas.GetPixel(x, y) == PixelOf(std::min(x, 7), std::min(8 - y, 7)));
+        }
+    }
+    CHECK(LitPixels(canvas).size() == 81);
+
+    // The two triangles agree on the texels of the diagonal they share, since both
+    // interpolate it from the same two corners: either may be drawn last.
+    CHECK(Bytes(CanvasWithTexturedFace(8, texture, true)) == Bytes(canvas));
+}
+
+TEST_CASE("DrawTexturedTriangle: a texture drawn larger than it is shows its texels as blocks",
+          "[rasterizer]") {
+    // Four texels on a face of 8 x 8 pixel steps: every pixel takes the color of the one
+    // texel its point falls in, however near the next texel is, so the face is four
+    // blocks of one color each with sharp borders between them. Nearest neighbor
+    // filtering; what bilinear filtering is for.
+    const Texture texture = AddressTexture(2, 2);
+    const Canvas canvas = CanvasWithTexturedFace(8, texture);
+    for (int y = 0; y <= 8; ++y) {
+        for (int x = 0; x <= 8; ++x) {
+            INFO("pixel (" << x << ", " << y << ")");
+            CHECK(canvas.GetPixel(x, y) == PixelOf(x < 4 ? 0 : 1, y > 4 ? 0 : 1));
+        }
+    }
+}
+
+TEST_CASE("DrawTexturedTriangle: a texture drawn smaller than it is shows one texel in many",
+          "[rasterizer]") {
+    // Sixteen texels across on a face of 4 pixel steps: a pixel covers four texels each
+    // way and shows the one its own point falls in, the texel in column 4x. The other
+    // fifteen of every sixteen are never looked at, whatever is in them. What mipmapping
+    // is for.
+    const Texture texture = AddressTexture(16, 16);
+    const Canvas canvas = CanvasWithTexturedFace(4, texture);
+    for (int y = 0; y <= 4; ++y) {
+        for (int x = 0; x <= 4; ++x) {
+            INFO("pixel (" << x << ", " << y << ")");
+            CHECK(canvas.GetPixel(x, y) == PixelOf(std::min(4 * x, 15), std::min(4 * (4 - y), 15)));
+        }
+    }
+}
+
+TEST_CASE("DrawTexturedTriangle: the texel is multiplied by the intensity", "[rasterizer]") {
+    const Texture texture = AddressTexture(8, 8);
+    Point a = kTexturedA;
+    Point b = kTexturedB;
+    Point c = kTexturedC;
+    a.h = 0.5;
+    b.h = 0.5;
+    c.h = 0.5;
+    const Canvas canvas = CanvasWithTexturedTriangle(a, b, c, texture, TextureMapping::kLinear);
+    for (int y = 0; y <= 8; ++y) {
+        for (int x = 0; x + y <= 8; ++x) {
+            INFO("pixel (" << x << ", " << y << ")");
+            CHECK(canvas.GetPixel(x, y) ==
+                  ToRgb8(texture.GetTexel(x / 8.0, y / 8.0) * 0.5));  // halved, then truncated
+        }
+    }
+    CHECK(canvas.GetPixel(3, 4) == Rgb8{1, 2, 100});
+
+    // An intensity past 1 is clamped by the canvas only, like any color.
+    a.h = 2.0;
+    b.h = 2.0;
+    c.h = 2.0;
+    const Canvas bright = CanvasWithTexturedTriangle(a, b, c, texture, TextureMapping::kLinear);
+    CHECK(bright.GetPixel(3, 4) == Rgb8{6, 8, 255});
+}
+
+TEST_CASE("DrawTexturedTriangle: with a depth buffer the nearer triangle shows, in either order",
+          "[rasterizer]") {
+    // The two triangles of the filled test, each in a texture of its color.
+    const Texture red(Image{.width = 1, .height = 1, .rgb = {255, 0, 0}});
+    const Texture blue(Image{.width = 1, .height = 1, .rgb = {0, 0, 255}});
+    for (const TextureMapping texture_mapping : kBothMappings) {
+        INFO("mapping " << static_cast<int>(texture_mapping));
+        const auto draw = [&](bool near_first, bool depth_buffered) {
+            Canvas canvas(32, 32, kBlack);
+            DepthBuffer depth_buffer(canvas);
+            DepthBuffer* buffer = depth_buffered ? &depth_buffer : nullptr;
+            const auto textured = [&](const Flat& flat, const Texture& texture) {
+                DrawTexturedTriangle(canvas, flat.a, flat.b, flat.c, texture, texture_mapping,
+                                     buffer);
+            };
+            if (near_first) {
+                textured(kNear, red);
+            }
+            textured(kFar, blue);
+            if (!near_first) {
+                textured(kNear, red);
+            }
+            return canvas;
+        };
+        const Canvas near_then_far = draw(true, true);
+        CHECK(Bytes(near_then_far) == Bytes(draw(false, true)));
+        // The filled triangles' picture through a depth buffer, and the painter's with
+        // the far one first; without a buffer the later triangle shows.
+        CHECK(Bytes(near_then_far) == Bytes(CanvasWithFlats({kNear, kFar}, true)));
+        CHECK(Bytes(near_then_far) == Bytes(draw(false, false)));
+        CHECK(Bytes(near_then_far) != Bytes(draw(true, false)));
+    }
+}
+
+TEST_CASE("DrawTexturedTriangle: the depth buffer remembers the triangle as for a filled one",
+          "[rasterizer]") {
+    const Texture texture = AddressTexture(8, 8);
+    const Point a = AtDepth(kTexturedA, 1.0);
+    const Point b = AtDepth(kTexturedB, 0.25);
+    const Point c = AtDepth(kTexturedC, 0.5);
+    Canvas filled(32, 32, kBlack);
+    DepthBuffer filled_depths(filled);
+    DrawFilledTriangle(filled, a, b, c, kGreen, &filled_depths);
+
+    for (const TextureMapping texture_mapping : kBothMappings) {
+        INFO("mapping " << static_cast<int>(texture_mapping));
+        Canvas textured(32, 32, kBlack);
+        DepthBuffer textured_depths(textured);
+        DrawTexturedTriangle(textured, a, b, c, texture, texture_mapping, &textured_depths);
+        // The same pixels, with the picture that is drawn without a buffer.
+        CHECK(LitPixels(textured) == LitPixels(filled));
+        CHECK(Bytes(textured) ==
+              Bytes(CanvasWithTexturedTriangle(a, b, c, texture, texture_mapping)));
+        for (int x = -16; x < 16; ++x) {
+            for (int y = -16; y < 16; ++y) {
+                CHECK(textured_depths.InvZ(x, y) == filled_depths.InvZ(x, y));
+            }
+        }
+        CHECK(textured_depths.InvZ(4, 0) == 0.625);  // halfway along the bottom side: z = 1.6
+    }
+}
+
+TEST_CASE("DrawTexturedTriangle: a triangle may reach beyond the canvas", "[rasterizer]") {
+    // A face much larger than the canvas: what fits is drawn, the middle of the texture
+    // in the middle of the canvas.
+    const Texture texture = AddressTexture(2, 2);
+    Canvas canvas(32, 32, kBlack);
+    const Point top_left = Showing({-100, 100}, 0.0, 0.0);
+    const Point top_right = Showing({100, 100}, 1.0, 0.0);
+    const Point bottom_right = Showing({100, -100}, 1.0, 1.0);
+    const Point bottom_left = Showing({-100, -100}, 0.0, 1.0);
+    DrawTexturedTriangle(canvas, top_left, top_right, bottom_right, texture,
+                         TextureMapping::kLinear);
+    DrawTexturedTriangle(canvas, top_left, bottom_right, bottom_left, texture,
+                         TextureMapping::kLinear);
+    CHECK(LitPixels(canvas).size() == 32 * 32);
+    CHECK(canvas.GetPixel(-10, 10) == PixelOf(0, 0));
+    CHECK(canvas.GetPixel(10, 10) == PixelOf(1, 0));
+    CHECK(canvas.GetPixel(-10, -10) == PixelOf(0, 1));
+    CHECK(canvas.GetPixel(10, -10) == PixelOf(1, 1));
+}
+
+TEST_CASE("DrawPhongTriangle: with a texture every pixel is its texel times its light",
+          "[rasterizer]") {
+    const Texture texture = AddressTexture(8, 8);
+    const Point a = AtDepth(OnPlane(kTexturedA), 1.0);
+    const Point b = AtDepth(OnPlane(kTexturedB), 0.25);
+    const Point c = AtDepth(OnPlane(kTexturedC), 0.5);
+
+    // Under ambient light the light is the same at every pixel, and the picture is that
+    // of DrawTexturedTriangle with the light as the intensity of every vertex, texel for
+    // texel, whichever way the texture is carried across.
+    for (const TextureMapping texture_mapping : kBothMappings) {
+        for (const double light : {1.0, 0.5}) {
+            INFO("mapping " << static_cast<int>(texture_mapping) << ", ambient light " << light);
+            const std::vector<Light> lights = {AmbientLight{.intensity = light}};
+            Canvas lit(32, 32, kBlack);
+            DrawPhongTriangle(lit, kPhongViewport, a, b, c, kWhite, kMatte, lights, nullptr,
+                              &texture, texture_mapping);
+            Point ha = a;
+            Point hb = b;
+            Point hc = c;
+            ha.h = light;
+            hb.h = light;
+            hc.h = light;
+            CHECK(Bytes(lit) ==
+                  Bytes(CanvasWithTexturedTriangle(ha, hb, hc, texture, texture_mapping)));
+        }
+    }
+
+    // Under a lamp close to the face every pixel has its own light, the light the same
+    // triangle has in one color: a texture of one color is that color.
+    const std::vector<Light> lamp = {
+        AmbientLight{.intensity = 0.1},
+        PointLight{.intensity = 0.8, .position = {0.0625, 0.0625, 0.75}}};
+    constexpr Color kOrange{255.0, 128.0, 0.0};
+    const Texture plain(Image{.width = 1, .height = 1, .rgb = {255, 128, 0}});
+    Canvas painted(32, 32, kBlack);
+    DrawPhongTriangle(painted, kPhongViewport, a, b, c, kWhite, 20.0, lamp, nullptr, &plain);
+    const Canvas colored = CanvasWithPhongTriangle(a, b, c, lamp, 20.0, kOrange);
+    CHECK(Bytes(painted) == Bytes(colored));
+    CHECK(LitPixels(painted).size() == 45);
+}
+
+TEST_CASE(
+    "DrawPhongTriangle: with a texture the color is not read, and perspective-correct "
+    "mapping is the default",
+    "[rasterizer]") {
+    const Texture texture = AddressTexture(8, 8);
+    const Point a = AtDepth(OnPlane(kTexturedA), 1.0);
+    const Point b = AtDepth(OnPlane(kTexturedB), 0.25);
+    const Point c = AtDepth(OnPlane(kTexturedC), 0.5);
+    const std::vector<Light> lights = {AmbientLight{.intensity = 1.0}};
+    const auto draw = [&](Color color) {
+        Canvas canvas(32, 32, kBlack);
+        DrawPhongTriangle(canvas, kPhongViewport, a, b, c, color, kMatte, lights, nullptr,
+                          &texture);
+        return canvas;
+    };
+    CHECK(Bytes(draw(kRed)) == Bytes(draw(kBlue)));
+    CHECK(Bytes(draw(kRed)) ==
+          Bytes(CanvasWithTexturedTriangle(a, b, c, texture, TextureMapping::kPerspectiveCorrect)));
+
+    // And DrawTexturedTriangle's default is the same.
+    Canvas by_default(32, 32, kBlack);
+    DrawTexturedTriangle(by_default, a, b, c, texture);
+    CHECK(Bytes(by_default) == Bytes(draw(kRed)));
 }

@@ -4,6 +4,8 @@
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/image/image_io.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/lighting/light.h>
 #include <cgfs/math/bounding_sphere.h>
 #include <cgfs/math/mat4.h>
@@ -28,6 +30,7 @@
 #include <vector>
 
 #include "rasterizer/pixel_helpers.h"
+#include "support/address_texture.h"
 #include "support/test_helpers.h"
 
 using cgfs::AmbientLight;
@@ -53,11 +56,16 @@ using cgfs::RenderObject;
 using cgfs::RenderScene;
 using cgfs::Rgb8;
 using cgfs::ShadingModel;
+using cgfs::Texture;
+using cgfs::TextureMapping;
 using cgfs::TransformModel;
+using cgfs::Uv;
 using cgfs::Vec3;
 using cgfs::Viewport;
+using cgfs_test::AddressTexture;
 using cgfs_test::Bytes;
 using cgfs_test::LitPixels;
+using cgfs_test::PixelOf;
 using namespace cgfs::colors;
 
 namespace {
@@ -1043,5 +1051,161 @@ TEST_CASE("RenderScene under lights: a triangle cut by a clipping plane is lit a
         const Canvas cut_plain = CanvasWithLitScene({model}, {kAhead}, sun, shading_model, cutting);
         CHECK(LitPixels(cut_plain).size() == kept);
         CHECK(EveryLitPixelIs(cut_plain, Rgb8{191, 191, 191}));
+    }
+}
+
+// --- Painted with a texture --------------------------------------------------------------
+
+namespace {
+
+// The facing triangle painted with `texture`: its top shows the middle of the texture's
+// top edge and the corners below its bottom-right and bottom-left corners.
+Model TexturedTriangle(const Texture& texture) {
+    Model model = FacingTriangle();
+    model.triangles[0].uvs = {Uv{0.5, 0.0}, Uv{1.0, 1.0}, Uv{0.0, 1.0}};
+    model.texture = &texture;
+    return model;
+}
+
+// A fresh black canvas with the scene drawn under full ambient light, flat shaded,
+// through a depth buffer of its own, its textures carried across by `texture_mapping`.
+Canvas CanvasWithTexturedScene(const std::vector<Model>& models,
+                               const std::vector<Instance>& instances,
+                               TextureMapping texture_mapping, const Camera& camera = Camera{}) {
+    const std::vector<Light> lights = {AmbientLight{.intensity = 1.0}};
+    Canvas canvas(kSize, kSize, kBlack);
+    DepthBuffer depth_buffer(canvas);
+    RenderScene(canvas, TestViewport(), models, instances, camera, lights, ShadingModel::kFlat,
+                &depth_buffer, BackFaceCulling::kOn, texture_mapping);
+    return canvas;
+}
+
+}  // namespace
+
+TEST_CASE(
+    "RenderScene under lights: an instance of a textured model is painted as RenderObject "
+    "paints its placed model",
+    "[rasterizer][shading]") {
+    const Texture texture = AddressTexture(16, 16);
+    const Model model = TexturedTriangle(texture);
+    const std::vector<Model> models = {model};
+    // Turned about Y, so that it leans away from the camera and the two mappings differ.
+    const Instance instance{.model = 0,
+                            .position = {0.125, -0.0625, 1.0},
+                            .orientation = MakeOYRotationMatrix(40.0),
+                            .scale = 0.75};
+    for (const TextureMapping texture_mapping :
+         {TextureMapping::kLinear, TextureMapping::kPerspectiveCorrect}) {
+        for (const ShadingModel shading_model : kEveryShadingModel) {
+            INFO("mapping " << static_cast<int>(texture_mapping) << ", shading model "
+                            << static_cast<int>(shading_model));
+            Canvas expected(kSize, kSize, kBlack);
+            RenderObject(expected, TestViewport(), TransformModel(model, MakeModelMatrix(instance)),
+                         kLampAhead, shading_model, nullptr, texture_mapping);
+            Canvas canvas(kSize, kSize, kBlack);
+            DepthBuffer depth_buffer(canvas);
+            RenderScene(canvas, TestViewport(), models, std::vector<Instance>{instance}, Camera{},
+                        kLampAhead, shading_model, &depth_buffer, BackFaceCulling::kOn,
+                        texture_mapping);
+            CHECK(Bytes(canvas) == Bytes(expected));
+            CHECK(LitPixels(canvas).size() > 50);
+        }
+    }
+}
+
+TEST_CASE(
+    "RenderScene under lights: textures are mapped perspective-correct unless the caller "
+    "asks for linear mapping",
+    "[rasterizer][shading]") {
+    const Texture texture = AddressTexture(16, 16);
+    const std::vector<Model> models = {TexturedTriangle(texture)};
+    const std::vector<Instance> leaning = {
+        {.model = 0, .position = {0.0, 0.0, 1.0}, .orientation = MakeOYRotationMatrix(40.0)}};
+    const std::vector<Light> lights = {AmbientLight{.intensity = 1.0}};
+    Canvas by_default(kSize, kSize, kBlack);
+    DepthBuffer depth_buffer(by_default);
+    RenderScene(by_default, TestViewport(), models, leaning, Camera{}, lights, ShadingModel::kFlat,
+                &depth_buffer);
+
+    const Canvas correct =
+        CanvasWithTexturedScene(models, leaning, TextureMapping::kPerspectiveCorrect);
+    const Canvas linear = CanvasWithTexturedScene(models, leaning, TextureMapping::kLinear);
+    CHECK(Bytes(by_default) == Bytes(correct));
+    CHECK(Bytes(linear) != Bytes(correct));
+    CHECK(LitPixels(linear) == LitPixels(correct));  // the same pixels, other texels
+
+    // A triangle that faces the camera squarely is the same picture either way.
+    const std::vector<Instance> facing = {kAhead};
+    CHECK(Bytes(CanvasWithTexturedScene(models, facing, TextureMapping::kLinear)) ==
+          Bytes(CanvasWithTexturedScene(models, facing, TextureMapping::kPerspectiveCorrect)));
+}
+
+TEST_CASE("RenderScene under lights: every instance is painted with the texture of its model",
+          "[rasterizer][shading]") {
+    const Texture red(cgfs::Image{.width = 1, .height = 1, .rgb = {255, 0, 0}});
+    const Texture blue(cgfs::Image{.width = 1, .height = 1, .rgb = {0, 0, 255}});
+    // Three models: one in each texture and one, in its own color, without.
+    const std::vector<Model> models = {TexturedTriangle(red), TexturedTriangle(blue),
+                                       FacingTriangle(kGreen)};
+    const std::vector<Instance> instances = {
+        {.model = 0, .position = {-0.3, 0.0, 1.0}, .scale = 0.25},
+        {.model = 1, .position = {0.0, 0.0, 1.0}, .scale = 0.25},
+        {.model = 2, .position = {0.3, 0.0, 1.0}, .scale = 0.25},
+        {.model = 0, .position = {0.0, 0.3, 1.0}, .scale = 0.25},
+    };
+    const Canvas canvas =
+        CanvasWithTexturedScene(models, instances, TextureMapping::kPerspectiveCorrect);
+    CHECK(canvas.GetPixel(-9, -1) == Rgb8{255, 0, 0});
+    CHECK(canvas.GetPixel(0, -1) == Rgb8{0, 0, 255});
+    CHECK(canvas.GetPixel(9, -1) == Rgb8{0, 255, 0});
+    CHECK(canvas.GetPixel(0, 8) == Rgb8{255, 0, 0});
+}
+
+TEST_CASE(
+    "RenderScene under lights: a textured triangle cut by a clipping plane shows what the "
+    "whole triangle shows",
+    "[rasterizer][shading]") {
+    // The right triangle of the test above, with its corners on the pixels (-8, -8),
+    // (8, 0) and (8, -8), cut by the plane x = 0. Its texture coordinates are chosen so
+    // that on the canvas u = (x + 8) / 16 and v = -y / 8, multiples of 1/16 and 1/8: on a
+    // texture of 16 x 8 texels the pixel (x, y) shows the texel in column x + 8 of row
+    // -y, exactly.
+    const Texture texture = AddressTexture(16, 8);
+    Model model{
+        .vertices = {{-0.25, -0.25, 0.0}, {0.25, 0.0, 0.0}, {0.25, -0.25, 0.0}},
+        .triangles = {{.v = {0, 1, 2},
+                       .color = kWhite,
+                       .uvs = {Uv{0.0, 1.0}, Uv{1.0, 0.0}, Uv{1.0, 1.0}}}},
+    };
+    model.texture = &texture;
+    const Camera cutting{.clipping_planes = {kRightHalf}};
+
+    for (const TextureMapping texture_mapping :
+         {TextureMapping::kLinear, TextureMapping::kPerspectiveCorrect}) {
+        INFO("mapping " << static_cast<int>(texture_mapping));
+        const Canvas whole = CanvasWithTexturedScene({model}, {kAhead}, texture_mapping);
+        const Canvas cut = CanvasWithTexturedScene({model}, {kAhead}, texture_mapping, cutting);
+        // The new corners got the texture coordinates of the whole triangle at the cut,
+        // so the pieces show its texels, pixel for pixel, and nothing behind the plane.
+        std::size_t kept = 0;
+        for (int x = -kSize / 2; x < kSize / 2; ++x) {
+            for (int y = -kSize / 2; y < kSize / 2; ++y) {
+                INFO("pixel (" << x << ", " << y << ")");
+                if (x < 0) {
+                    CHECK(cut.GetPixel(x, y) == Rgb8{0, 0, 0});
+                } else {
+                    CHECK(cut.GetPixel(x, y) == whole.GetPixel(x, y));
+                    if (cut.GetPixel(x, y) != Rgb8{0, 0, 0}) {
+                        ++kept;
+                    }
+                }
+            }
+        }
+        CHECK(kept > 30);
+        CHECK(whole.GetPixel(-4, -8) == PixelOf(4, 7));  // the bottom row shows v = 1
+        CHECK(cut.GetPixel(0, -4) == PixelOf(8, 4));     // a new corner, on the cut
+        CHECK(cut.GetPixel(0, -8) == PixelOf(8, 7));     // the other one
+        CHECK(cut.GetPixel(4, -4) == PixelOf(12, 4));
+        CHECK(cut.GetPixel(8, 0) == PixelOf(15, 0));  // u = 1, the last column
     }
 }

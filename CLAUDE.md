@@ -11,7 +11,8 @@ A software 3D renderer written from scratch in C++20, following Gabriel Gambetta
 reflections) and a rasterizer (lines, filled and shaded triangles, perspective
 projection, objects made of triangles, scenes of transformed instances seen from a
 movable camera, clipping, hidden-surface removal by back-face culling and a depth
-buffer, and shading under lights, flat, Gouraud or Phong, so far). It exists for
+buffer, shading under lights, flat, Gouraud or Phong, and textures, linear or
+perspective-correct with nearest neighbor filtering, so far). It exists for
 learning: every algorithm is written by hand, reads like the book's listing and is
 pinned by unit tests and golden images. No graphics libraries, no GPU.
 
@@ -97,9 +98,10 @@ reading the architecture:
 ```
 math/         vec3, mat4, plane, bounding_sphere, triangle_normal
                                                               vector algebra and plain geometry; nothing above the numbers
-image/        color, pixel_index, canvas, depth_buffer, image_io
+image/        color, pixel_index, canvas, depth_buffer, image_io, texture
                                                               the picture: colors, the pixel buffer and the depth
-                                                              buffer beside it, file formats
+                                                              buffer beside it, file formats, and the pictures
+                                                              that triangles are painted with
 camera/       viewport, camera, clipping_planes               how canvas pixels map into the world; shared by both renderers
 lighting/     light, illumination                             the lights and the illumination equation; shared by both renderers
 raytracer/    scene, raytracer                                the ray tracing renderer: spheres, tracing, shadows
@@ -108,8 +110,9 @@ rasterizer/   point, interpolate, line, triangle, projection, object, model, ins
                                                               projection that feeds them, objects made of
                                                               triangles, scenes of instances, their back-face
                                                               culling, their clipping and their shading under
-                                                              lights, one per file
-demo/         raytracer_scenes, rasterizer_scenes             the demo pictures, built on everything above
+                                                              lights, in a color or in a texture, one per file
+demo/         raytracer_scenes, rasterizer_scenes, textures   the demo pictures and the textures they are
+                                                              painted with, built on everything above
 ```
 
 Rules that keep it that way:
@@ -130,7 +133,9 @@ Rules that keep it that way:
    to, which is the highest layer it depends on.
 5. **Outside the library:** `apps/` holds executables (argument parsing, dispatch,
    timing, saving) and no rendering logic; `third_party/` is vendored code behind its
-   own CMake target; `docs/` is the spec.
+   own CMake target; `assets/` holds the files a demo picture is painted with, which
+   only the demo layer reads, each with a note of where it came from; `docs/` is the
+   spec.
 6. **Namespaces stay flat** (`cgfs`, `cgfs::demo`): the folders carry the structure,
    and `cgfs::Vec3` is what the book's listings read like. The include path carries the
    layer: `#include <cgfs/image/canvas.h>`.

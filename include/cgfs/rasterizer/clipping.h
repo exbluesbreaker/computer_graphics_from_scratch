@@ -61,6 +61,12 @@ namespace cgfs {
 /// the triangle's corners rotated, never swapped, so every piece keeps the winding of the triangle
 /// it was cut from.
 ///
+/// The new corner's texture coordinates are found the same way, uA + t (uB - uA) and
+/// vA + t (vB - vA). The cut is made in 3D, where a texture lies evenly on its triangle,
+/// so that is exactly the point of the texture the whole triangle shows at the crossing:
+/// the pieces show the picture the triangle showed, and no seam marks the cut (see
+/// DrawTexturedTriangle for what that takes on the canvas).
+///
 /// The corners that were cut off stay in `vertices`, named by no triangle any more;
 /// ClipInstanceAgainstPlane removes them. Precondition: the triangle's indices are less
 /// than `vertices.size()`, asserted.

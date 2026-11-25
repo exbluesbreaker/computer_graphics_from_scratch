@@ -5,6 +5,7 @@
 #include <cgfs/image/depth_buffer.h>
 #include <cgfs/lighting/light.h>
 #include <cgfs/rasterizer/model.h>
+#include <cgfs/rasterizer/triangle.h>
 
 #include <span>
 
@@ -105,6 +106,22 @@ enum class ShadingModel { kFlat, kGouraudFaceted, kGouraud, kPhong };
 /// four; under lights they are computed. A triangle without area has no normal and is
 /// not drawn.
 ///
+/// An object with a texture (`object.texture`, see Model) is painted with it: the color
+/// of a pixel is then the texel its triangle shows there, by the texture coordinates at
+/// the triangle's corners, and the triangle's own `color` is not read. The light is
+/// computed as above and multiplies the texel instead: "fetch the texel, apply shading,
+/// and paint the pixel", in the book's words.
+///
+///     kFlat              DrawTexturedTriangle(P0, P1, P2 with the intensity i at each)
+///     kGouraudFaceted,
+///     kGouraud           DrawTexturedTriangle(P0, P1, P2 with the intensities hk)
+///     kPhong             DrawPhongTriangle(P0, P1, P2 with the normals Nk, texture)
+///
+/// `texture_mapping` is how the texture coordinates get from the corners to the pixels,
+/// perspective-correct unless the caller asks for the linear mapping the book's chapter
+/// starts with (see TextureMapping). It makes no difference to an object without a
+/// texture.
+///
 /// The triangles are drawn in list order, through `depth_buffer` if there is one, so
 /// that a pixel shows the nearest of them; without one the later triangle shows, as in
 /// RenderObject. Nothing is clipped and nothing is culled here; RenderScene does both
@@ -118,6 +135,7 @@ enum class ShadingModel { kFlat, kGouraudFaceted, kGouraud, kPhong };
 /// would pull the interpolation toward the longer ones.
 void RenderObject(Canvas& canvas, const Viewport& viewport, const Model& object,
                   std::span<const Light> lights, ShadingModel shading_model = ShadingModel::kPhong,
-                  DepthBuffer* depth_buffer = nullptr);
+                  DepthBuffer* depth_buffer = nullptr,
+                  TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
 
 }  // namespace cgfs

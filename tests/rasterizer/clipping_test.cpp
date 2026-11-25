@@ -1,6 +1,7 @@
 #include <cgfs/camera/clipping_planes.h>
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/color.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/math/bounding_sphere.h>
 #include <cgfs/math/mat4.h>
 #include <cgfs/math/plane.h>
@@ -37,6 +38,7 @@ using cgfs::Plane;
 using cgfs::SignedDistance;
 using cgfs::TransformModel;
 using cgfs::Triangle;
+using cgfs::Uv;
 using cgfs::Vec3;
 using cgfs::Viewport;
 using namespace cgfs::colors;
@@ -681,4 +683,115 @@ TEST_CASE("ClipTriangle: a triangle that is kept whole keeps its normals", "[cli
     const Clipped clipped = Clip(vertices, triangle, kNear);
     REQUIRE(clipped.triangles.size() == 1);
     CHECK(clipped.triangles[0] == triangle);
+}
+
+// --- Texture coordinates -----------------------------------------------------------------
+
+TEST_CASE(
+    "ClipTriangle: a new corner gets its texture coordinates by the fraction of its "
+    "position",
+    "[clipping]") {
+    // The triangle of the one-corner test: AB crosses the plane a quarter of the way
+    // along and AC half way.
+    const std::vector<Vec3> vertices = {
+        {0.0, 0.0, 3.0},   // A
+        {6.0, 0.0, -5.0},  // B
+        {0.0, 4.0, -1.0},  // C
+    };
+    const Triangle triangle{
+        .v = {0, 1, 2}, .color = kRed, .uvs = {Uv{0.25, 0.5}, Uv{1.0, 0.0}, Uv{0.0, 1.0}}};
+    const Clipped clipped = Clip(vertices, triangle, kNear);
+
+    // A B' C': uvA + 1/4 (uvB - uvA) and uvA + 1/2 (uvC - uvA).
+    REQUIRE(clipped.triangles.size() == 1);
+    CHECK(clipped.triangles[0] ==
+          Triangle{.v = {0, 3, 4},
+                   .color = kRed,
+                   .uvs = {Uv{0.25, 0.5}, Uv{0.4375, 0.375}, Uv{0.125, 0.75}}});
+}
+
+TEST_CASE("ClipTriangle: both pieces of a quadrilateral get the interpolated texture coordinates",
+          "[clipping]") {
+    // The triangle of the two-corner test: both sides to C cross half way along.
+    const std::vector<Vec3> vertices = {
+        {0.0, 0.0, 3.0},   // A
+        {4.0, 0.0, 3.0},   // B
+        {0.0, 4.0, -1.0},  // C
+    };
+    const Uv a{0.0, 0.0};
+    const Uv b{1.0, 0.0};
+    const Uv c{0.5, 1.0};
+    const Clipped clipped =
+        Clip(vertices, {.v = {0, 1, 2}, .color = kBlue, .uvs = {a, b, c}}, kNear);
+
+    const Uv a_prime{0.25, 0.5};  // half way from A to C
+    const Uv b_prime{0.75, 0.5};  // half way from B to C
+    REQUIRE(clipped.triangles.size() == 2);
+    CHECK(clipped.triangles[0].uvs == std::array<Uv, 3>{a, b, a_prime});
+    CHECK(clipped.triangles[1].uvs == std::array<Uv, 3>{a_prime, b, b_prime});
+}
+
+TEST_CASE("ClipTriangle: every piece shows the part of the texture the triangle showed there",
+          "[clipping]") {
+    // A texture lies evenly on its triangle: with (0, 0), (1, 0) and (0, 1) at the
+    // corners A, B and C, the point A + u (B - A) + v (C - A) of the triangle shows the
+    // point (u, v) of the texture. A cut must not move the picture: every corner of
+    // every piece, old or new, still shows the point of the texture that belongs to
+    // where it is. For both shapes, whichever corner the list starts from and in either
+    // winding.
+    const std::vector<Vec3> one_in_front = {{0.0, 0.0, 3.0}, {6.0, 0.0, -5.0}, {0.0, 4.0, -1.0}};
+    const std::vector<Vec3> two_in_front = {{0.0, 0.0, 3.0}, {4.0, 0.0, 3.0}, {0.0, 4.0, -1.0}};
+    for (const std::vector<Vec3>& vertices : {one_in_front, two_in_front}) {
+        const Vec3 a = vertices[0];
+        const Vec3 ab = vertices[1] - a;
+        const Vec3 ac = vertices[2] - a;
+        const std::array<Uv, 3> uv_of_vertex = {Uv{0.0, 0.0}, Uv{1.0, 0.0}, Uv{0.0, 1.0}};
+        for (const Corners corners : {Corners{0, 1, 2}, Corners{1, 2, 0}, Corners{2, 0, 1},
+                                      Corners{0, 2, 1}, Corners{2, 1, 0}, Corners{1, 0, 2}}) {
+            const Triangle triangle{.v = corners,
+                                    .color = kRed,
+                                    .uvs = {uv_of_vertex[corners[0]], uv_of_vertex[corners[1]],
+                                            uv_of_vertex[corners[2]]}};
+            const Clipped clipped = Clip(vertices, triangle, kNear);
+            REQUIRE_FALSE(clipped.triangles.empty());
+            for (const Triangle& piece : clipped.triangles) {
+                for (std::size_t k = 0; k < 3; ++k) {
+                    // Where the corner is, in the triangle's own coordinates: the
+                    // solution of p - a = u ab + v ac.
+                    const Vec3 p = clipped.vertices[piece.v[k]] - a;
+                    const double determinant =
+                        Dot(ab, ab) * Dot(ac, ac) - Dot(ab, ac) * Dot(ab, ac);
+                    const double u =
+                        (Dot(p, ab) * Dot(ac, ac) - Dot(p, ac) * Dot(ab, ac)) / determinant;
+                    const double v =
+                        (Dot(p, ac) * Dot(ab, ab) - Dot(p, ab) * Dot(ab, ac)) / determinant;
+                    INFO("corner " << k << " of a piece of the triangle " << corners[0]
+                                   << corners[1] << corners[2]);
+                    CHECK(std::abs(piece.uvs[k].u - u) < kEpsilon);
+                    CHECK(std::abs(piece.uvs[k].v - v) < kEpsilon);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE(
+    "ClipTriangle: a triangle that is kept whole keeps its texture coordinates, and one "
+    "that states none is cut into pieces that state none",
+    "[clipping]") {
+    const std::vector<Vec3> in_front = {{0.0, 0.0, 3.0}, {4.0, 0.0, 3.0}, {0.0, 4.0, 2.0}};
+    const Triangle triangle{
+        .v = {0, 1, 2}, .color = kRed, .uvs = {Uv{0.1, 0.2}, Uv{0.9, 0.3}, Uv{0.4, 0.8}}};
+    const Clipped kept = Clip(in_front, triangle, kNear);
+    REQUIRE(kept.triangles.size() == 1);
+    CHECK(kept.triangles[0] == triangle);
+
+    const std::vector<Vec3> across = {{0.0, 0.0, 3.0}, {6.0, 0.0, -5.0}, {0.0, 4.0, -1.0}};
+    for (const Corners corners : {Corners{0, 1, 2}, Corners{1, 2, 0}, Corners{1, 0, 2}}) {
+        const Clipped cut = Clip(across, {corners, kRed}, kNear);
+        REQUIRE_FALSE(cut.triangles.empty());
+        for (const Triangle& piece : cut.triangles) {
+            CHECK(piece.uvs == std::array<Uv, 3>{});
+        }
+    }
 }

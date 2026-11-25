@@ -4,6 +4,7 @@
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/color.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/lighting/light.h>
 #include <cgfs/rasterizer/point.h>
 
@@ -92,6 +93,85 @@ void DrawShadedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, Color colo
 using DrawTriangleFunction = void (*)(Canvas& canvas, Point p0, Point p1, Point p2, Color color,
                                       DepthBuffer* depth_buffer);
 
+/// How a texture is carried across a triangle, from the texture coordinates at its three
+/// vertices to those of every pixel: the two ways of the book's chapter, in its order.
+///
+/// kLinear interpolates u and v themselves over the picture of the triangle, like the
+/// intensity h. It is the first thing to try and it is wrong for a triangle that leans
+/// away from the viewer: the planks of a crate come out bent.
+///
+/// kPerspectiveCorrect interpolates u/z and v/z, which do change by equal steps over the
+/// picture, and divides them by the interpolated 1/z at every pixel. It is right
+/// whichever way the triangle leans, and the default wherever there is a choice.
+/// DrawTexturedTriangle has the reasoning.
+enum class TextureMapping { kLinear, kPerspectiveCorrect };
+
+/// Fill the triangle p0 p1 p2 with a picture: every pixel gets the color of the point of
+/// `texture` that the triangle shows there, times an intensity. The book's texture
+/// mapping.
+///
+/// Each vertex says which point of the texture it shows, by its `uv` (see Point and Uv),
+/// and the three of them pin the triangle onto the texture. A pixel in between has to
+/// find its own (u, v); then
+///
+///     pixel = texture.GetTexel(u, v) * h
+///
+/// with `h` the intensity of DrawShadedTriangle, interpolated from the vertices in the
+/// same way, which is how light falls on a textured face. The fill proceeds exactly as
+/// in DrawFilledTriangle, over the same pixels, and what `texture_mapping` chooses is the
+/// way from the three corners to the (u, v) of a pixel.
+///
+/// kLinear: u and v travel along the sides and along every row with x, like h, each
+/// interpolated from the vertices by Interpolate. This takes u and v to change by equal
+/// steps across the picture of the triangle, and they do not, unless the triangle is
+/// parallel to the viewport: under perspective, equal steps on the canvas are not equal
+/// steps on the triangle. Halfway along the picture of an edge that runs from z = 1 to
+/// z = 4 is the point of the edge at z = 1.6 (see DrawFilledTriangle), which is a fifth
+/// of the way along the edge and not half. Linear mapping paints the middle of the
+/// texture there, where a fifth of it belongs, and since the two triangles of a face
+/// are each wrong in their own way, a straight plank comes out bent where they meet.
+///
+/// kPerspectiveCorrect: what does change by equal steps is u/z. On the triangle the
+/// texture lies evenly, so u is a linear function of the point (X, Y, Z) of the
+/// triangle's plane that shows it: u = a X + b Y + c Z + e. The point is seen at
+/// x = X d / Z, y = Y d / Z on the viewport; put X = x Z / d and Y = y Z / d in and
+/// divide by Z:
+///
+///     u / Z = (a x + b y) / d + c + e (1 / Z)
+///
+/// 1/Z is linear in x and y, which is what the depth buffer rests on, so u/Z is too, and
+/// v/Z for the same reason. So u/z and v/z travel along the sides and the rows in the
+/// place of u and v, with 1/z beside them, and every pixel gets its coordinates back by
+/// a division:
+///
+///     u = (u/z) / (1/z),   v = (v/z) / (1/z)
+///
+/// The same edge again: u/z runs from 0 to 1/4 and is 1/8 halfway, 1/z is 5/8 there,
+/// and u is 1/5. u/z at a vertex is `uv.u * inv_z`, the vertex's 1/z being what its
+/// point carries.
+///
+/// The intensity h is interpolated over the picture in both cases, as DrawShadedTriangle
+/// does it; the book's chapter corrects the texture coordinates and nothing else.
+///
+/// The texel is found by Texture::GetTexel, which rounds down to one texel: nearest
+/// neighbor filtering. Nothing here looks at how many texels a pixel covers or how many
+/// pixels a texel does, so a texture drawn much larger than it is shows its texels as
+/// blocks, and one drawn much smaller shows a scattering of the texels it has, which
+/// from a regular texture makes patterns that are not in it. The pixels covered are
+/// exactly those DrawFilledTriangle covers for the same three points. The vertex order
+/// does not matter; no clipping.
+///
+/// With a `depth_buffer` only the pixels where the triangle is the nearest thing so far
+/// are set, as in DrawFilledTriangle. Without one every pixel is set.
+///
+/// Preconditions: for kPerspectiveCorrect every point has `inv_z` > 0, as the projection
+/// of a vertex in front of the camera has, asserted; kLinear does not read the depths
+/// unless there is a depth buffer. The depth buffer, if there is one, has the canvas's
+/// size, asserted.
+void DrawTexturedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, const Texture& texture,
+                          TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect,
+                          DepthBuffer* depth_buffer = nullptr);
+
 /// Fill the triangle p0 p1 p2 with `color` lit pixel by pixel: the primitive of Phong
 /// shading.
 ///
@@ -127,12 +207,18 @@ using DrawTriangleFunction = void (*)(Canvas& canvas, Point p0, Point p1, Point 
 /// are set, as in DrawFilledTriangle, and only those are lit, the lighting being the
 /// expensive part. Without one every pixel is lit and set.
 ///
+/// With a `texture` the triangle is painted with it instead of `color`, which is then not
+/// read: the texture coordinates of the vertices (see Point) travel along the sides and
+/// the rows as `texture_mapping` says, exactly as in DrawTexturedTriangle, and a pixel
+/// is set to its texel times the light computed for it.
+///
 /// Preconditions: every point has `inv_z` > 0, as the projection of a vertex in front
 /// of the camera has, asserted by UnprojectVertex; every point has a normal that is not
 /// the zero vector, and no two of the normals are opposite, so that nothing between them
 /// is zero either; the depth buffer, if there is one, has the canvas's size, asserted.
 void DrawPhongTriangle(Canvas& canvas, const Viewport& viewport, Point p0, Point p1, Point p2,
                        Color color, double specular, std::span<const Light> lights,
-                       DepthBuffer* depth_buffer = nullptr);
+                       DepthBuffer* depth_buffer = nullptr, const Texture* texture = nullptr,
+                       TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
 
 }  // namespace cgfs
