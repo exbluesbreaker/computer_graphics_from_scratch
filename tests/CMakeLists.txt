@@ -31,6 +31,7 @@ add_executable(cgfs_tests
     raytracer/raytracer_test.cpp
     rasterizer/interpolate_test.cpp
     rasterizer/line_test.cpp
+    rasterizer/mipmap_level_test.cpp
     rasterizer/triangle_test.cpp
     rasterizer/projection_test.cpp
     rasterizer/object_test.cpp

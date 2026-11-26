@@ -1185,6 +1185,82 @@ void DrawTexturesScene(Canvas& canvas, const Viewport& viewport, const Texture& 
                 &depth_buffer, BackFaceCulling::kOn, texture_mapping, texture_filter);
 }
 
+void DrawCheckerboardScene(Canvas& canvas, const Viewport& viewport, const Texture& texture,
+                           TextureMapping texture_mapping, TextureFilter texture_filter) {
+    constexpr Color kBackground{18.0, 20.0, 28.0};
+
+    canvas.Clear(kBackground);
+
+    // Two models and one texture, the checkerboard, which is the hardest thing there is
+    // to draw small: a pixel that stands for many of its squares ought to be gray and,
+    // taking the one texel under its point, can only be black or white.
+    //
+    // The floor is the floor of the textures picture, tile for tile, and runs from under
+    // the camera to the horizon: checkered where it is near and drawn smaller and
+    // smaller in depth beyond that. The cube is the cube of that picture, and stands in
+    // this one five times.
+    constexpr std::size_t kFloor = 0;
+    constexpr std::size_t kCube = 1;
+    constexpr double kTile = 4.0;
+    constexpr int kTilesAcross = 48;
+    constexpr int kTilesDeep = 48;
+    const std::vector<Model> models = {
+        PavedFloor(texture, kTilesAcross, kTilesDeep, kTile),
+        Crate(texture),
+    };
+
+    // The floor lies where it does in the textures picture, turned by the angle of the
+    // 5-12-13 triangle. The cubes stand in a row that runs away from the camera to the
+    // right, each twice as far as the one before it, 6, 12, 24, 48 and 96, and so half as
+    // large in the picture: an object seen from farther and farther away. With
+    // mipmapping each is painted with the level after the one before's. They are turned
+    // by the angle of the 20-21-29 triangle, about 43.6 degrees, which shows two faces
+    // of a cube at about the same width. The places are a little off the round ones, as
+    // in the other pictures, so that no corner lies on the border between two pixels.
+    constexpr Mat4 kTurned = TurnedAboutY(21.0 / 29.0, 20.0 / 29.0);
+    const std::vector<Instance> instances = {
+        {.model = kFloor,
+         .position = {13.95, 0.0, -30.0},
+         .orientation = TurnedAboutY(12.0 / 13.0, 5.0 / 13.0)},
+        {.model = kCube, .position = {-2.85, 0.0, 6.05}, .orientation = kTurned},
+        {.model = kCube, .position = {-1.05, 0.0, 12.05}, .orientation = kTurned},
+        {.model = kCube, .position = {2.95, 0.0, 24.05}, .orientation = kTurned},
+        {.model = kCube, .position = {10.9, 0.0, 48.05}, .orientation = kTurned},
+        {.model = kCube, .position = {27.2, 0.0, 96.05}, .orientation = kTurned},
+    };
+
+    // The lights of the textures picture: a little light from everywhere and a sun high
+    // up to the left and behind the camera. A flat face has one light value all over, and
+    // the two faces of a cube that show have different ones, which is all that tells
+    // them apart once both are the gray of a small mipmap level.
+    const std::vector<Light> lights = {
+        AmbientLight{.intensity = 0.4},
+        DirectionalLight{.intensity = 0.8, .direction = {-1.0, 2.0, -1.5}},
+    };
+
+    // The camera of the textures picture: its eye 1.6 above the floor, looking down by
+    // the angle whose cosine and sine are 24/25 and 7/25, about 16.3 degrees, which puts
+    // the horizon three quarters of the way up the picture and a great deal of floor,
+    // drawn very small, under it.
+    constexpr double kCosine = 0.96;
+    constexpr double kSine = 0.28;
+    constexpr Mat4 kLookingDown{{{1.0, 0.0, 0.0, 0.0},
+                                 {0.0, kCosine, -kSine, 0.0},
+                                 {0.0, kSine, kCosine, 0.0},
+                                 {0.0, 0.0, 0.0, 1.0}}};
+    const Camera camera{.position = {0.0, 1.6, 0.0},
+                        .orientation = kLookingDown,
+                        .clipping_planes = MakeClippingPlanes(viewport)};
+
+    // Flat shading, exact for flat faces under these two lights; one depth buffer for
+    // the picture, and back-face culling. Mipmapping is not asked for here: a triangle is
+    // painted with the level of the texture that suits it, and a texture that has no
+    // levels but itself is drawn as it always was.
+    DepthBuffer depth_buffer(canvas);
+    RenderScene(canvas, viewport, models, instances, camera, lights, ShadingModel::kFlat,
+                &depth_buffer, BackFaceCulling::kOn, texture_mapping, texture_filter);
+}
+
 void DrawAxesScene(Canvas& canvas) {
     constexpr Color kGray{160.0, 160.0, 160.0};
     constexpr Color kDarkGreen{0.0, 160.0, 0.0};

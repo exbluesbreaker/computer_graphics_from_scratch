@@ -75,6 +75,7 @@ add_library(cgfs STATIC
     # rasterizer: the rasterizing renderer, one concept per file
     src/rasterizer/interpolate.cpp
     src/rasterizer/line.cpp
+    src/rasterizer/mipmap_level.cpp
     src/rasterizer/triangle.cpp
     src/rasterizer/projection.cpp
     src/rasterizer/object.cpp

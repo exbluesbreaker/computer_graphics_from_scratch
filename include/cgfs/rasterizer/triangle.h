@@ -157,10 +157,14 @@ enum class TextureMapping { kLinear, kPerspectiveCorrect };
 /// TextureFilter). Nearest neighbor filtering, the default, rounds down to one texel,
 /// so a texture drawn much larger than it is shows its texels as blocks; bilinear
 /// filtering blends the four texels around the point, and the blocks become gradients.
-/// The filter is asked once per pixel, at the pixel's own (u, v). Nothing here looks at
-/// how many texels a pixel covers, so a texture drawn much smaller than it is shows a
-/// scattering of the texels it has under either filter, which from a regular texture
-/// makes patterns that are not in it. The pixels covered are exactly those
+/// The filter is asked once per pixel, at the pixel's own (u, v), and neither filter
+/// looks at how many texels a pixel covers. So a texture drawn much smaller than it is
+/// shows a scattering of the texels it has, which from a regular texture makes patterns
+/// that are not in it, unless the texture has mipmap levels, smaller copies of itself
+/// (see Mipmapping). Then the triangle is painted with the level that suits the size it
+/// is drawn at: MipmapLevel chooses it, once, from the three points, and every pixel is
+/// looked up at that level, where a texel is the mean of the texels a pixel stands for.
+/// A texture without levels is painted as itself. The pixels covered are exactly those
 /// DrawFilledTriangle covers for the same three points. The vertex order does not
 /// matter; no clipping.
 ///
@@ -214,8 +218,9 @@ void DrawTexturedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, const Te
 /// With a `texture` the triangle is painted with it instead of `color`, which is then not
 /// read: the texture coordinates of the vertices (see Point) travel along the sides and
 /// the rows as `texture_mapping` says, exactly as in DrawTexturedTriangle, and a pixel
-/// is set to the color `texture_filter` finds for it in the texture, as there, times the
-/// light computed for it.
+/// is set to the color `texture_filter` finds for it in the texture, as there, at the
+/// mipmap level of the triangle if the texture has levels, times the light computed for
+/// it.
 ///
 /// Preconditions: every point has `inv_z` > 0, as the projection of a vertex in front
 /// of the camera has, asserted by UnprojectVertex; every point has a normal that is not

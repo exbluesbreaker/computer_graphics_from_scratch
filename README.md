@@ -32,8 +32,11 @@ carried across them to every pixel, perspective-correct, so that a cube becomes 
 wooden crate. The color of a pixel is that of the one texel its point falls in, nearest
 neighbor filtering, the simplest rule there is, or, when asked for, a blend of the four
 texels around the point, bilinear filtering, which smooths a texture that is drawn
-larger than it is. Mipmapping, which the book goes on to for a texture drawn smaller
-than it is, is the next step and is not there yet.
+larger than it is. And a texture can be made with mipmap levels, smaller copies of
+itself in which a texel is the mean of the texels it covers; a triangle that is drawn
+small is then painted with the copy of its size, and a floor that runs to the horizon
+no longer breaks up into noise. Trilinear filtering, the last section of the book's
+chapter, is the next step and is not there yet.
 `docs/SPEC.md` describes the design, the architecture and the roadmap.
 
 ## Requirements
@@ -74,6 +77,9 @@ Use `--preset release` for an optimized build in `build/release`. Then:
 ./build/release/apps/render_demo --scene textures --output textures.png   # a texture, at every size
 ./build/release/apps/render_demo --scene textures --texture-mapping linear --output bent.png
 ./build/release/apps/render_demo --scene textures --texture-filter bilinear --output smooth.png
+./build/release/apps/render_demo --scene textures --mipmapping on --texture-filter bilinear --output calm.png
+./build/release/apps/render_demo --scene checkerboard --output moire.png   # mipmapping: off,
+./build/release/apps/render_demo --scene checkerboard --mipmapping on --output gray.png   # and on
 ./build/release/apps/render_demo --help
 ```
 
@@ -90,9 +96,11 @@ millisecond; it is a single run, so compare several before trusting a small diff
 The first line names the shading model for the `shading` scene, the one picture it
 changes, so the four can be told apart: at 1920 x 1080 they take about 23 ms (flat),
 27 ms (Gouraud, in either form) and 74 ms (Phong) on the development machine. For the
-`textures` scene it names the texture mapping and the texture filter instead; that
-picture takes about 62 ms under either mapping with nearest neighbor filtering and
-about 71 ms with bilinear filtering, and its texture is read before the clock starts.
+`textures` and `checkerboard` scenes it names the texture mapping, the texture filter
+and whether mipmapping is on instead; those pictures take about 61 ms under either
+mapping with nearest neighbor filtering and about 71 ms with bilinear filtering,
+mipmapping or not, and their texture is made, with its mipmap levels if they are asked
+for, before the clock starts.
 
 Scenes: `reflective` (three shiny spheres on a shiny yellow floor with ambient, point and
 directional lights; the lights show up as highlights, the spheres cast shadows and mirror
@@ -128,11 +136,14 @@ front of it; back-face culling removes the faces a cube turns away, 102 of the 1
 triangles, and through the depth buffer each cube shows the three faces it should),
 `shading` (the picture of the Shading chapter, described below), `textures` (the
 picture of the Textures chapter as far as it is implemented: a wooden crate on a floor
-paved with the same texture, also described below),
+paved with the same texture, also described below), `checkerboard` (the picture of
+mipmapping: the same floor paved with a black and white checkerboard, and five checkered
+cubes each twice as far away as the one before, to be drawn with `--mipmapping off` and
+`on`, described below as well),
 `axes` (the coordinate axes and corner dots, no ray tracing). A larger `--distance`
 narrows the field of view of the ray-traced scenes, the cube, the objects, the
-instances, the camera scene, the clipping scene, the filled cubes, the shading scene and
-the textures scene.
+instances, the camera scene, the clipping scene, the filled cubes, the shading scene,
+the textures scene and the checkerboard scene.
 
 ### Shading: one scene, four ways
 
@@ -211,15 +222,15 @@ Both are painted with one texture, `assets/textures/wooden_crate.ppm`, 512 x 512
 texels, and by one method: a pixel finds the point `(u, v)` of the texture that its
 triangle shows there and, unless it is told otherwise, takes the color of the one texel
 that point falls in. The book calls that nearest neighbor filtering. The scene is made
-to show what that gets right, what it leaves, and what the filters of the chapter's
-second half do about it:
+to show what that gets right, what it leaves, and what the second half of the chapter
+does about it:
 
-| where | how large the texture is drawn (at 1920 x 1080) | nearest neighbor filtering | bilinear filtering |
-|---|---|---|---|
-| the crate | one to one and a half texels to a pixel: a face is some 340 pixels wide and 400 to 580 high | right: this is the size the texture was made for | the same, a little softer |
-| the floor at the bottom of the picture, under 2 from the camera | too large: a texel is 4 pixels wide and 3 high | blocks of one color with sharp borders | right: the wood runs smoothly from one texel's color to the next |
-| the floor 3 to 5 from the camera, in front of the crate | within a factor of about 2 of its own size, too large across and then too small in depth | nearly right | nearly right, smoother across |
-| the floor toward the horizon | too small, mostly in depth: a pixel covers 2 texels in the middle of the picture, 25 at 18 away, 120 at 41 away, over 1600 under the horizon | the boards break up into dashes and dots, the wood into noise | the same dashes and noise, a little milder |
+| where | how large the texture is drawn (at 1920 x 1080) | nearest neighbor filtering | bilinear filtering | with mipmapping |
+|---|---|---|---|---|
+| the crate | one to one and a half texels to a pixel: a face is some 340 pixels wide and 400 to 580 high | right: this is the size the texture was made for | the same, a little softer | painted with the half-size copy: smoother, a little softer |
+| the floor at the bottom of the picture, under 2 from the camera | too large: a texel is 4 pixels wide and 3 high | blocks of one color with sharp borders | right: the wood runs smoothly from one texel's color to the next | as without |
+| the floor 3 to 5 from the camera, in front of the crate | within a factor of about 2 of its own size, too large across and then too small in depth | nearly right | nearly right, smoother across | less sharp across: the copy that suits the depth is too small for the width |
+| the floor toward the horizon | too small, mostly in depth: a pixel covers 2 texels in the middle of the picture, 25 at 18 away, 120 at 41 away, over 1600 under the horizon | the boards break up into dashes and dots, the wood into noise | the same dashes and noise, a little milder | right: the color of the wood, with the boards as lines across it |
 
 The crate looks good because a pixel there shows about one texel. The floor is the
 object that needs the filters. Where a texture is drawn larger than it is, every pixel
@@ -247,12 +258,19 @@ texture is made from its texels, nearest neighbor when it is not given:
 
 Bilinear filtering does nothing for the second fault. Four neighbouring texels of the
 hundreds under a pixel are as much of an accident as one, and the floor toward the
-horizon is still noise. Mipmapping, which keeps the texture at several sizes and picks
-the one that fits, mends that, and trilinear filtering the seams between those sizes.
-**Neither is implemented yet**, on purpose: that part of the picture is what they will
-change. This is also why bilinear filtering is something to ask for and not the
-default: it is right where the texture is drawn too large and no better anywhere else,
-at four texels a pixel, about a sixth more time on this picture.
+horizon is still noise. This is also why bilinear filtering is something to ask for
+and not the default: it is right where the texture is drawn too large and no better
+anywhere else, at four texels a pixel, about a sixth more time on this picture.
+
+`--mipmapping off|on` mends the second fault, off when it is not given. With it the
+texture is made with smaller copies of itself, each half the size of the one before
+down to a single texel, every texel the mean of the four it covers; a triangle is then
+painted with the copy whose size suits the size it is drawn at, and a pixel that stood
+for a hundred texels gets their mean instead of one of them. The far floor loses its
+noise: over the 90 rows under the horizon the difference between a pixel and the one
+below it falls to a quarter. The next section has the details and a picture made to
+show them. `--mipmapping on --texture-filter bilinear` is the best picture of this
+scene so far.
 
 The bilinear picture follows the listing in the book, in which a texel is the point at
 the top-left corner of the square that nearest neighbor filtering gives it. It
@@ -262,7 +280,7 @@ picture, which shows only when the two are laid over each other.
 `--texture-mapping linear|perspective-correct` chooses how the texture coordinates get
 from the corners of a triangle to its pixels, perspective-correct when it is not given.
 These are the two pictures of the chapter's first half, and either goes with either
-filter:
+filter and with mipmapping:
 
 - `linear` interpolates `u` and `v` over the picture of the triangle, like a color.
   That is what one tries first, and it is wrong for every face that leans away from
@@ -278,7 +296,8 @@ In code, a model is painted by giving it a texture and its triangles a point of 
 texture at each corner:
 
 ```cpp
-const cgfs::Texture crate(cgfs::ReadPpm("assets/textures/wooden_crate.ppm"));
+const cgfs::Texture crate(cgfs::ReadPpm("assets/textures/wooden_crate.ppm"),
+                          cgfs::Mipmapping::kOn);   // with its smaller copies; kOff without
 
 cgfs::Model face;
 face.vertices = {{-1, 2, 0}, {1, 2, 0}, {1, 0, 0}, {-1, 0, 0}};   // a square, seen from -Z
@@ -299,14 +318,74 @@ the triangles, not to the vertices, since a corner of a crate is a different cor
 the picture on each face that meets there. The texels take the place of the triangle's
 color and the light multiplies them, under any shading model. The last two arguments
 may be left out: the mapping is then perspective-correct and the filter nearest
-neighbor. A coordinate beyond an edge of the texture gives the texel at that edge under
+neighbor. Mipmapping is not an argument of anything that draws: a texture that was
+made with its levels is painted with them, and `cgfs::Texture(image)` has none. A
+coordinate beyond an edge of the texture gives the texel at that edge under
 either filter; nothing repeats, and the floor is paved by having a face for every tile.
-`docs/SPEC.md`, section 3.14, has the formulas and section 14, decisions 19 and 20, the
-choices.
+`docs/SPEC.md`, section 3.14, has the formulas and section 14, decisions 19, 20 and 21,
+the choices.
 
 The texture is a picture by another author (the file name in `assets/textures/` names
 them); its licence is not recorded in the repository, which `assets/textures/README.md`
 says and which wants settling before the repository is passed on.
+
+### Mipmapping: a checkerboard, drawn small
+
+The `checkerboard` scene is the floor of the `textures` scene under the same camera,
+paved with a checkerboard, and five cubes painted with the same checkerboard, each
+twice as far from the camera as the one before and so half as large in the picture.
+The texture is the book's example for this section, black and white texels in a
+checkerboard: here 256 x 256 texels in squares of 4 x 4, made by a loop. It is the
+hardest thing there is to draw small. A pixel that stands for many squares, as many
+black as white, ought to be gray, and a lookup that takes one texel can only say black
+or white.
+
+```bash
+./build/release/apps/render_demo --scene checkerboard --mipmapping off --output moire.png
+./build/release/apps/render_demo --scene checkerboard --mipmapping on --output gray.png
+```
+
+| where (at 1920 x 1080) | `--mipmapping off` | `--mipmapping on` |
+|---|---|---|
+| the floor up to about 12 from the camera | a checkerboard, which from about 10 away, where a square is less than a pixel in depth, begins to break into a moire | the same picture, to the byte: a copy that still has squares shows what the texture shows |
+| the floor from there to the horizon | rings and arcs of black and white, a moire that is not in the texture | an even gray, the top 130 rows of the floor |
+| the cubes 6, 12 and 24 away | checkered; the third speckled, its squares being about a pixel wide | the same picture, painted from the texture, its half-size copy and its quarter-size copy |
+| the cubes 48 and 96 away | striped | gray, their two faces told apart by the light |
+
+Every pixel that mipmapping changes in this picture, 155558 of them, becomes gray.
+
+With mipmapping the texture has nine levels: itself, then squares of 2 x 2 texels at
+half the size, squares of single texels at a quarter, and from an eighth of the size
+down to the single texel one gray, the mean of as many black texels as white ones,
+127.5 of 255 exactly. Which level a triangle gets is decided once per triangle, from
+its three corners: how many texels of the texture a step of one pixel covers, in the
+direction in which that is the most. A floor tile far away is drawn at about its own
+size across and many times smaller in depth, and it is the depth that the pixels would
+skip texels in, so the depth decides. Level `k` suits `2^k` texels to a pixel, and the
+nearest one as a ratio is taken; the book's square that is 10 times smaller than its
+texture gets the copy that is 8 times smaller. The cubes get the levels 0, 1, 2, 3 and
+4, one more for every doubling of the distance.
+
+Drawing with the levels costs nothing: about 60 ms for this picture either way.
+Making them costs once, under a millisecond for a texture of 512 x 512, and a third
+more memory for texels.
+
+What mipmapping leaves is where it chooses, one level for a whole triangle:
+
+- There is a hard edge where the tiles turn from checkered to gray, not a slow fading,
+  and near the right edge of the picture a triangle or two stay checkered among gray
+  ones, having come out just on the other side of the border between two levels.
+- Just before the gray, tiles are painted with the level of single-texel squares at
+  about a texel to a pixel, which under nearest neighbor filtering still makes a weak
+  moire. `--texture-filter bilinear` together with mipmapping softens it.
+- Going by the smallest direction blurs the other one: a far tile is painted with a
+  copy much too small for its width. On this floor that is the difference between
+  stripes and gray; on the wooden floor of the `textures` scene it is a loss of
+  sharpness across.
+
+The first is what trilinear filtering, the last section of the book's chapter, is for:
+a blend of the two nearest levels in place of a choice between them. It is not
+implemented yet.
 
 Hidden-surface removal has two halves. The depth buffer is something a scene asks for:
 `RenderScene` and `RenderObject` take a `DepthBuffer` of the canvas's size, and without
@@ -345,7 +424,8 @@ include/cgfs/   public headers: one folder per layer, one file per concept
                 image_io.h      PPM writer and reader, PNG writer
                 texture.h       Texture: an image to paint triangles with, looked up by
                                 GetTexel(u, v) with a TextureFilter (nearest neighbor or
-                                bilinear), and Uv, a point of it
+                                bilinear), at its own size or, made with Mipmapping on, at
+                                one of its mipmap levels; and Uv, a point of it
   camera/       viewport.h      Viewport: CanvasToViewport(x, y), field of view
                 camera.h        Camera (position, orientation and clipping planes) and
                                 MakeCameraMatrix
@@ -365,6 +445,8 @@ include/cgfs/   public headers: one folder per layer, one file per concept
                                 coordinate-to-pixel conversion)
                 interpolate.h   Interpolate
                 line.h          DrawLine
+                mipmap_level.h  MipmapLevel: which of a texture's mipmap levels suits the
+                                size a triangle is drawn at
                 triangle.h      DrawWireframeTriangle, DrawFilledTriangle, DrawShadedTriangle
                                 (the last two through a depth buffer when given one),
                                 DrawTriangleFunction, the signature they share,
@@ -401,7 +483,8 @@ include/cgfs/   public headers: one folder per layer, one file per concept
   demo/         raytracer_scenes.h, rasterizer_scenes.h
                                 the pictures shared by render_demo and the golden tests
                 textures.h      CrateTexture: the texture of the textures picture, read from
-                                assets/textures/
+                                assets/textures/; CheckerboardTexture: that of the
+                                checkerboard picture, made by a loop
 src/<layer>/    implementations, mirroring include/cgfs/<layer>/
 apps/           render_demo; its scene table is the one list of pictures
 tests/<layer>/  Catch2 unit tests, mirroring the layers; tests/demo/golden/ holds the
@@ -445,9 +528,13 @@ committing:
 ./build/release/apps/render_demo --scene textures --texture-mapping perspective-correct --width 320 --height 180 --output tests/demo/golden/textures_perspective_correct_320x180.ppm
 ./build/release/apps/render_demo --scene textures --texture-mapping linear --width 320 --height 180 --output tests/demo/golden/textures_linear_320x180.ppm
 ./build/release/apps/render_demo --scene textures --texture-filter bilinear --width 320 --height 180 --output tests/demo/golden/textures_bilinear_320x180.ppm
+./build/release/apps/render_demo --scene textures --texture-filter bilinear --mipmapping on --width 320 --height 180 --output tests/demo/golden/textures_mipmapped_bilinear_320x180.ppm
+./build/release/apps/render_demo --scene checkerboard --mipmapping off --width 320 --height 180 --output tests/demo/golden/checkerboard_320x180.ppm
+./build/release/apps/render_demo --scene checkerboard --mipmapping on --width 320 --height 180 --output tests/demo/golden/checkerboard_mipmapped_320x180.ppm
 ```
 
-The three `textures` references are 320 x 180 pictures of a scene composed for
-1920 x 1080: in them the crate is drawn six times too small as well, and the texture is
-nowhere drawn larger than it is, so the bilinear one shows no blocks removed. They pin
-the arithmetic; the picture to look at is the large one.
+The four `textures` references and the two `checkerboard` ones are 320 x 180 pictures
+of scenes composed for 1920 x 1080: in them everything is drawn six times smaller, the
+crate too, and the texture is nowhere drawn larger than it is, so the bilinear one
+shows no blocks removed and the mipmapped ones are gray, or blurred, over far more of
+the picture. They pin the arithmetic; the pictures to look at are the large ones.

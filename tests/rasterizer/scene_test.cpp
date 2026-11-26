@@ -13,9 +13,11 @@
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/culling.h>
 #include <cgfs/rasterizer/instance.h>
+#include <cgfs/rasterizer/mipmap_level.h>
 #include <cgfs/rasterizer/model.h>
 #include <cgfs/rasterizer/object.h>
 #include <cgfs/rasterizer/point.h>
+#include <cgfs/rasterizer/projection.h>
 #include <cgfs/rasterizer/scene.h>
 #include <cgfs/rasterizer/shading.h>
 #include <cgfs/rasterizer/triangle.h>
@@ -47,6 +49,7 @@ using cgfs::Instance;
 using cgfs::Light;
 using cgfs::MakeClippingPlanes;
 using cgfs::MakeOYRotationMatrix;
+using cgfs::Mipmapping;
 using cgfs::Model;
 using cgfs::Plane;
 using cgfs::Point;
@@ -1180,6 +1183,67 @@ TEST_CASE(
             CHECK(LitPixels(bilinear) == LitPixels(by_default));  // the same pixels
         }
     }
+}
+
+TEST_CASE(
+    "RenderScene under lights: a model whose texture has mipmap levels is painted by the "
+    "size each instance is drawn at",
+    "[rasterizer][shading][mipmap]") {
+    // One model with a texture of 64 x 64 texels in two places: at arm's length, where it
+    // is 16 pixels wide and high, 4 texels to a pixel, and four times as far, where it is
+    // 5. The scene has no parameter for mipmapping: it is the texture that has the
+    // levels, and RenderObject, which RenderScene draws with, that finds the one for a
+    // triangle.
+    const Texture with = AddressTexture(64, 64, 4, Mipmapping::kOn);
+    const Texture without = AddressTexture(64, 64, 4);
+    const std::vector<Instance> instances = {
+        {.model = 0, .position = {-0.125, 0.0, 1.0}},
+        {.model = 0, .position = {1.5, 0.5, 4.0}},
+    };
+    const auto level_of = [&](const Instance& instance) {
+        const Model placed = TransformModel(TexturedTriangle(with), MakeModelMatrix(instance));
+        std::array<Point, 3> p;
+        for (std::size_t k = 0; k < 3; ++k) {
+            p[k] = cgfs::ProjectVertex(TestViewport(), placed.vertices[k]);
+            p[k].uv = placed.triangles[0].uvs[k];
+        }
+        return cgfs::MipmapLevel(p[0], p[1], p[2], with);
+    };
+    REQUIRE(level_of(instances[0]) == 2);
+    REQUIRE(level_of(instances[1]) == 4);
+
+    const auto scene = [&](const Texture& texture) {
+        const std::vector<Model> models = {TexturedTriangle(texture)};
+        return CanvasWithTexturedScene(models, instances, TextureMapping::kPerspectiveCorrect);
+    };
+    const auto objects = [&](const Texture& texture) {
+        const std::vector<Light> lights = {AmbientLight{.intensity = 1.0}};
+        const Model model = TexturedTriangle(texture);
+        Canvas canvas(kSize, kSize, kBlack);
+        DepthBuffer depth_buffer(canvas);
+        for (const Instance& instance : instances) {
+            RenderObject(canvas, TestViewport(), TransformModel(model, MakeModelMatrix(instance)),
+                         lights, ShadingModel::kFlat, &depth_buffer);
+        }
+        return canvas;
+    };
+    const Canvas mipmapped = scene(with);
+    const Canvas plain = scene(without);
+    CHECK(Bytes(mipmapped) == Bytes(objects(with)));
+    CHECK(Bytes(plain) == Bytes(objects(without)));
+    CHECK(LitPixels(mipmapped) == LitPixels(plain));  // the same pixels, other colors
+
+    // The near instance has its corners on the pixels (-4, 8), (4, -8) and (-12, -8). The
+    // pixel (-2, -4) is two pixels right of its middle and twelve rows below its top:
+    // u = 5/8 and v = 3/4, the texel in column 40 of row 48. With levels it is the texel
+    // (10, 12) of the 16 x 16 of level 2, the mean of the columns 40 to 43 and the rows
+    // 48 to 51.
+    CHECK(plain.GetPixel(-2, -4) == PixelOf(40, 48, 4));
+    CHECK(mipmapped.GetPixel(-2, -4) == PixelOf(41.5, 49.5, 4));
+    // The far one, around the pixel (12, 4), is painted with the 4 x 4 texels of level
+    // 4, each the mean of 16 x 16: nothing on it is a texel of the texture.
+    CHECK(mipmapped.GetPixel(12, 3) != plain.GetPixel(12, 3));
+    CHECK(mipmapped.GetPixel(12, 3) != Rgb8{0, 0, 0});
 }
 
 TEST_CASE("RenderScene under lights: every instance is painted with the texture of its model",

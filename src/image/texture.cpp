@@ -23,14 +23,6 @@ double TexelCoordinate(double coordinate, int count) {
     return std::clamp(coordinate * count, 0.0, last);
 }
 
-/// The texel in column `tx` of row `ty` of `image`, counted from the top-left corner, as
-/// a color. Precondition: both are inside the image.
-Color Texel(const Image& image, std::size_t tx, std::size_t ty) {
-    const std::size_t offset = (ty * static_cast<std::size_t>(image.width) + tx) * 3;
-    return {static_cast<double>(image.rgb[offset]), static_cast<double>(image.rgb[offset + 1]),
-            static_cast<double>(image.rgb[offset + 2])};
-}
-
 /// The color the fraction `f` of the way from `a` to `b`: the book's (1 - f) a + f b,
 /// written so that two equal colors give exactly that color and nothing comes out
 /// outside the two (see Texture::GetTexel).
@@ -39,37 +31,9 @@ Color Blend(Color a, Color b, double f) {
     return {channel(a.r, b.r), channel(a.g, b.g), channel(a.b, b.b)};
 }
 
-/// The color at (tx, ty) blended from the four texels around it: the book's GetTexel
-/// with bilinear filtering. Precondition: tx and ty are inside the image, from 0 to its
-/// last column and row.
-Color BilinearTexel(const Image& image, double tx, double ty) {
-    // The whole parts say which texel is at the top left, and the fractions how far the
-    // point is from it toward the next column and the next row. Neither coordinate is
-    // negative, so cutting the fraction off rounds down.
-    const auto left = static_cast<std::size_t>(tx);
-    const auto top = static_cast<std::size_t>(ty);
-    const double fx = tx - static_cast<double>(left);
-    const double fy = ty - static_cast<double>(top);
-
-    // The last column has none to its right and the last row none below it: they stand
-    // in for the missing one, where fx or fy is 0 and its weight with it.
-    const std::size_t right = std::min(left + 1, static_cast<std::size_t>(image.width) - 1);
-    const std::size_t bottom = std::min(top + 1, static_cast<std::size_t>(image.height) - 1);
-
-    const Color tl = Texel(image, left, top);
-    const Color tr = Texel(image, right, top);
-    const Color bl = Texel(image, left, bottom);
-    const Color br = Texel(image, right, bottom);
-
-    // Interpolate across the top and across the bottom, then between the two.
-    const Color ct = Blend(tl, tr, fx);
-    const Color cb = Blend(bl, br, fx);
-    return Blend(ct, cb, fy);
-}
-
 }  // namespace
 
-Texture::Texture(Image image) : image_(std::move(image)) {
+Texture::Texture(Image image, Mipmapping mipmapping) : image_(std::move(image)) {
     if (image_.width <= 0 || image_.height <= 0) {
         throw std::invalid_argument("Texture dimensions must be positive, got " +
                                     std::to_string(image_.width) + "x" +
@@ -82,16 +46,93 @@ Texture::Texture(Image image) : image_(std::move(image)) {
                                     " bytes, which does not match " + std::to_string(image_.width) +
                                     "x" + std::to_string(image_.height) + " RGB");
     }
+    if (mipmapping == Mipmapping::kOn) {
+        // Halve the last level until it is one texel: each level is made of the one
+        // before it.
+        while (LevelWidth(level_count() - 1) > 1 || LevelHeight(level_count() - 1) > 1) {
+            reductions_.push_back(Halved(level_count() - 1));
+        }
+    }
 }
 
-Color Texture::GetTexel(double u, double v, TextureFilter filter) const {
-    const double tx = TexelCoordinate(u, image_.width);
-    const double ty = TexelCoordinate(v, image_.height);
+int Texture::LevelWidth(int level) const {
+    return level == 0 ? image_.width : reductions_[static_cast<std::size_t>(level) - 1].width;
+}
+
+int Texture::LevelHeight(int level) const {
+    return level == 0 ? image_.height : reductions_[static_cast<std::size_t>(level) - 1].height;
+}
+
+Color Texture::Texel(int level, std::size_t tx, std::size_t ty) const {
+    if (level == 0) {
+        // The texture itself: three bytes of the image.
+        const std::size_t offset = (ty * static_cast<std::size_t>(image_.width) + tx) * 3;
+        return {static_cast<double>(image_.rgb[offset]),
+                static_cast<double>(image_.rgb[offset + 1]),
+                static_cast<double>(image_.rgb[offset + 2])};
+    }
+    const Reduction& reduction = reductions_[static_cast<std::size_t>(level) - 1];
+    return reduction.texels[ty * static_cast<std::size_t>(reduction.width) + tx];
+}
+
+Color Texture::BilinearTexel(int level, double tx, double ty) const {
+    // The whole parts say which texel is at the top left, and the fractions how far the
+    // point is from it toward the next column and the next row. Neither coordinate is
+    // negative, so cutting the fraction off rounds down.
+    const auto left = static_cast<std::size_t>(tx);
+    const auto top = static_cast<std::size_t>(ty);
+    const double fx = tx - static_cast<double>(left);
+    const double fy = ty - static_cast<double>(top);
+
+    // The last column has none to its right and the last row none below it: they stand
+    // in for the missing one, where fx or fy is 0 and its weight with it.
+    const std::size_t right = std::min(left + 1, static_cast<std::size_t>(LevelWidth(level)) - 1);
+    const std::size_t bottom = std::min(top + 1, static_cast<std::size_t>(LevelHeight(level)) - 1);
+
+    const Color tl = Texel(level, left, top);
+    const Color tr = Texel(level, right, top);
+    const Color bl = Texel(level, left, bottom);
+    const Color br = Texel(level, right, bottom);
+
+    // Interpolate across the top and across the bottom, then between the two.
+    const Color ct = Blend(tl, tr, fx);
+    const Color cb = Blend(bl, br, fx);
+    return Blend(ct, cb, fy);
+}
+
+Texture::Reduction Texture::Halved(int level) const {
+    const int width = LevelWidth(level);
+    const int height = LevelHeight(level);
+    Reduction half{
+        .width = std::max(width / 2, 1), .height = std::max(height / 2, 1), .texels = {}};
+    half.texels.reserve(static_cast<std::size_t>(half.width) *
+                        static_cast<std::size_t>(half.height));
+    for (int y = 0; y < half.height; ++y) {
+        for (int x = 0; x < half.width; ++x) {
+            // The four texels this one covers. A level one texel wide has no second
+            // column, and one that is one texel high no second row: the first is taken
+            // again.
+            const auto left = static_cast<std::size_t>(2 * x);
+            const auto top = static_cast<std::size_t>(2 * y);
+            const std::size_t right = std::min(left + 1, static_cast<std::size_t>(width) - 1);
+            const std::size_t bottom = std::min(top + 1, static_cast<std::size_t>(height) - 1);
+            const Color sum = Texel(level, left, top) + Texel(level, right, top) +
+                              Texel(level, left, bottom) + Texel(level, right, bottom);
+            half.texels.push_back(sum * 0.25);
+        }
+    }
+    return half;
+}
+
+Color Texture::GetTexel(double u, double v, TextureFilter filter, int level) const {
+    assert(level >= 0 && level < level_count() && "Texture::GetTexel: no such mipmap level");
+    const double tx = TexelCoordinate(u, LevelWidth(level));
+    const double ty = TexelCoordinate(v, LevelHeight(level));
     if (filter == TextureFilter::kBilinear) {
-        return BilinearTexel(image_, tx, ty);
+        return BilinearTexel(level, tx, ty);
     }
     // Nearest neighbor filtering: round down, and the texel there is the color.
-    return Texel(image_, static_cast<std::size_t>(tx), static_cast<std::size_t>(ty));
+    return Texel(level, static_cast<std::size_t>(tx), static_cast<std::size_t>(ty));
 }
 
 }  // namespace cgfs

@@ -9,6 +9,7 @@
 #include <cgfs/lighting/light.h>
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/line.h>
+#include <cgfs/rasterizer/mipmap_level.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -20,6 +21,7 @@
 
 #include "rasterizer/pixel_helpers.h"
 #include "support/address_texture.h"
+#include "support/checkerboard_texture.h"
 #include "support/test_helpers.h"
 
 using cgfs::AmbientLight;
@@ -37,6 +39,7 @@ using cgfs::DrawWireframeTriangle;
 using cgfs::Image;
 using cgfs::kMatte;
 using cgfs::Light;
+using cgfs::Mipmapping;
 using cgfs::Point;
 using cgfs::PointLight;
 using cgfs::Rgb8;
@@ -48,9 +51,11 @@ using cgfs::Vec3;
 using cgfs::Viewport;
 using cgfs_test::AddressTexture;
 using cgfs_test::Bytes;
+using cgfs_test::FineCheckerboard;
 using cgfs_test::LitPixels;
 using cgfs_test::PixelOf;
 using cgfs_test::PixelsOf;
+using cgfs_test::TexelOf;
 using namespace cgfs::colors;
 
 namespace {
@@ -1571,4 +1576,229 @@ TEST_CASE("DrawPhongTriangle: with a texture the filter is the caller's, nearest
     Canvas colored_by_default(32, 32, kBlack);
     DrawPhongTriangle(colored_by_default, kPhongViewport, a, b, c, kYellow, kMatte, lights);
     CHECK(Bytes(colored) == Bytes(colored_by_default));
+}
+
+// --- Painted with a texture: mipmapping -----------------------------------------------------
+//
+// A texture that has its mipmap levels is painted by the level that suits the size of
+// the triangle (see MipmapLevel). A texel of level k of an AddressTexture is the mean of
+// a block of 2^k x 2^k texels, which is the color of the middle of the block.
+
+TEST_CASE(
+    "DrawTexturedTriangle: the book's checkerboard at half its size is one color without "
+    "mipmapping and gray with it",
+    "[rasterizer][mipmap]") {
+    // 16 x 16 black and white texels on a face of 8 pixel steps. Every pixel stands for
+    // 2 x 2 texels, two of each color. Without mipmapping it shows the one its point
+    // falls in, and the points of neighbouring pixels are two texels apart: all of them
+    // fall on white texels. The far edges of the face, u = 1 and v = 1, belong to the
+    // last column and row, which are the odd ones.
+    const Canvas unlucky = CanvasWithTexturedFace(8, FineCheckerboard(16));
+    for (int y = 1; y <= 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            INFO("pixel (" << x << ", " << y << ")");
+            CHECK(unlucky.GetPixel(x, y) == Rgb8{255, 255, 255});
+        }
+    }
+    CHECK(unlucky.GetPixel(8, 4) == Rgb8{0, 0, 0});
+
+    // With mipmapping the face is painted with the copy at half the size, every texel of
+    // which is the mean of two white texels and two black ones.
+    const Canvas gray = CanvasWithTexturedFace(8, FineCheckerboard(16, Mipmapping::kOn));
+    for (int y = 0; y <= 8; ++y) {
+        for (int x = 0; x <= 8; ++x) {
+            INFO("pixel (" << x << ", " << y << ")");
+            CHECK(gray.GetPixel(x, y) == Rgb8{127, 127, 127});  // 127.5, truncated
+        }
+    }
+    CHECK(LitPixels(gray).size() == 81);  // the pixels of the face, and no others
+
+    // One texel to the side the points fall on the black ones. Half a square, shifted so
+    // that its corner shows the second texel.
+    const auto shifted = [](const Texture& texture) {
+        return CanvasWithTexturedTriangle(
+            Showing({0, 0}, 0.0625, 0.0), Showing({8, 0}, 1.0625, 0.0),
+            Showing({0, 8}, 0.0625, 1.0), texture, TextureMapping::kLinear);
+    };
+    CHECK(shifted(FineCheckerboard(16)).GetPixel(3, 2) == Rgb8{0, 0, 0});
+    CHECK(shifted(FineCheckerboard(16, Mipmapping::kOn)).GetPixel(3, 2) == Rgb8{127, 127, 127});
+}
+
+TEST_CASE(
+    "DrawTexturedTriangle: a texture with mipmap levels drawn at its own size or larger is "
+    "painted as the texture itself",
+    "[rasterizer][mipmap]") {
+    for (const TextureFilter texture_filter :
+         {TextureFilter::kNearestNeighbor, TextureFilter::kBilinear}) {
+        INFO("filter " << static_cast<int>(texture_filter));
+        // Texel for pixel.
+        CHECK(Bytes(CanvasWithTexturedFace(8, AddressTexture(8, 8, 32, Mipmapping::kOn), false,
+                                           texture_filter)) ==
+              Bytes(CanvasWithTexturedFace(8, AddressTexture(8, 8, 32), false, texture_filter)));
+        // Four pixels to a texel.
+        CHECK(Bytes(CanvasWithTexturedFace(8, AddressTexture(2, 2, 128, Mipmapping::kOn), false,
+                                           texture_filter)) ==
+              Bytes(CanvasWithTexturedFace(8, AddressTexture(2, 2, 128), false, texture_filter)));
+    }
+}
+
+TEST_CASE(
+    "DrawTexturedTriangle: drawn at a quarter of its size a pixel shows the mean of the "
+    "sixteen texels it stands for",
+    "[rasterizer][mipmap]") {
+    // Sixteen texels across on a face of 4 pixel steps: four texels to a pixel, level 2,
+    // whose 4 x 4 texels are each the mean of 4 x 4 texels of the texture. The pixel x
+    // shows the texel in column x of that level, the mean of the columns 4x to 4x + 3,
+    // where without mipmapping it shows column 4x and never looks at the other three.
+    const Canvas with = CanvasWithTexturedFace(4, AddressTexture(16, 16, 16, Mipmapping::kOn));
+    const Canvas without = CanvasWithTexturedFace(4, AddressTexture(16, 16, 16));
+    for (int y = 0; y <= 4; ++y) {
+        for (int x = 0; x <= 4; ++x) {
+            INFO("pixel (" << x << ", " << y << ")");
+            const int column = std::min(x, 3);  // the far edges belong to the last texel
+            const int row = std::min(4 - y, 3);
+            CHECK(with.GetPixel(x, y) == PixelOf(4 * column + 1.5, 4 * row + 1.5, 16));
+            CHECK(without.GetPixel(x, y) ==
+                  PixelOf(std::min(4 * x, 15), std::min(4 * (4 - y), 15), 16));
+        }
+    }
+    CHECK(with.GetPixel(1, 4) == Rgb8{88, 24, 200});  // columns 4 to 7 and rows 0 to 3
+    CHECK(without.GetPixel(1, 4) == Rgb8{64, 0, 200});
+
+    // The two triangles of the face agree on the level, and either may be drawn last.
+    CHECK(Bytes(CanvasWithTexturedFace(4, AddressTexture(16, 16, 16, Mipmapping::kOn), true)) ==
+          Bytes(with));
+}
+
+TEST_CASE("DrawTexturedTriangle: the filter looks up the texels of the triangle's level",
+          "[rasterizer][mipmap]") {
+    // Three quarters of a 32 x 32 texture along each side of the right triangle with
+    // sides of 8 pixel steps: 3 texels to a pixel, level 2, 8 x 8 texels whose colors are
+    // (32 X + 12, 32 Y + 12, 200). A pixel step is three quarters of one of them: the
+    // pixel x is at 0.75 x among the texels of the level.
+    const Texture texture = AddressTexture(32, 32, 8, Mipmapping::kOn);
+    const Point a = Showing({0, 0}, 0.0, 0.0);
+    const Point b = Showing({8, 0}, 0.75, 0.0);
+    const Point c = Showing({0, 8}, 0.0, 0.75);
+    REQUIRE(cgfs::MipmapLevel(a, b, c, texture) == 2);
+    const Canvas nearest = CanvasWithTexturedTriangle(a, b, c, texture, TextureMapping::kLinear);
+    const Canvas bilinear = CanvasWithTexturedTriangle(a, b, c, texture, TextureMapping::kLinear,
+                                                       TextureFilter::kBilinear);
+    for (int y = 0; y <= 8; ++y) {
+        for (int x = 0; x + y <= 8; ++x) {
+            INFO("pixel (" << x << ", " << y << ")");
+            // Nearest neighbor filtering: the texel the point falls in, 0.75 x rounded
+            // down, which is the mean of four columns of the texture.
+            CHECK(nearest.GetPixel(x, y) ==
+                  PixelOf(4 * (3 * x / 4) + 1.5, 4 * (3 * y / 4) + 1.5, 8));
+            // Bilinear filtering: the blend at 0.75 x, in the colors of the level.
+            CHECK(bilinear.GetPixel(x, y) == PixelOf(4 * 0.75 * x + 1.5, 4 * 0.75 * y + 1.5, 8));
+            CHECK(bilinear.GetPixel(x, y) == ToRgb8(texture.GetTexel(0.75 * x / 8.0, 0.75 * y / 8.0,
+                                                                     TextureFilter::kBilinear, 2)));
+        }
+    }
+    CHECK(nearest.GetPixel(3, 0) == Rgb8{76, 12, 200});   // 0.75 * 3 = 2.25: texel 2
+    CHECK(bilinear.GetPixel(3, 0) == Rgb8{84, 12, 200});  // a quarter of the way to texel 3
+}
+
+TEST_CASE("DrawTexturedTriangle: every triangle is painted with the level of its own size",
+          "[rasterizer][mipmap]") {
+    // One texture on two faces on one canvas, a large one and a small one. The large
+    // one, 16 texels on 16 pixel steps, shows the texture itself; the small one, on 4
+    // steps, its level 2.
+    const Texture texture = AddressTexture(16, 16, 16, Mipmapping::kOn);
+    Canvas canvas(64, 64, kBlack);
+    const auto face = [&](int left, int bottom, int side) {
+        const Point top_left = Showing({left, bottom + side}, 0.0, 0.0);
+        const Point top_right = Showing({left + side, bottom + side}, 1.0, 0.0);
+        const Point bottom_right = Showing({left + side, bottom}, 1.0, 1.0);
+        const Point bottom_left = Showing({left, bottom}, 0.0, 1.0);
+        DrawTexturedTriangle(canvas, top_left, top_right, bottom_right, texture,
+                             TextureMapping::kLinear);
+        DrawTexturedTriangle(canvas, top_left, bottom_right, bottom_left, texture,
+                             TextureMapping::kLinear);
+    };
+    face(-30, -8, 16);
+    face(10, 0, 4);
+    CHECK(canvas.GetPixel(-30 + 5, -8 + 16) == PixelOf(5, 0, 16));  // the texel itself
+    CHECK(canvas.GetPixel(-30 + 5, -8 + 10) == PixelOf(5, 6, 16));
+    CHECK(canvas.GetPixel(10 + 1, 0 + 4) == PixelOf(5.5, 1.5, 16));  // the mean of sixteen
+    CHECK(canvas.GetPixel(10 + 2, 0 + 2) == PixelOf(9.5, 9.5, 16));
+}
+
+TEST_CASE("DrawTexturedTriangle: mipmapping changes the colors of a triangle and nothing else",
+          "[rasterizer][mipmap]") {
+    // A leaning triangle with far more texels than pixels, through a depth buffer: the
+    // same pixels are set and the buffer remembers the same depths, with levels and
+    // without, under both mappings and both filters.
+    const Texture with = AddressTexture(64, 64, 4, Mipmapping::kOn);
+    const Texture without = AddressTexture(64, 64, 4);
+    const Point a = AtDepth(Showing({-9, -7}, 0.1, 0.9), 1.0);
+    const Point b = AtDepth(Showing({10, -2}, 0.95, 0.7), 0.5);
+    const Point c = AtDepth(Showing({-1, 11}, 0.4, 0.05), 0.25);
+    REQUIRE(cgfs::MipmapLevel(a, b, c, with) == 2);
+    for (const TextureMapping texture_mapping : kBothMappings) {
+        for (const TextureFilter texture_filter :
+             {TextureFilter::kNearestNeighbor, TextureFilter::kBilinear}) {
+            INFO("mapping " << static_cast<int>(texture_mapping) << ", filter "
+                            << static_cast<int>(texture_filter));
+            Canvas mipmapped(32, 32, kBlack);
+            DepthBuffer mipmapped_depths(mipmapped);
+            DrawTexturedTriangle(mipmapped, a, b, c, with, texture_mapping, &mipmapped_depths,
+                                 texture_filter);
+            Canvas plain(32, 32, kBlack);
+            DepthBuffer plain_depths(plain);
+            DrawTexturedTriangle(plain, a, b, c, without, texture_mapping, &plain_depths,
+                                 texture_filter);
+            CHECK(Bytes(mipmapped) != Bytes(plain));
+            CHECK(LitPixels(mipmapped) == LitPixels(plain));
+            for (int x = -16; x < 16; ++x) {
+                for (int y = -16; y < 16; ++y) {
+                    CHECK(mipmapped_depths.InvZ(x, y) == plain_depths.InvZ(x, y));
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("DrawPhongTriangle: a texture with mipmap levels is painted by the triangle's level",
+          "[rasterizer][mipmap]") {
+    // 64 texels on 8 pixel steps, level 3. Under ambient light the picture is that of
+    // DrawTexturedTriangle with the light as the intensity of every vertex.
+    const Texture with = AddressTexture(64, 64, 4, Mipmapping::kOn);
+    const Texture without = AddressTexture(64, 64, 4);
+    const Point a = AtDepth(OnPlane(kTexturedA), 1.0);
+    const Point b = AtDepth(OnPlane(kTexturedB), 0.25);
+    const Point c = AtDepth(OnPlane(kTexturedC), 0.5);
+    REQUIRE(cgfs::MipmapLevel(a, b, c, with) == 3);
+    const std::vector<Light> lights = {AmbientLight{.intensity = 0.5}};
+    Point ha = a;
+    Point hb = b;
+    Point hc = c;
+    ha.h = 0.5;
+    hb.h = 0.5;
+    hc.h = 0.5;
+    for (const TextureMapping texture_mapping : kBothMappings) {
+        for (const TextureFilter texture_filter :
+             {TextureFilter::kNearestNeighbor, TextureFilter::kBilinear}) {
+            INFO("mapping " << static_cast<int>(texture_mapping) << ", filter "
+                            << static_cast<int>(texture_filter));
+            Canvas lit(32, 32, kBlack);
+            DrawPhongTriangle(lit, kPhongViewport, a, b, c, kWhite, kMatte, lights, nullptr, &with,
+                              texture_mapping, texture_filter);
+            CHECK(Bytes(lit) == Bytes(CanvasWithTexturedTriangle(ha, hb, hc, with, texture_mapping,
+                                                                 texture_filter)));
+            // And it is not the picture of the texture without its levels.
+            CHECK(Bytes(lit) != Bytes(CanvasWithTexturedTriangle(ha, hb, hc, without,
+                                                                 texture_mapping, texture_filter)));
+        }
+    }
+    // The pixel (2, 1) under linear mapping shows u = 2/8, v = 1/8: the texel (2, 1) of
+    // the 8 x 8 texels of level 3, the mean of the columns 16 to 23 and the rows 8 to 15,
+    // at half the light.
+    Canvas lit(32, 32, kBlack);
+    DrawPhongTriangle(lit, kPhongViewport, a, b, c, kWhite, kMatte, lights, nullptr, &with,
+                      TextureMapping::kLinear);
+    CHECK(lit.GetPixel(2, 1) == ToRgb8(TexelOf(19.5, 11.5, 4) * 0.5));
+    CHECK(lit.GetPixel(2, 1) == Rgb8{39, 23, 100});
 }

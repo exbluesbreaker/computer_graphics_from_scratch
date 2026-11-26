@@ -7,6 +7,7 @@
 #include <cgfs/lighting/illumination.h>
 #include <cgfs/lighting/light.h>
 #include <cgfs/math/vec3.h>
+#include <cgfs/rasterizer/mipmap_level.h>
 #include <cgfs/rasterizer/model.h>
 #include <cgfs/rasterizer/object.h>
 #include <cgfs/rasterizer/point.h>
@@ -37,6 +38,7 @@ using cgfs::DrawTexturedTriangle;
 using cgfs::Image;
 using cgfs::kMatte;
 using cgfs::Light;
+using cgfs::Mipmapping;
 using cgfs::Model;
 using cgfs::Normalized;
 using cgfs::Point;
@@ -54,6 +56,7 @@ using cgfs::Viewport;
 using cgfs_test::AddressTexture;
 using cgfs_test::Bytes;
 using cgfs_test::LitPixels;
+using cgfs_test::PixelOf;
 using namespace cgfs::colors;
 
 namespace {
@@ -768,6 +771,51 @@ TEST_CASE(
                      TextureMapping::kPerspectiveCorrect, TextureFilter::kBilinear);
         CHECK(Bytes(filtered) == Bytes(Lit(Face(kYellow), lights, shading_model)));
     }
+}
+
+TEST_CASE(
+    "RenderObject under lights: an object whose texture has mipmap levels is painted by the "
+    "level of each triangle's size",
+    "[shading][mipmap]") {
+    // The face is 24 pixels wide and 24 high, and the texture 64 texels each way: 2.67
+    // texels to a pixel, level 1. Under ambient light every shading model draws the
+    // textured triangle through the projected corners, which chooses that level for
+    // itself; nobody tells RenderObject about mipmapping.
+    const Texture with = AddressTexture(64, 64, 4, Mipmapping::kOn);
+    const Texture without = AddressTexture(64, 64, 4);
+    const std::vector<Light> lights = {AmbientLight{.intensity = 1.0}};
+    const std::array<Point, 3> corners = TexturedCorners(kCorners);
+    REQUIRE(cgfs::MipmapLevel(corners[0], corners[1], corners[2], with) == 1);
+    const Canvas expected = Textured(corners, with);
+    const Canvas plain = Textured(corners, without);
+    REQUIRE(Bytes(expected) != Bytes(plain));
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        INFO("shading model " << static_cast<int>(shading_model));
+        CHECK(Bytes(Lit(TexturedFace(with), lights, shading_model)) == Bytes(expected));
+        CHECK(Bytes(Lit(TexturedFace(without), lights, shading_model)) == Bytes(plain));
+    }
+    // Two pixels right of the face's center, two thirds of the way down from its top:
+    // u = 7/12 and v = 2/3. Without levels that is the texel in column 37 of row 42; with
+    // them the texel (18, 21) of level 1, the mean of the columns 36 and 37 and the rows
+    // 42 and 43.
+    CHECK(plain.GetPixel(2, -4) == PixelOf(37, 42, 4));
+    CHECK(expected.GetPixel(2, -4) == PixelOf(36.5, 42.5, 4));
+
+    // The same face four times as far away is a quarter of the size, 6 pixels for the 64
+    // texels, and is painted two levels on.
+    std::array<Vec3, 3> far_corners = kCorners;
+    Model far_away = TexturedFace(with);
+    for (std::size_t k = 0; k < 3; ++k) {
+        far_corners[k].z = 4.0;
+        far_away.vertices[k] = far_corners[k];
+    }
+    const std::array<Point, 3> small = TexturedCorners(far_corners);
+    REQUIRE(cgfs::MipmapLevel(small[0], small[1], small[2], with) == 3);
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        INFO("shading model " << static_cast<int>(shading_model));
+        CHECK(Bytes(Lit(far_away, lights, shading_model)) == Bytes(Textured(small, with)));
+    }
+    CHECK(LitPixels(Textured(small, with)).size() > 15);
 }
 
 TEST_CASE("RenderObject under lights: through a depth buffer the nearer textured triangle shows",

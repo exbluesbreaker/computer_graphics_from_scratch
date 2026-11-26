@@ -39,15 +39,18 @@ void RenderScene(const cgfs::Scene& scene, double distance, cgfs::Canvas& canvas
 }
 
 /// What a picture is drawn with besides the canvas: what the command line says about how
-/// it is to be drawn, and the texture read for it. A picture reads what applies to it:
+/// it is to be drawn, and the texture made for it. A picture reads what applies to it:
 /// the 2D pictures nothing, only the lit ones the shading model, and only the textured
-/// ones the texture mapping, the texture filter and the texture.
+/// ones the texture mapping, the texture filter and the texture. Mipmapping is not
+/// something a picture is told: it is how main makes the texture, with its smaller
+/// copies or without.
 struct Settings {
     double distance = 1.0;
     cgfs::ShadingModel shading_model = cgfs::ShadingModel::kPhong;
     cgfs::TextureMapping texture_mapping = cgfs::TextureMapping::kPerspectiveCorrect;
     cgfs::TextureFilter texture_filter = cgfs::TextureFilter::kNearestNeighbor;
-    /// The texture of a textured picture, which main reads before it starts the clock;
+    cgfs::Mipmapping mipmapping = cgfs::Mipmapping::kOff;
+    /// The texture of a textured picture, which main makes before it starts the clock;
     /// null for every other picture.
     const cgfs::Texture* texture = nullptr;
 };
@@ -90,14 +93,15 @@ void Textured(cgfs::Canvas& canvas, const Settings& settings) {
 }
 
 /// One picture: its name on the command line, its line in the usage text, how to draw
-/// it, whether the shading model changes it, and whether it is painted with the crate
-/// texture, which then has to be read first and whose mapping and filter change it.
+/// it, whether the shading model changes it, and how to make the texture it is painted
+/// with, null for a picture that is not painted. A painted picture has its texture made
+/// first, with or without its mipmap levels, and the mapping and the filter change it.
 struct DemoScene {
     std::string_view name;
     std::string_view description;
     void (*draw)(cgfs::Canvas& canvas, const Settings& settings);
     bool lit = false;
-    bool textured = false;
+    cgfs::Texture (*make_texture)(cgfs::Mipmapping mipmapping) = nullptr;
 };
 
 /// The first row is the default.
@@ -131,7 +135,9 @@ constexpr DemoScene kScenes[] = {
     {"shading", "solids and three lamps over three tiles, shaded as --shading says",
      Lit<cgfs::demo::DrawShadingScene>, true},
     {"textures", "a wooden crate on a floor paved with the same texture, out to the horizon",
-     Textured<cgfs::demo::DrawTexturesScene>, false, true},
+     Textured<cgfs::demo::DrawTexturesScene>, false, cgfs::demo::CrateTexture},
+    {"checkerboard", "a checkered floor to the horizon and cubes far away, for --mipmapping",
+     Textured<cgfs::demo::DrawCheckerboardScene>, false, cgfs::demo::CheckerboardTexture},
     {"axes", "the coordinate axes and corner dots (no ray tracing)",
      Rasterized<cgfs::demo::DrawAxesScene>},
 };
@@ -234,6 +240,29 @@ const TextureFilterChoice& FindTextureFilterChoice(cgfs::TextureFilter texture_f
     return kTextureFilterChoices[0];  // not reached: the table has every filter
 }
 
+/// Mipmapping off or on: its name on the command line and its line in the usage text.
+struct MipmappingChoice {
+    std::string_view name;
+    cgfs::Mipmapping mipmapping;
+    std::string_view description;
+};
+
+constexpr MipmappingChoice kMipmappingChoices[] = {
+    {"off", cgfs::Mipmapping::kOff,
+     "a texture at its own size only: noise where it is drawn small"},
+    {"on", cgfs::Mipmapping::kOn,
+     "smaller copies of a texture, and each triangle painted with the one of its size"},
+};
+
+const MipmappingChoice& FindMipmappingChoice(cgfs::Mipmapping mipmapping) {
+    for (const MipmappingChoice& choice : kMipmappingChoices) {
+        if (choice.mipmapping == mipmapping) {
+            return choice;
+        }
+    }
+    return kMipmappingChoices[0];  // not reached: the table has both
+}
+
 // --- The command line -----------------------------------------------------------------
 
 struct Options {
@@ -266,11 +295,16 @@ std::string Usage() {
     for (std::size_t i = 0; i < std::size(kTextureFilterChoices); ++i) {
         out << (i > 0 ? "|" : "") << kTextureFilterChoices[i].name;
     }
-    out << "] [--output PATH]\n"
+    out << "] [--mipmapping ";
+    for (std::size_t i = 0; i < std::size(kMipmappingChoices); ++i) {
+        out << (i > 0 ? "|" : "") << kMipmappingChoices[i].name;
+    }
+    out << "]\n"
+           "                   [--output PATH]\n"
            "\n";
     std::string_view label = "  --scene     ";
     for (const DemoScene& scene : kScenes) {
-        out << label << std::left << std::setw(12) << (std::string(scene.name) + ":")
+        out << label << std::left << std::setw(14) << (std::string(scene.name) + ":")
             << scene.description << "\n";
         label = "              ";
     }
@@ -302,7 +336,16 @@ std::string Usage() {
         label = "              ";
     }
     out << "              how the color of a point of a texture is made from its texels (default: "
-        << FindTextureFilterChoice(defaults.settings.texture_filter).name << ")\n"
+        << FindTextureFilterChoice(defaults.settings.texture_filter).name << ")\n";
+    label = "  --mipmapping\n              ";
+    for (const MipmappingChoice& choice : kMipmappingChoices) {
+        out << label << std::left << std::setw(5) << (std::string(choice.name) + ":")
+            << choice.description << "\n";
+        label = "              ";
+    }
+    out << "              whether the textures of the painted pictures have mipmap levels "
+           "(default: "
+        << FindMipmappingChoice(defaults.settings.mipmapping).name << ")\n"
         << "  --output    output file, .png or .ppm (default: " << defaults.output << ")\n";
     return out.str();
 }
@@ -373,6 +416,18 @@ cgfs::TextureFilter ParseTextureFilter(std::string_view name, const std::string&
                              "'");
 }
 
+cgfs::Mipmapping ParseMipmapping(std::string_view name, const std::string& text) {
+    std::string names;
+    for (const MipmappingChoice& choice : kMipmappingChoices) {
+        if (choice.name == text) {
+            return choice.mipmapping;
+        }
+        names += (names.empty() ? "" : ", ") + std::string(choice.name);
+    }
+    throw std::runtime_error(std::string(name) + " expects one of " + names + ", got '" + text +
+                             "'");
+}
+
 // Returns nullopt when --help was requested. Throws std::runtime_error on bad input.
 std::optional<Options> ParseArgs(int argc, char** argv) {
     Options options;
@@ -399,6 +454,8 @@ std::optional<Options> ParseArgs(int argc, char** argv) {
             options.settings.texture_mapping = ParseTextureMapping(arg, value);
         } else if (arg == "--texture-filter") {
             options.settings.texture_filter = ParseTextureFilter(arg, value);
+        } else if (arg == "--mipmapping") {
+            options.settings.mipmapping = ParseMipmapping(arg, value);
         } else if (arg == "--output") {
             options.output = value;
         } else {
@@ -423,12 +480,14 @@ int main(int argc, char** argv) {
                                      SceneNames() + ")");
         }
 
-        // A textured picture has its texture read here, before the clock starts: reading
-        // a file is not drawing.
+        // A painted picture has its texture made here, before the clock starts: reading
+        // a file is not drawing, and neither is making the smaller copies of a texture,
+        // which mipmapping does once, when the texture is loaded, so that drawing with
+        // them costs no more.
         Settings settings = options->settings;
         std::optional<cgfs::Texture> texture;
-        if (scene->textured) {
-            texture.emplace(cgfs::demo::CrateTexture());
+        if (scene->make_texture != nullptr) {
+            texture.emplace(scene->make_texture(settings.mipmapping));
             settings.texture = &*texture;
         }
 
@@ -447,10 +506,12 @@ int main(int argc, char** argv) {
         if (scene->lit) {
             std::cout << " (" << FindShadingChoice(settings.shading_model).name << " shading)";
         }
-        if (scene->textured) {
+        if (scene->make_texture != nullptr) {
             std::cout << " (" << FindTextureMappingChoice(settings.texture_mapping).name
                       << " texture mapping, "
-                      << FindTextureFilterChoice(settings.texture_filter).name << " filtering)";
+                      << FindTextureFilterChoice(settings.texture_filter).name
+                      << " filtering, mipmapping " << FindMipmappingChoice(settings.mipmapping).name
+                      << ")";
         }
         std::cout << " at " << canvas.width() << "x" << canvas.height() << " -> " << options->output
                   << "\n"

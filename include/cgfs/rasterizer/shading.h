@@ -123,7 +123,10 @@ enum class ShadingModel { kFlat, kGouraudFaceted, kGouraud, kPhong };
 /// starts with (see TextureMapping). `texture_filter` is how the color at those
 /// coordinates is made from the texels there: the one texel the point falls in unless
 /// the caller asks for bilinear filtering, which blends the four around it (see
-/// TextureFilter). Neither makes a difference to an object without a texture.
+/// TextureFilter). Neither makes a difference to an object without a texture. A texture
+/// that was made with mipmap levels is painted, triangle by triangle, with the level
+/// that suits the size the triangle is drawn at (see Mipmapping and MipmapLevel); that
+/// is the texture's doing and the primitives', and nothing here asks for it.
 ///
 /// The triangles are drawn in list order, through `depth_buffer` if there is one, so
 /// that a pixel shows the nearest of them; without one the later triangle shows, as in

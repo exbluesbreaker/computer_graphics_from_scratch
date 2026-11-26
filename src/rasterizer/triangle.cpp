@@ -4,6 +4,7 @@
 #include <cgfs/math/vec3.h>
 #include <cgfs/rasterizer/interpolate.h>
 #include <cgfs/rasterizer/line.h>
+#include <cgfs/rasterizer/mipmap_level.h>
 #include <cgfs/rasterizer/projection.h>
 
 #include <cassert>
@@ -97,13 +98,14 @@ TextureSides TextureEdgeInterpolate(const Point& p0, const Point& p1, const Poin
 /// The color of the texture that a pixel shows, from what was interpolated to it: u and
 /// v themselves under linear mapping, and u/z and v/z under perspective-correct mapping,
 /// where dividing by the pixel's 1/z gives u and v back. The filter makes the color of
-/// the texels around that point.
+/// the texels around that point, those of the mipmap level the pixel's triangle is
+/// painted with.
 Color TexelAt(const Texture& texture, double carried_u, double carried_v, double inv_z,
-              TextureMapping texture_mapping, TextureFilter texture_filter) {
+              TextureMapping texture_mapping, TextureFilter texture_filter, int mipmap_level) {
     if (texture_mapping == TextureMapping::kPerspectiveCorrect) {
-        return texture.GetTexel(carried_u / inv_z, carried_v / inv_z, texture_filter);
+        return texture.GetTexel(carried_u / inv_z, carried_v / inv_z, texture_filter, mipmap_level);
     }
-    return texture.GetTexel(carried_u, carried_v, texture_filter);
+    return texture.GetTexel(carried_u, carried_v, texture_filter, mipmap_level);
 }
 
 /// Whether `depth_buffer` can answer for the pixels of `canvas`: there is none, or it
@@ -250,6 +252,10 @@ void DrawTexturedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, const Te
     // along.
     SortByY(p0, p1, p2);
 
+    // The size of the texture that suits the size the triangle is drawn at: one choice
+    // for the whole triangle, and the texture itself unless it has smaller copies.
+    const int mipmap_level = MipmapLevel(p0, p1, p2, texture);
+
     // Compute the x coordinates, the h values, the 1/z and the two texture coordinates
     // of the triangle edges, one of each per row. The texture coordinates are u and v or
     // u/z and v/z, as the mapping says.
@@ -293,7 +299,7 @@ void DrawTexturedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, const Te
             const double inv_z = iz_segment[i];
             if (depth_buffer == nullptr || depth_buffer->UpdateIfCloser(x, y, inv_z)) {
                 const Color texel = TexelAt(texture, u_segment[i], v_segment[i], inv_z,
-                                            texture_mapping, texture_filter);
+                                            texture_mapping, texture_filter, mipmap_level);
                 canvas.PutPixel(x, y, texel * h_segment[i]);
             }
         }
@@ -321,10 +327,12 @@ void DrawPhongTriangle(Canvas& canvas, const Viewport& viewport, Point p0, Point
         EdgeInterpolate(p0.y, p0.normal.z, p1.y, p1.normal.z, p2.y, p2.normal.z);
 
     // A triangle with a texture takes its two texture coordinates along as well, in the
-    // form the mapping carries them in.
+    // form the mapping carries them in, and is painted with the size of the texture that
+    // suits the size it is drawn at.
     const bool textured = texture != nullptr;
     const TextureSides uv_sides =
         textured ? TextureEdgeInterpolate(p0, p1, p2, texture_mapping) : TextureSides{};
+    const int mipmap_level = textured ? MipmapLevel(p0, p1, p2, *texture) : 0;
 
     // Determine which is left and which is right, as for the filled triangle; every
     // other quantity follows x.
@@ -370,9 +378,10 @@ void DrawPhongTriangle(Canvas& canvas, const Viewport& viewport, Point p0, Point
                 const Vec3 normal = Normalized({nx_segment[i], ny_segment[i], nz_segment[i]});
                 const Vec3 view = -point;  // toward the camera, the origin of its coordinates
                 // The surface's own color at this pixel: the triangle's, or its texture's.
-                const Color surface = textured ? TexelAt(*texture, u_segment[i], v_segment[i],
-                                                         inv_z, texture_mapping, texture_filter)
-                                               : color;
+                const Color surface = textured
+                                          ? TexelAt(*texture, u_segment[i], v_segment[i], inv_z,
+                                                    texture_mapping, texture_filter, mipmap_level)
+                                          : color;
                 canvas.PutPixel(
                     x, y, surface * ComputeIllumination(point, normal, view, specular, lights));
             }

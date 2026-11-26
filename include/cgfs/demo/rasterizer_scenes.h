@@ -201,8 +201,9 @@ void DrawShadingScene(Canvas& canvas, const Viewport& viewport, ShadingModel sha
 /// that runs to the horizon, both painted with `texture`, which is meant to be the crate
 /// texture (see CrateTexture in textures.h), drawn with RenderScene under an ambient
 /// light and a sun, through a depth buffer. The texture is carried across the triangles
-/// by `texture_mapping` and looked up by `texture_filter`: the scene is one to be drawn
-/// several times, the pictures of the chapter as far as it is implemented.
+/// by `texture_mapping` and looked up by `texture_filter`, and `texture` has mipmap
+/// levels or has none: the scene is one to be drawn several times, the pictures of the
+/// chapter as far as it is implemented.
 ///
 /// The two objects are painted with one texture by one method. With the default,
 /// nearest neighbor filtering, a pixel takes the color of the one texel its point of the
@@ -229,7 +230,18 @@ void DrawShadingScene(Canvas& canvas, const Viewport& viewport, ShadingModel sha
 /// wood there running from one texel's color to the next. The crate is a little softer
 /// and otherwise as it was. The floor toward the horizon is no better: four texels of
 /// the hundreds under a pixel are as much of an accident as one, and the dashes and the
-/// noise stay, which is left to mipmapping.
+/// noise stay.
+///
+/// With a texture that has its mipmap levels (see Mipmapping) the second is mended: the
+/// tiles toward the horizon are painted with the copies of the texture that suit their
+/// size, in which a texel is the mean of the many a pixel stood for, and the noise gives
+/// way to the wood's color, with the boards between the tiles as lines across it. The
+/// price shows nearer by: a tile is painted with the copy that suits the direction it
+/// is drawn smallest in, its depth, and so loses some of its sharpness across. The
+/// crate, a texel and a half to a pixel across at 1920 x 1080, is just past the border
+/// between the texture and its first copy and is painted with the copy at half the
+/// size: its grain is smoother and a little softer. (DrawCheckerboardScene is the same
+/// floor with a texture that shows all this more harshly.)
 ///
 /// With TextureMapping::kLinear the picture is the chapter's first, and wrong: u and v
 /// are interpolated over the picture of every triangle, so on every face that leans away
@@ -251,6 +263,65 @@ void DrawShadingScene(Canvas& canvas, const Viewport& viewport, ShadingModel sha
 void DrawTexturesScene(Canvas& canvas, const Viewport& viewport, const Texture& texture,
                        TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect,
                        TextureFilter texture_filter = TextureFilter::kNearestNeighbor);
+
+/// The picture of mipmapping: the floor of the textures picture, under the same camera
+/// and the same two lights, and on it a row of five cubes that runs away from the
+/// camera, all painted with `texture`, which is meant to be the checkerboard (see
+/// CheckerboardTexture in textures.h): the book's example of a texture that goes wrong
+/// when it is drawn small. Whether it does is up to the texture. The picture is one to
+/// be drawn twice, with a texture that has its mipmap levels and with one that has
+/// not (see Mipmapping); nothing else differs between the two.
+///
+/// - The floor is 48 x 48 tiles of 4 x 4, each with the whole checkerboard on it, 64
+///   squares a side, so a square is a sixteenth of a unit. Under the camera a square is
+///   32 pixels wide at 1920 x 1080 and the floor is a checkerboard. About 10 from the
+///   camera a square is one pixel in depth, and from there to the horizon a pixel
+///   stands for more and more squares, black and white in equal parts, and ought to be
+///   gray.
+/// - The cubes are of side 2, with the whole checkerboard on every face, and stand 6, 12,
+///   24, 48 and 96 from the camera, each twice as far as the one before and so half as
+///   large in the picture: the book's object seen from farther and farther away.
+///
+/// Without mipmapping every pixel shows the one texel its point falls in, black or
+/// white. Where the squares are smaller than the pixels, which squares the pixels of a
+/// row hit has nothing to do with the squares and everything to do with how the two
+/// grids happen to lie on each other: the far floor is rings and arcs of black and
+/// white, a moire that is not in the texture, the faces of the third cube are speckled,
+/// and those of the last two are striped.
+///
+/// With mipmapping every triangle is painted with the level of the texture that suits
+/// the size it is drawn at (see MipmapLevel). The levels of the checkerboard are squares
+/// of 2 x 2 texels, then of single texels, and from the third on one gray, the mean of
+/// as many black texels as white ones. The tiles of the floor from about 12 away to the
+/// horizon get such a level, and that part of the floor is the even gray it should be:
+/// at 1920 x 1080 the top 130 rows of it or so. The cubes get, at that size, the levels
+/// 0, 1, 2, 3 and 4, one more for every doubling of the distance: the first two are
+/// checkered, the third is a checkerboard of single texels, and the last two are gray,
+/// with their two faces told apart by the light. (The first cube is seen from the side,
+/// and its narrow face, drawn smaller than the wide one, gets level 2.) A level that
+/// still has squares shows, under nearest neighbor filtering, exactly what the texture
+/// shows, a texel of it lying inside one square: the two pictures differ only where the
+/// second is gray.
+///
+/// What mipmapping leaves, since a level is chosen for a whole triangle: a hard border
+/// where the tiles change from checkered to gray, instead of a slow fading; near the
+/// right edge of the picture one half of a tile, and the pieces the camera's clipping
+/// plane leaves of the tile beside it, which come out just on the checkered side of
+/// that border while the triangles around them come out on the gray side; and, in the
+/// tiles just before the gray, a level of single texels drawn at about a texel to a
+/// pixel, which under nearest neighbor filtering still makes a moire, though a weaker
+/// one. Bilinear filtering on top of mipmapping softens the last; the first two are
+/// what the book's trilinear filtering is for.
+///
+/// `texture_mapping` and `texture_filter` are as in the textures picture. The cubes are
+/// turned by the angle of the 20-21-29 triangle, about 43.6 degrees, so that both faces
+/// of a cube show at about the same width, by a matrix written out from those numbers;
+/// like the textures picture this one calls neither cos nor sin. Drawn with flat
+/// shading, through a depth buffer and with back-face culling. Clears the canvas to a
+/// dark background first; depends on the viewport, so render_demo's --distance zooms it.
+void DrawCheckerboardScene(Canvas& canvas, const Viewport& viewport, const Texture& texture,
+                           TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect,
+                           TextureFilter texture_filter = TextureFilter::kNearestNeighbor);
 
 /// The coordinate axes through the origin, a dot at the origin and a colored dot in
 /// each corner (red top-left, green top-right, blue bottom-left, black bottom-right): a

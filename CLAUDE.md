@@ -12,9 +12,10 @@ reflections) and a rasterizer (lines, filled and shaded triangles, perspective
 projection, objects made of triangles, scenes of transformed instances seen from a
 movable camera, clipping, hidden-surface removal by back-face culling and a depth
 buffer, shading under lights, flat, Gouraud or Phong, and textures, linear or
-perspective-correct, with nearest neighbor or bilinear filtering, so far). It exists for
-learning: every algorithm is written by hand, reads like the book's listing and is
-pinned by unit tests and golden images. No graphics libraries, no GPU.
+perspective-correct, with nearest neighbor or bilinear filtering and with mipmapping,
+so far). It exists for learning: every algorithm is written by hand, reads like the
+book's listing and is pinned by unit tests and golden images. No graphics libraries, no
+GPU.
 
 ## Build, test, run
 
@@ -105,12 +106,13 @@ image/        color, pixel_index, canvas, depth_buffer, image_io, texture
 camera/       viewport, camera, clipping_planes               how canvas pixels map into the world; shared by both renderers
 lighting/     light, illumination                             the lights and the illumination equation; shared by both renderers
 raytracer/    scene, raytracer                                the ray tracing renderer: spheres, tracing, shadows
-rasterizer/   point, interpolate, line, triangle, projection, object, model, instance, culling, clipping,
-              shading, scene                                  the rasterizing renderer: 2D primitives, the
+rasterizer/   point, interpolate, line, mipmap_level, triangle, projection, object, model, instance,
+              culling, clipping, shading, scene               the rasterizing renderer: 2D primitives, the
                                                               projection that feeds them, objects made of
                                                               triangles, scenes of instances, their back-face
                                                               culling, their clipping and their shading under
-                                                              lights, in a color or in a texture, one per file
+                                                              lights, in a color or in a texture, at the size
+                                                              of it that suits a triangle, one per file
 demo/         raytracer_scenes, rasterizer_scenes, textures   the demo pictures and the textures they are
                                                               painted with, built on everything above
 ```

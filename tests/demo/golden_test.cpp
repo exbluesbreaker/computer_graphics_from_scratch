@@ -82,18 +82,38 @@ void CheckDrawingMatchesGolden(void (*draw)(cgfs::Canvas&), const std::string& f
     CheckCanvasMatches(canvas, golden, path);
 }
 
-// Draws the textures scene, with the crate texture carried across its triangles by
-// `texture_mapping` and looked up by `texture_filter`, on a canvas of the reference
-// image's size.
-void CheckTexturesSceneMatchesGolden(cgfs::TextureMapping texture_mapping,
-                                     cgfs::TextureFilter texture_filter, const std::string& file) {
+// How a painted picture is drawn: what carries its texture across a triangle, what makes
+// a color of the texels, and whether the texture has its mipmap levels.
+struct Painting {
+    cgfs::TextureMapping texture_mapping = cgfs::TextureMapping::kPerspectiveCorrect;
+    cgfs::TextureFilter texture_filter = cgfs::TextureFilter::kNearestNeighbor;
+    cgfs::Mipmapping mipmapping = cgfs::Mipmapping::kOff;
+};
+
+// Draws the textures scene with the crate texture, as `painting` says, on a canvas of
+// the reference image's size.
+void CheckTexturesSceneMatchesGolden(const Painting& painting, const std::string& file) {
     const std::filesystem::path path = GoldenPath(file);
     const cgfs::Image golden = cgfs::ReadPpm(path);
-    const cgfs::Texture crate = cgfs::demo::CrateTexture();
+    const cgfs::Texture crate = cgfs::demo::CrateTexture(painting.mipmapping);
 
     cgfs::Canvas canvas(golden.width, golden.height);
     cgfs::demo::DrawTexturesScene(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas), crate,
-                                  texture_mapping, texture_filter);
+                                  painting.texture_mapping, painting.texture_filter);
+    CheckCanvasMatches(canvas, golden, path);
+}
+
+// Draws the checkerboard scene with the checkerboard texture, as `painting` says, on a
+// canvas of the reference image's size.
+void CheckCheckerboardSceneMatchesGolden(const Painting& painting, const std::string& file) {
+    const std::filesystem::path path = GoldenPath(file);
+    const cgfs::Image golden = cgfs::ReadPpm(path);
+    const cgfs::Texture checkerboard = cgfs::demo::CheckerboardTexture(painting.mipmapping);
+
+    cgfs::Canvas canvas(golden.width, golden.height);
+    cgfs::demo::DrawCheckerboardScene(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas),
+                                      checkerboard, painting.texture_mapping,
+                                      painting.texture_filter);
     CheckCanvasMatches(canvas, golden, path);
 }
 
@@ -217,25 +237,41 @@ TEST_CASE("shading scene matches the reference drawing under Phong shading", "[g
         "shading_phong_320x180.ppm");
 }
 
-// The textures scene is one scene and three pictures: one per way of carrying a texture
-// across a triangle, both looked up by nearest neighbor filtering, and the right one of
-// the two looked up by bilinear filtering.
+// The textures scene is one scene and four pictures: one per way of carrying a texture
+// across a triangle, both looked up by nearest neighbor filtering; the right one of the
+// two looked up by bilinear filtering; and that one again with a texture that has its
+// mipmap levels, which is everything the chapter has so far at once.
 
 TEST_CASE("textures scene matches the reference drawing under perspective-correct mapping",
           "[golden]") {
-    CheckTexturesSceneMatchesGolden(cgfs::TextureMapping::kPerspectiveCorrect,
-                                    cgfs::TextureFilter::kNearestNeighbor,
-                                    "textures_perspective_correct_320x180.ppm");
+    CheckTexturesSceneMatchesGolden({}, "textures_perspective_correct_320x180.ppm");
 }
 
 TEST_CASE("textures scene matches the reference drawing under linear mapping", "[golden]") {
-    CheckTexturesSceneMatchesGolden(cgfs::TextureMapping::kLinear,
-                                    cgfs::TextureFilter::kNearestNeighbor,
+    CheckTexturesSceneMatchesGolden({.texture_mapping = cgfs::TextureMapping::kLinear},
                                     "textures_linear_320x180.ppm");
 }
 
 TEST_CASE("textures scene matches the reference drawing under bilinear filtering", "[golden]") {
-    CheckTexturesSceneMatchesGolden(cgfs::TextureMapping::kPerspectiveCorrect,
-                                    cgfs::TextureFilter::kBilinear,
+    CheckTexturesSceneMatchesGolden({.texture_filter = cgfs::TextureFilter::kBilinear},
                                     "textures_bilinear_320x180.ppm");
+}
+
+TEST_CASE("textures scene matches the reference drawing with mipmapping and bilinear filtering",
+          "[golden]") {
+    CheckTexturesSceneMatchesGolden(
+        {.texture_filter = cgfs::TextureFilter::kBilinear, .mipmapping = cgfs::Mipmapping::kOn},
+        "textures_mipmapped_bilinear_320x180.ppm");
+}
+
+// The checkerboard scene is one scene and two pictures: the texture without its mipmap
+// levels and with them.
+
+TEST_CASE("checkerboard scene matches the reference drawing without mipmapping", "[golden]") {
+    CheckCheckerboardSceneMatchesGolden({}, "checkerboard_320x180.ppm");
+}
+
+TEST_CASE("checkerboard scene matches the reference drawing with mipmapping", "[golden]") {
+    CheckCheckerboardSceneMatchesGolden({.mipmapping = cgfs::Mipmapping::kOn},
+                                        "checkerboard_mipmapped_320x180.ppm");
 }

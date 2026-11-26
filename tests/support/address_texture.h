@@ -20,8 +20,13 @@ namespace cgfs_test {
 ///
 /// With the step of 1 neighbouring texels are one level apart, and a blend of two is
 /// truncated to one of them when it reaches a pixel. A larger step sets them far enough
-/// apart for a blend to show, which the tests of bilinear filtering need.
-inline cgfs::Texture AddressTexture(int width, int height, int step = 1) {
+/// apart for a blend to show, which the tests of bilinear filtering need, and for the
+/// mean of a block of them to be told from any one of them, which the tests of
+/// mipmapping need: with `mipmapping` on the texture has its smaller copies, and since
+/// its colors rise evenly, a texel of a copy has the color of the middle of the block it
+/// covers.
+inline cgfs::Texture AddressTexture(int width, int height, int step = 1,
+                                    cgfs::Mipmapping mipmapping = cgfs::Mipmapping::kOff) {
     cgfs::Image image{.width = width, .height = height};
     for (int ty = 0; ty < height; ++ty) {
         for (int tx = 0; tx < width; ++tx) {
@@ -30,7 +35,7 @@ inline cgfs::Texture AddressTexture(int width, int height, int step = 1) {
             image.rgb.push_back(200);
         }
     }
-    return cgfs::Texture(std::move(image));
+    return cgfs::Texture(std::move(image), mipmapping);
 }
 
 /// The color of an AddressTexture with `step` at the place (`tx`, `ty`) among its texels:

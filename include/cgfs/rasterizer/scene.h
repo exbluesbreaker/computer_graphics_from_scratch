@@ -124,7 +124,9 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
 /// color at those coordinates is made from the texels (see TextureFilter): nearest
 /// neighbor filtering unless the caller asks for bilinear filtering, which smooths a
 /// texture that is drawn larger than it is. Neither changes anything in a scene without
-/// textures.
+/// textures. A texture that is drawn smaller than it is wants mipmap levels, which are
+/// not a parameter here: a texture is made with them or without (see Mipmapping), and
+/// an instance far away is painted with a smaller copy of a texture that has them.
 ///
 /// Preconditions: as above.
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,

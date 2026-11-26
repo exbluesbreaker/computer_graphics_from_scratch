@@ -11,14 +11,17 @@
 #include <vector>
 
 #include "support/address_texture.h"
+#include "support/checkerboard_texture.h"
 #include "support/test_helpers.h"
 
 using cgfs::Color;
 using cgfs::Image;
+using cgfs::Mipmapping;
 using cgfs::Texture;
 using cgfs::TextureFilter;
 using cgfs::Uv;
 using cgfs_test::AddressTexture;
+using cgfs_test::FineCheckerboard;
 using cgfs_test::TexelOf;
 
 TEST_CASE("Uv is the texture's origin unless given", "[texture]") {
@@ -374,6 +377,260 @@ TEST_CASE("Texture::GetTexel, bilinear: a texture of one texel has one color eve
     for (const double u : {-1.0, 0.0, 0.5, 1.0, 2.0}) {
         for (const double v : {-1.0, 0.0, 0.5, 1.0, 2.0}) {
             CHECK(texture.GetTexel(u, v, TextureFilter::kBilinear) == Color{7.0, 8.0, 9.0});
+        }
+    }
+}
+
+// --- Mipmapping ----------------------------------------------------------------------------
+
+namespace {
+
+// The color of `texture` at the middle of the texel in column `tx` of row `ty` of
+// `level`, a level that is `width` x `height` texels.
+Color LevelTexel(const Texture& texture, int level, int width, int height, int tx, int ty) {
+    return texture.GetTexel((tx + 0.5) / width, (ty + 0.5) / height,
+                            TextureFilter::kNearestNeighbor, level);
+}
+
+}  // namespace
+
+TEST_CASE("Texture: without mipmapping a texture has one level, itself", "[texture][mipmap]") {
+    CHECK(AddressTexture(8, 8).level_count() == 1);
+    CHECK(Texture(Image{.width = 1, .height = 1, .rgb = {1, 2, 3}}).level_count() == 1);
+    const Texture said(Image{.width = 2, .height = 2, .rgb = std::vector<std::uint8_t>(12)},
+                       Mipmapping::kOff);
+    CHECK(said.level_count() == 1);
+}
+
+TEST_CASE("Texture: with mipmapping it is halved until one texel is left", "[texture][mipmap]") {
+    const auto levels = [](int width, int height) {
+        const auto bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3;
+        return Texture(
+                   Image{.width = width, .height = height, .rgb = std::vector<std::uint8_t>(bytes)},
+                   Mipmapping::kOn)
+            .level_count();
+    };
+    CHECK(levels(1, 1) == 1);       // nothing to halve
+    CHECK(levels(2, 2) == 2);       // 2, 1
+    CHECK(levels(8, 8) == 4);       // 8, 4, 2, 1
+    CHECK(levels(512, 512) == 10);  // the crate: 512, 256, 128, 64, 32, 16, 8, 4, 2, 1
+    CHECK(levels(8, 2) == 4);       // 8 x 2, 4 x 1, 2 x 1, 1 x 1: until both are one
+    CHECK(levels(1, 4) == 3);       // 1 x 4, 1 x 2, 1 x 1
+    CHECK(levels(5, 3) == 3);       // 5 x 3, 2 x 1, 1 x 1: halves are rounded down
+    CHECK(levels(7, 7) == 3);       // 7, 3, 1
+
+    // The size and the texels of the texture itself are what they are without.
+    const Texture plain = AddressTexture(8, 4, 32);
+    Image image{.width = 8, .height = 4};
+    for (int ty = 0; ty < 4; ++ty) {
+        for (int tx = 0; tx < 8; ++tx) {
+            image.rgb.insert(image.rgb.end(), {static_cast<std::uint8_t>(tx * 32),
+                                               static_cast<std::uint8_t>(ty * 32), 200});
+        }
+    }
+    const Texture mipmapped(std::move(image), Mipmapping::kOn);
+    CHECK(mipmapped.width() == 8);
+    CHECK(mipmapped.height() == 4);
+    for (const double u : {0.0, 0.1, 0.33, 0.5, 0.77, 1.0}) {
+        for (const double v : {0.0, 0.2, 0.6, 1.0}) {
+            INFO("(u, v) = (" << u << ", " << v << ")");
+            CHECK(mipmapped.GetTexel(u, v) == plain.GetTexel(u, v));
+            CHECK(mipmapped.GetTexel(u, v, TextureFilter::kBilinear) ==
+                  plain.GetTexel(u, v, TextureFilter::kBilinear));
+            CHECK(mipmapped.GetTexel(u, v, TextureFilter::kNearestNeighbor, 0) ==
+                  plain.GetTexel(u, v));
+        }
+    }
+}
+
+TEST_CASE("Texture: a texel of the next level is the mean of the four it covers",
+          "[texture][mipmap]") {
+    // 4 x 2 texels, one channel telling them apart:
+    //
+    //      0   10 |  40  80
+    //      2   20 | 120 200
+    //
+    // The next level is 2 x 1: the mean of the left four and the mean of the right four.
+    // Means are kept as they come out, fractions and all: no texel of a level is a byte.
+    const Texture texture(
+        Image{.width = 4, .height = 2, .rgb = {0, 0, 9, 10, 0, 9, 40,  0, 9, 80,  0, 9,
+                                               2, 1, 9, 20, 1, 9, 120, 1, 9, 200, 3, 9}},
+        Mipmapping::kOn);
+    REQUIRE(texture.level_count() == 3);
+    CHECK(LevelTexel(texture, 1, 2, 1, 0, 0) == Color{8.0, 0.5, 9.0});  // (0 + 10 + 2 + 20) / 4
+    CHECK(LevelTexel(texture, 1, 2, 1, 1, 0) ==
+          Color{110.0, 1.0, 9.0});  // (40 + 80 + 120 + 200) / 4
+    // The last level is one texel. A level that is one texel high has no second row, and
+    // its two texels count twice: the mean of the two, which is the mean of all eight.
+    CHECK(LevelTexel(texture, 2, 1, 1, 0, 0) == Color{59.0, 0.75, 9.0});
+}
+
+TEST_CASE("Texture: a texel of level k is the mean of the 2^k x 2^k texels it covers, exactly",
+          "[texture][mipmap]") {
+    // The texel in column tx of row ty is (20 tx, 20 ty, 200), so the mean of a block of
+    // texels is the color of the middle of the block, and every mean is exact.
+    Image image{.width = 8, .height = 8};
+    for (int ty = 0; ty < 8; ++ty) {
+        for (int tx = 0; tx < 8; ++tx) {
+            image.rgb.insert(image.rgb.end(), {static_cast<std::uint8_t>(tx * 20),
+                                               static_cast<std::uint8_t>(ty * 20), 200});
+        }
+    }
+    const Texture texture(std::move(image), Mipmapping::kOn);
+    REQUIRE(texture.level_count() == 4);
+    for (int level = 1; level < 4; ++level) {
+        const int block = 1 << level;  // texels of the texture along the side of a texel
+        const int size = 8 / block;    // texels of the level along its side
+        for (int ty = 0; ty < size; ++ty) {
+            for (int tx = 0; tx < size; ++tx) {
+                INFO("level " << level << ", texel (" << tx << ", " << ty << ")");
+                // The block covers the columns tx * block to tx * block + block - 1.
+                const double middle_x = tx * block + (block - 1) / 2.0;
+                const double middle_y = ty * block + (block - 1) / 2.0;
+                CHECK(LevelTexel(texture, level, size, size, tx, ty) ==
+                      TexelOf(middle_x, middle_y, 20));
+            }
+        }
+    }
+    // The last level is the mean color of the whole texture.
+    CHECK(texture.GetTexel(0.3, 0.9, TextureFilter::kNearestNeighbor, 3) == TexelOf(3.5, 3.5, 20));
+}
+
+TEST_CASE("Texture: the levels of the book's checkerboard are gray", "[texture][mipmap]") {
+    // Black and white texels in a checkerboard: every 2 x 2 texels are two of each, and
+    // their mean is the gray halfway, 127.5. So is every level after the first.
+    const Texture checkerboard = FineCheckerboard(8, Mipmapping::kOn);
+    REQUIRE(checkerboard.level_count() == 4);
+    CHECK(checkerboard.GetTexel(0.0, 0.0) == Color{255.0, 255.0, 255.0});
+    CHECK(checkerboard.GetTexel(0.13, 0.0) == Color{0.0, 0.0, 0.0});
+    for (int level = 1; level < 4; ++level) {
+        for (const double u : {0.0, 0.2, 0.5, 0.7, 1.0}) {
+            for (const double v : {0.0, 0.3, 0.6, 1.0}) {
+                INFO("level " << level << ", (u, v) = (" << u << ", " << v << ")");
+                CHECK(checkerboard.GetTexel(u, v, TextureFilter::kNearestNeighbor, level) ==
+                      Color{127.5, 127.5, 127.5});
+                CHECK(checkerboard.GetTexel(u, v, TextureFilter::kBilinear, level) ==
+                      Color{127.5, 127.5, 127.5});
+            }
+        }
+    }
+}
+
+TEST_CASE("Texture: (u, v) is the same point of the picture at every level", "[texture][mipmap]") {
+    // A picture of 4 x 4 texels, and the same picture at twice the size, every texel
+    // repeated 2 x 2. Halving the second gives the first back: its level 1 is the small
+    // picture, at every (u, v).
+    const Texture small = AddressTexture(4, 4, 50);
+    Image doubled{.width = 8, .height = 8};
+    for (int ty = 0; ty < 8; ++ty) {
+        for (int tx = 0; tx < 8; ++tx) {
+            doubled.rgb.insert(doubled.rgb.end(), {static_cast<std::uint8_t>((tx / 2) * 50),
+                                                   static_cast<std::uint8_t>((ty / 2) * 50), 200});
+        }
+    }
+    const Texture large(std::move(doubled), Mipmapping::kOn);
+    for (int i = 0; i <= 40; ++i) {
+        for (int j = 0; j <= 40; ++j) {
+            const double u = i / 40.0;
+            const double v = j / 40.0;
+            INFO("(u, v) = (" << u << ", " << v << ")");
+            CHECK(large.GetTexel(u, v, TextureFilter::kNearestNeighbor, 1) == small.GetTexel(u, v));
+            CHECK(large.GetTexel(u, v, TextureFilter::kBilinear, 1) ==
+                  small.GetTexel(u, v, TextureFilter::kBilinear));
+        }
+    }
+}
+
+TEST_CASE("Texture::GetTexel: a level is looked up as a texture of its own size",
+          "[texture][mipmap]") {
+    // Level 1 of an 8 x 8 texture has 4 texels across: its first from u = 0 to 0.25 and
+    // its last from 0.75 to 1, where the texture itself has two texels each.
+    Image image{.width = 8, .height = 8};
+    for (int ty = 0; ty < 8; ++ty) {
+        for (int tx = 0; tx < 8; ++tx) {
+            image.rgb.insert(image.rgb.end(), {static_cast<std::uint8_t>(tx * 20),
+                                               static_cast<std::uint8_t>(ty * 20), 200});
+        }
+    }
+    const Texture texture(std::move(image), Mipmapping::kOn);
+    const auto at_level_1 = [&](double u, double v, TextureFilter filter) {
+        return texture.GetTexel(u, v, filter, 1);
+    };
+    // Nearest neighbor filtering: the texels of level 1 are (40 x + 10, 40 y + 10, 200).
+    CHECK(at_level_1(0.0, 0.0, TextureFilter::kNearestNeighbor) == Color{10.0, 10.0, 200.0});
+    CHECK(at_level_1(0.24, 0.0, TextureFilter::kNearestNeighbor) == Color{10.0, 10.0, 200.0});
+    CHECK(at_level_1(0.25, 0.0, TextureFilter::kNearestNeighbor) == Color{50.0, 10.0, 200.0});
+    CHECK(at_level_1(0.74, 0.3, TextureFilter::kNearestNeighbor) == Color{90.0, 50.0, 200.0});
+    CHECK(at_level_1(1.0, 1.0, TextureFilter::kNearestNeighbor) == Color{130.0, 130.0, 200.0});
+    CHECK(at_level_1(-3.0, 7.0, TextureFilter::kNearestNeighbor) == Color{10.0, 130.0, 200.0});
+
+    // Bilinear filtering blends the texels of the level: tx = 4u, and halfway between
+    // its first two texels, u = 1/8, is halfway between 10 and 50. From its last column
+    // on, tx = 3, the color is that column's.
+    CHECK(at_level_1(0.0, 0.0, TextureFilter::kBilinear) == Color{10.0, 10.0, 200.0});
+    CHECK(at_level_1(0.125, 0.0, TextureFilter::kBilinear) == Color{30.0, 10.0, 200.0});
+    CHECK(at_level_1(0.25, 0.375, TextureFilter::kBilinear) == Color{50.0, 70.0, 200.0});
+    CHECK(at_level_1(0.75, 0.0, TextureFilter::kBilinear) == Color{130.0, 10.0, 200.0});
+    CHECK(at_level_1(0.9, 0.0, TextureFilter::kBilinear) == Color{130.0, 10.0, 200.0});
+
+    // The last level is one texel, and every point of the texture has its color.
+    for (const double u : {-1.0, 0.0, 0.4, 1.0, 2.0}) {
+        CHECK(texture.GetTexel(u, 0.6, TextureFilter::kNearestNeighbor, 3) ==
+              Color{70.0, 70.0, 200.0});
+        CHECK(texture.GetTexel(u, 0.6, TextureFilter::kBilinear, 3) == Color{70.0, 70.0, 200.0});
+    }
+}
+
+TEST_CASE("Texture: an odd last column or row is part of no texel of the next level",
+          "[texture][mipmap]") {
+    // 5 x 3 texels, the last column and the last row loud:
+    //
+    //      10  20  30  40 | 250
+    //      50  60  70  80 | 250
+    //     ----------------+----
+    //     250 250 250 250 | 250
+    //
+    // Half of 5 is 2 and half of 3 is 1: level 1 is 2 x 1, made of the first four columns
+    // of the first two rows.
+    const Texture texture(
+        Image{.width = 5, .height = 3, .rgb = {10,  0, 0, 20,  0, 0, 30,  0, 0, 40,  0, 0,
+                                               250, 0, 0, 50,  0, 0, 60,  0, 0, 70,  0, 0,
+                                               80,  0, 0, 250, 0, 0, 250, 0, 0, 250, 0, 0,
+                                               250, 0, 0, 250, 0, 0, 250, 0, 0}},
+        Mipmapping::kOn);
+    REQUIRE(texture.level_count() == 3);
+    CHECK(LevelTexel(texture, 1, 2, 1, 0, 0) == Color{35.0, 0.0, 0.0});  // 10, 20, 50, 60
+    CHECK(LevelTexel(texture, 1, 2, 1, 1, 0) == Color{55.0, 0.0, 0.0});  // 30, 40, 70, 80
+    CHECK(LevelTexel(texture, 2, 1, 1, 0, 0) == Color{45.0, 0.0, 0.0});
+}
+
+TEST_CASE("Texture: a level one texel wide is halved along its length", "[texture][mipmap]") {
+    // 1 x 4 texels: 0, 100, 40, 80 down the one column. Level 1 is 1 x 2, the means of
+    // the pairs, and level 2 the mean of those.
+    const Texture texture(
+        Image{.width = 1, .height = 4, .rgb = {0, 0, 0, 100, 0, 0, 40, 0, 0, 80, 0, 0}},
+        Mipmapping::kOn);
+    REQUIRE(texture.level_count() == 3);
+    CHECK(LevelTexel(texture, 1, 1, 2, 0, 0) == Color{50.0, 0.0, 0.0});
+    CHECK(LevelTexel(texture, 1, 1, 2, 0, 1) == Color{60.0, 0.0, 0.0});
+    CHECK(LevelTexel(texture, 2, 1, 1, 0, 0) == Color{55.0, 0.0, 0.0});
+}
+
+TEST_CASE("Texture: a texture of one color has that color at every level, exactly",
+          "[texture][mipmap]") {
+    Image image{.width = 16, .height = 16};
+    for (int i = 0; i < 256; ++i) {
+        image.rgb.insert(image.rgb.end(), {255, 128, 1});
+    }
+    const Texture plain(std::move(image), Mipmapping::kOn);
+    REQUIRE(plain.level_count() == 5);
+    for (int level = 0; level < 5; ++level) {
+        for (int i = 0; i <= 30; ++i) {
+            for (int j = 0; j <= 30; ++j) {
+                INFO("level " << level);
+                CHECK(plain.GetTexel(i / 29.0, j / 31.0, TextureFilter::kBilinear, level) ==
+                      Color{255.0, 128.0, 1.0});
+            }
         }
     }
 }
