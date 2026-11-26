@@ -41,6 +41,7 @@ using cgfs::Point;
 using cgfs::PointLight;
 using cgfs::Rgb8;
 using cgfs::Texture;
+using cgfs::TextureFilter;
 using cgfs::TextureMapping;
 using cgfs::ToRgb8;
 using cgfs::Vec3;
@@ -845,9 +846,10 @@ Point Showing(Point p, double u, double v) {
 
 // A fresh black canvas with one textured triangle on it.
 Canvas CanvasWithTexturedTriangle(Point p0, Point p1, Point p2, const Texture& texture,
-                                  TextureMapping texture_mapping) {
+                                  TextureMapping texture_mapping,
+                                  TextureFilter texture_filter = TextureFilter::kNearestNeighbor) {
     Canvas canvas(32, 32, kBlack);
-    DrawTexturedTriangle(canvas, p0, p1, p2, texture, texture_mapping);
+    DrawTexturedTriangle(canvas, p0, p1, p2, texture, texture_mapping, nullptr, texture_filter);
     return canvas;
 }
 
@@ -863,7 +865,8 @@ const Point kTexturedC = Showing({0, 8}, 0.0, 1.0);
 // as the two triangles of a model's face: the corners show the texture's top-left,
 // top-right, bottom-right and bottom-left corners, clockwise from the top left, and the
 // triangles share the diagonal from the top left to the bottom right.
-Canvas CanvasWithTexturedFace(int side, const Texture& texture, bool lower_triangle_first = false) {
+Canvas CanvasWithTexturedFace(int side, const Texture& texture, bool lower_triangle_first = false,
+                              TextureFilter texture_filter = TextureFilter::kNearestNeighbor) {
     const Point top_left = Showing({0, side}, 0.0, 0.0);
     const Point top_right = Showing({side, side}, 1.0, 0.0);
     const Point bottom_right = Showing({side, 0}, 1.0, 1.0);
@@ -871,13 +874,13 @@ Canvas CanvasWithTexturedFace(int side, const Texture& texture, bool lower_trian
     Canvas canvas(32, 32, kBlack);
     if (lower_triangle_first) {
         DrawTexturedTriangle(canvas, top_left, bottom_right, bottom_left, texture,
-                             TextureMapping::kLinear);
+                             TextureMapping::kLinear, nullptr, texture_filter);
     }
     DrawTexturedTriangle(canvas, top_left, top_right, bottom_right, texture,
-                         TextureMapping::kLinear);
+                         TextureMapping::kLinear, nullptr, texture_filter);
     if (!lower_triangle_first) {
         DrawTexturedTriangle(canvas, top_left, bottom_right, bottom_left, texture,
-                             TextureMapping::kLinear);
+                             TextureMapping::kLinear, nullptr, texture_filter);
     }
     return canvas;
 }
@@ -1270,4 +1273,302 @@ TEST_CASE(
     Canvas by_default(32, 32, kBlack);
     DrawTexturedTriangle(by_default, a, b, c, texture);
     CHECK(Bytes(by_default) == Bytes(draw(kRed)));
+}
+
+// --- Painted with a texture: bilinear filtering --------------------------------------------
+//
+// The textures of these tests are AddressTextures with a step: neighbouring texels are
+// far enough apart in color for a blend of them to be seen in a pixel, and the blend at
+// the place (tx, ty) among the texels is the color PixelOf(tx, ty, step).
+
+TEST_CASE("DrawTexturedTriangle: nearest neighbor filtering is the filter unless another is given",
+          "[rasterizer]") {
+    const Texture texture = AddressTexture(8, 8, 32);
+    const Point a = AtDepth(Showing({-9, -7}, 0.1, 0.9), 1.0);
+    const Point b = AtDepth(Showing({10, -2}, 0.95, 0.7), 0.5);
+    const Point c = AtDepth(Showing({-1, 11}, 0.4, 0.05), 0.25);
+    for (const TextureMapping texture_mapping : kBothMappings) {
+        INFO("mapping " << static_cast<int>(texture_mapping));
+        Canvas by_default(32, 32, kBlack);
+        DrawTexturedTriangle(by_default, a, b, c, texture, texture_mapping);
+        const Canvas nearest = CanvasWithTexturedTriangle(a, b, c, texture, texture_mapping,
+                                                          TextureFilter::kNearestNeighbor);
+        const Canvas bilinear =
+            CanvasWithTexturedTriangle(a, b, c, texture, texture_mapping, TextureFilter::kBilinear);
+        CHECK(Bytes(by_default) == Bytes(nearest));
+        // The filter changes the colors and nothing else: the same pixels are set.
+        CHECK(Bytes(bilinear) != Bytes(nearest));
+        CHECK(LitPixels(bilinear) == LitPixels(nearest));
+    }
+}
+
+TEST_CASE("DrawTexturedTriangle: bilinear filtering blends the texels around a pixel's point",
+          "[rasterizer]") {
+    // The right triangle on which u = x / 8 and v = y / 8, and a texture of 4 x 4 texels:
+    // tx = x / 2, so a texel is two pixels wide. Nearest neighbor filtering shows every
+    // texel twice, steps of 64 in color. Bilinear filtering shows the pixel in between
+    // halfway between its two texels, steps of 32, up to the last column and row, whose
+    // place is tx = 3, the pixel 6; from there on it is their color.
+    const Texture texture = AddressTexture(4, 4, 64);
+    const Canvas nearest = CanvasWithTexturedTriangle(kTexturedA, kTexturedB, kTexturedC, texture,
+                                                      TextureMapping::kLinear);
+    const Canvas bilinear =
+        CanvasWithTexturedTriangle(kTexturedA, kTexturedB, kTexturedC, texture,
+                                   TextureMapping::kLinear, TextureFilter::kBilinear);
+    for (int y = 0; y <= 8; ++y) {
+        for (int x = 0; x + y <= 8; ++x) {
+            INFO("pixel (" << x << ", " << y << ")");
+            CHECK(nearest.GetPixel(x, y) == PixelOf(std::min(x / 2, 3), std::min(y / 2, 3), 64));
+            CHECK(bilinear.GetPixel(x, y) ==
+                  PixelOf(std::min(x / 2.0, 3.0), std::min(y / 2.0, 3.0), 64));
+        }
+    }
+    CHECK(bilinear.GetPixel(3, 0) == Rgb8{96, 0, 200});  // between the texels of 64 and of 128
+    CHECK(nearest.GetPixel(3, 0) == Rgb8{64, 0, 200});
+    CHECK(LitPixels(bilinear).size() == 45);
+}
+
+TEST_CASE("DrawTexturedTriangle: bilinear filtering is applied at the point the mapping finds",
+          "[rasterizer]") {
+    // The leaning triangle of the perspective-correct test: its pixels show
+    // u = (x/32) / (1/z) and v = (y/16) / (1/z), and the color there is the blend.
+    const Texture texture = AddressTexture(8, 8, 32);
+    const Point a = AtDepth(kTexturedA, 1.0);
+    const Point b = AtDepth(kTexturedB, 0.25);
+    const Point c = AtDepth(kTexturedC, 0.5);
+    const Canvas canvas = CanvasWithTexturedTriangle(
+        a, b, c, texture, TextureMapping::kPerspectiveCorrect, TextureFilter::kBilinear);
+    for (int y = 0; y <= 8; ++y) {
+        for (int x = 0; x + y <= 8; ++x) {
+            const double inv_z = 1.0 - 3.0 * x / 32.0 - y / 16.0;
+            const double u = (x / 32.0) / inv_z;
+            const double v = (y / 16.0) / inv_z;
+            INFO("pixel (" << x << ", " << y << "): (u, v) = (" << u << ", " << v << ")");
+            CHECK(canvas.GetPixel(x, y) ==
+                  ToRgb8(texture.GetTexel(u, v, TextureFilter::kBilinear)));
+        }
+    }
+    // Halfway along the bottom side, u = 1/5: tx = 1.6, six tenths of the way from the
+    // second texel, 32, to the third, 64.
+    CHECK(canvas.GetPixel(4, 0) == Rgb8{51, 0, 200});
+
+    // Linear mapping finds other points for the same pixels, u = 1/2 there, the texel in
+    // column 4 exactly.
+    const Canvas linear = CanvasWithTexturedTriangle(a, b, c, texture, TextureMapping::kLinear,
+                                                     TextureFilter::kBilinear);
+    CHECK(linear.GetPixel(4, 0) == Rgb8{128, 0, 200});
+    CHECK(Bytes(linear) != Bytes(canvas));
+}
+
+TEST_CASE(
+    "DrawTexturedTriangle: under bilinear filtering a texture drawn larger than it is "
+    "shows gradients for blocks",
+    "[rasterizer]") {
+    // The four texels on a face of 8 x 8 pixel steps, a texel four pixels wide. Under
+    // nearest neighbor filtering the face is four blocks. Under bilinear filtering the
+    // color climbs from the first texel's, at the left edge, to the second's by equal
+    // amounts, a quarter of the way per pixel, and is the second's from the middle of
+    // the face on, the second being the last column. The same down the face.
+    const Texture texture = AddressTexture(2, 2, 128);
+    const Canvas blocks = CanvasWithTexturedFace(8, texture);
+    const Canvas gradients = CanvasWithTexturedFace(8, texture, false, TextureFilter::kBilinear);
+    for (int y = 0; y <= 8; ++y) {
+        for (int x = 0; x <= 8; ++x) {
+            INFO("pixel (" << x << ", " << y << ")");
+            CHECK(blocks.GetPixel(x, y) == PixelOf(x < 4 ? 0 : 1, y > 4 ? 0 : 1, 128));
+            CHECK(gradients.GetPixel(x, y) ==
+                  PixelOf(std::min(x / 4.0, 1.0), std::min((8 - y) / 4.0, 1.0), 128));
+        }
+    }
+    const Rgb8 along_the_top[] = {{0, 0, 200},   {32, 0, 200},  {64, 0, 200},
+                                  {96, 0, 200},  {128, 0, 200}, {128, 0, 200},
+                                  {128, 0, 200}, {128, 0, 200}, {128, 0, 200}};
+    for (int x = 0; x <= 8; ++x) {
+        INFO("pixel (" << x << ", 8)");
+        CHECK(gradients.GetPixel(x, 8) == along_the_top[x]);
+    }
+
+    // The two triangles of the face blend the same texels along the diagonal they share.
+    CHECK(Bytes(CanvasWithTexturedFace(8, texture, true, TextureFilter::kBilinear)) ==
+          Bytes(gradients));
+}
+
+TEST_CASE(
+    "DrawTexturedTriangle: where every pixel's point is a texel's own place the two "
+    "filters are one picture",
+    "[rasterizer]") {
+    // Texel for pixel, a texture of 8 x 8 on a face of 8 pixel steps: tx and ty are whole
+    // numbers at every pixel, nothing is cut off, and the blend is the texel.
+    const Texture at_its_size = AddressTexture(8, 8, 32);
+    CHECK(Bytes(CanvasWithTexturedFace(8, at_its_size, false, TextureFilter::kBilinear)) ==
+          Bytes(CanvasWithTexturedFace(8, at_its_size)));
+
+    // And a texture drawn smaller than it is, sixteen texels across on four pixel steps:
+    // every pixel's point is the place of the texel in column 4x, and bilinear filtering
+    // shows that texel and looks at no other, as nearest neighbor filtering does. The
+    // fifteen of every sixteen that go unseen are no business of either. What mipmapping
+    // is for.
+    const Texture too_large = AddressTexture(16, 16, 16);
+    const Canvas smaller = CanvasWithTexturedFace(4, too_large, false, TextureFilter::kBilinear);
+    CHECK(Bytes(smaller) == Bytes(CanvasWithTexturedFace(4, too_large)));
+    CHECK(smaller.GetPixel(1, 4) == PixelOf(4, 0, 16));
+}
+
+TEST_CASE(
+    "DrawTexturedTriangle: under bilinear filtering a texture of one color is the shaded "
+    "triangle in that color",
+    "[rasterizer]") {
+    // Sixteen texels of one color, so that there are texels to blend, and the shapes and
+    // intensities of the test for nearest neighbor filtering: a blend of equal texels is
+    // their color exactly, not a rounding error under it that a pixel would truncate to
+    // the level below.
+    constexpr Color kOrange{255.0, 128.0, 0.0};
+    Image image{.width = 4, .height = 4};
+    for (int i = 0; i < 16; ++i) {
+        image.rgb.insert(image.rgb.end(), {255, 128, 0});
+    }
+    const Texture plain(std::move(image));
+    const Point triangles[][3] = {
+        {{0, 0}, {4, 0}, {0, 4}},               // a right triangle
+        {{-3, -2}, {4, 1}, {0, 5}},             // a general one
+        {{0, 0}, {-4, 4}, {0, 4}},              // the long side on the right
+        {{-100, -100}, {100, -100}, {0, 100}},  // beyond the canvas
+        {{-6, -6}, {-6, -5}, {-5, 2}},          // a skipped apex row
+    };
+    for (const TextureMapping texture_mapping : kBothMappings) {
+        for (const auto& [p0, p1, p2] : triangles) {
+            INFO("triangle (" << p0.x << ", " << p0.y << ") (" << p1.x << ", " << p1.y << ") ("
+                              << p2.x << ", " << p2.y << "), mapping "
+                              << static_cast<int>(texture_mapping));
+            // The corners at three depths, so that the texture coordinates of the pixels
+            // are quotients with fractions of every kind.
+            Point a = Showing(AtDepth(p0, 1.0), 0.05, 0.1);
+            Point b = Showing(AtDepth(p1, 0.3), 0.9, 0.15);
+            Point c = Showing(AtDepth(p2, 0.7), 0.2, 0.95);
+            Canvas full(32, 32, kBlack);
+            DrawShadedTriangle(full, a, b, c, kOrange);
+            CHECK(Bytes(CanvasWithTexturedTriangle(a, b, c, plain, texture_mapping,
+                                                   TextureFilter::kBilinear)) == Bytes(full));
+            a.h = 0.25;
+            b.h = 0.5;
+            c.h = 1.0;
+            Canvas shaded(32, 32, kBlack);
+            DrawShadedTriangle(shaded, a, b, c, kOrange);
+            CHECK(Bytes(CanvasWithTexturedTriangle(a, b, c, plain, texture_mapping,
+                                                   TextureFilter::kBilinear)) == Bytes(shaded));
+        }
+    }
+}
+
+TEST_CASE("DrawTexturedTriangle: the blended color is multiplied by the intensity",
+          "[rasterizer]") {
+    const Texture texture = AddressTexture(4, 4, 64);
+    Point a = kTexturedA;
+    Point b = kTexturedB;
+    Point c = kTexturedC;
+    a.h = 0.5;
+    b.h = 0.5;
+    c.h = 0.5;
+    const Canvas canvas = CanvasWithTexturedTriangle(a, b, c, texture, TextureMapping::kLinear,
+                                                     TextureFilter::kBilinear);
+    for (int y = 0; y <= 8; ++y) {
+        for (int x = 0; x + y <= 8; ++x) {
+            INFO("pixel (" << x << ", " << y << ")");
+            CHECK(canvas.GetPixel(x, y) ==
+                  ToRgb8(texture.GetTexel(x / 8.0, y / 8.0, TextureFilter::kBilinear) * 0.5));
+        }
+    }
+    CHECK(canvas.GetPixel(3, 1) == Rgb8{48, 16, 100});  // (96, 32, 200), halved
+}
+
+TEST_CASE(
+    "DrawTexturedTriangle: through a depth buffer bilinear filtering sets the same pixels "
+    "and depths",
+    "[rasterizer]") {
+    const Texture texture = AddressTexture(8, 8, 32);
+    const Point a = AtDepth(kTexturedA, 1.0);
+    const Point b = AtDepth(kTexturedB, 0.25);
+    const Point c = AtDepth(kTexturedC, 0.5);
+    for (const TextureMapping texture_mapping : kBothMappings) {
+        INFO("mapping " << static_cast<int>(texture_mapping));
+        Canvas nearest(32, 32, kBlack);
+        DepthBuffer nearest_depths(nearest);
+        DrawTexturedTriangle(nearest, a, b, c, texture, texture_mapping, &nearest_depths);
+        Canvas bilinear(32, 32, kBlack);
+        DepthBuffer bilinear_depths(bilinear);
+        DrawTexturedTriangle(bilinear, a, b, c, texture, texture_mapping, &bilinear_depths,
+                             TextureFilter::kBilinear);
+        CHECK(Bytes(bilinear) == Bytes(CanvasWithTexturedTriangle(a, b, c, texture, texture_mapping,
+                                                                  TextureFilter::kBilinear)));
+        CHECK(LitPixels(bilinear) == LitPixels(nearest));
+        for (int x = -16; x < 16; ++x) {
+            for (int y = -16; y < 16; ++y) {
+                CHECK(bilinear_depths.InvZ(x, y) == nearest_depths.InvZ(x, y));
+            }
+        }
+
+        // What is hidden stays hidden: a second triangle behind the first changes nothing.
+        const Point behind_a = AtDepth(kTexturedA, 0.125);
+        const Point behind_b = AtDepth(kTexturedB, 0.125);
+        const Point behind_c = AtDepth(kTexturedC, 0.125);
+        const std::vector<std::uint8_t> before = Bytes(bilinear);
+        DrawTexturedTriangle(bilinear, behind_a, behind_b, behind_c, texture, texture_mapping,
+                             &bilinear_depths, TextureFilter::kBilinear);
+        CHECK(Bytes(bilinear) == before);
+    }
+}
+
+TEST_CASE("DrawPhongTriangle: with a texture the filter is the caller's, nearest by default",
+          "[rasterizer]") {
+    const Texture texture = AddressTexture(8, 8, 32);
+    const Point a = AtDepth(OnPlane(kTexturedA), 1.0);
+    const Point b = AtDepth(OnPlane(kTexturedB), 0.25);
+    const Point c = AtDepth(OnPlane(kTexturedC), 0.5);
+
+    // Under ambient light the picture is that of DrawTexturedTriangle with the light as
+    // the intensity of every vertex, whichever way the texture is carried across and
+    // whichever filter looks it up.
+    for (const TextureMapping texture_mapping : kBothMappings) {
+        for (const TextureFilter texture_filter :
+             {TextureFilter::kNearestNeighbor, TextureFilter::kBilinear}) {
+            for (const double light : {1.0, 0.5}) {
+                INFO("mapping " << static_cast<int>(texture_mapping) << ", filter "
+                                << static_cast<int>(texture_filter) << ", ambient light " << light);
+                const std::vector<Light> lights = {AmbientLight{.intensity = light}};
+                Canvas lit(32, 32, kBlack);
+                DrawPhongTriangle(lit, kPhongViewport, a, b, c, kWhite, kMatte, lights, nullptr,
+                                  &texture, texture_mapping, texture_filter);
+                Point ha = a;
+                Point hb = b;
+                Point hc = c;
+                ha.h = light;
+                hb.h = light;
+                hc.h = light;
+                CHECK(Bytes(lit) == Bytes(CanvasWithTexturedTriangle(
+                                        ha, hb, hc, texture, texture_mapping, texture_filter)));
+            }
+        }
+    }
+
+    // Without one it is nearest neighbor filtering, and bilinear filtering is another
+    // picture of the same pixels.
+    const std::vector<Light> lights = {AmbientLight{.intensity = 1.0}};
+    Canvas by_default(32, 32, kBlack);
+    DrawPhongTriangle(by_default, kPhongViewport, a, b, c, kWhite, kMatte, lights, nullptr,
+                      &texture);
+    Canvas bilinear(32, 32, kBlack);
+    DrawPhongTriangle(bilinear, kPhongViewport, a, b, c, kWhite, kMatte, lights, nullptr, &texture,
+                      TextureMapping::kPerspectiveCorrect, TextureFilter::kBilinear);
+    CHECK(Bytes(by_default) ==
+          Bytes(CanvasWithTexturedTriangle(a, b, c, texture, TextureMapping::kPerspectiveCorrect)));
+    CHECK(Bytes(bilinear) != Bytes(by_default));
+    CHECK(LitPixels(bilinear) == LitPixels(by_default));
+
+    // Without a texture there is nothing to filter.
+    Canvas colored(32, 32, kBlack);
+    DrawPhongTriangle(colored, kPhongViewport, a, b, c, kYellow, kMatte, lights, nullptr, nullptr,
+                      TextureMapping::kPerspectiveCorrect, TextureFilter::kBilinear);
+    Canvas colored_by_default(32, 32, kBlack);
+    DrawPhongTriangle(colored_by_default, kPhongViewport, a, b, c, kYellow, kMatte, lights);
+    CHECK(Bytes(colored) == Bytes(colored_by_default));
 }

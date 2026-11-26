@@ -41,11 +41,12 @@ void RenderScene(const cgfs::Scene& scene, double distance, cgfs::Canvas& canvas
 /// What a picture is drawn with besides the canvas: what the command line says about how
 /// it is to be drawn, and the texture read for it. A picture reads what applies to it:
 /// the 2D pictures nothing, only the lit ones the shading model, and only the textured
-/// ones the texture mapping and the texture.
+/// ones the texture mapping, the texture filter and the texture.
 struct Settings {
     double distance = 1.0;
     cgfs::ShadingModel shading_model = cgfs::ShadingModel::kPhong;
     cgfs::TextureMapping texture_mapping = cgfs::TextureMapping::kPerspectiveCorrect;
+    cgfs::TextureFilter texture_filter = cgfs::TextureFilter::kNearestNeighbor;
     /// The texture of a textured picture, which main reads before it starts the clock;
     /// null for every other picture.
     const cgfs::Texture* texture = nullptr;
@@ -79,17 +80,18 @@ void Lit(cgfs::Canvas& canvas, const Settings& settings) {
 }
 
 /// A rasterized 3D picture painted with a texture in the shape the table wants: projected
-/// like the others, with the texture main read for it, mapped as the command line chose.
+/// like the others, with the texture main read for it, mapped and filtered as the command
+/// line chose.
 template <void (*Draw)(cgfs::Canvas&, const cgfs::Viewport&, const cgfs::Texture&,
-                       cgfs::TextureMapping)>
+                       cgfs::TextureMapping, cgfs::TextureFilter)>
 void Textured(cgfs::Canvas& canvas, const Settings& settings) {
     Draw(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas, 1.0, settings.distance),
-         *settings.texture, settings.texture_mapping);
+         *settings.texture, settings.texture_mapping, settings.texture_filter);
 }
 
 /// One picture: its name on the command line, its line in the usage text, how to draw
 /// it, whether the shading model changes it, and whether it is painted with the crate
-/// texture, which then has to be read first and whose mapping changes it.
+/// texture, which then has to be read first and whose mapping and filter change it.
 struct DemoScene {
     std::string_view name;
     std::string_view description;
@@ -207,6 +209,31 @@ const TextureMappingChoice& FindTextureMappingChoice(cgfs::TextureMapping textur
     return kTextureMappingChoices[0];  // not reached: the table has every mapping
 }
 
+/// One way to make the color of a point of a texture from its texels: its name on the
+/// command line and its line in the usage text.
+struct TextureFilterChoice {
+    std::string_view name;
+    cgfs::TextureFilter texture_filter;
+    std::string_view description;
+};
+
+/// In the order of the book's chapter: the simplest, and what mends its blocks.
+constexpr TextureFilterChoice kTextureFilterChoices[] = {
+    {"nearest-neighbor", cgfs::TextureFilter::kNearestNeighbor,
+     "the one texel a point falls in: blocks where a texture is drawn large"},
+    {"bilinear", cgfs::TextureFilter::kBilinear,
+     "the four texels around a point, blended by how near each is"},
+};
+
+const TextureFilterChoice& FindTextureFilterChoice(cgfs::TextureFilter texture_filter) {
+    for (const TextureFilterChoice& choice : kTextureFilterChoices) {
+        if (choice.texture_filter == texture_filter) {
+            return choice;
+        }
+    }
+    return kTextureFilterChoices[0];  // not reached: the table has every filter
+}
+
 // --- The command line -----------------------------------------------------------------
 
 struct Options {
@@ -233,6 +260,11 @@ std::string Usage() {
            "                   [--texture-mapping ";
     for (std::size_t i = 0; i < std::size(kTextureMappingChoices); ++i) {
         out << (i > 0 ? "|" : "") << kTextureMappingChoices[i].name;
+    }
+    out << "]\n"
+           "                   [--texture-filter ";
+    for (std::size_t i = 0; i < std::size(kTextureFilterChoices); ++i) {
+        out << (i > 0 ? "|" : "") << kTextureFilterChoices[i].name;
     }
     out << "] [--output PATH]\n"
            "\n";
@@ -262,7 +294,15 @@ std::string Usage() {
         label = "              ";
     }
     out << "              how a texture is carried across a triangle (default: "
-        << FindTextureMappingChoice(defaults.settings.texture_mapping).name << ")\n"
+        << FindTextureMappingChoice(defaults.settings.texture_mapping).name << ")\n";
+    label = "  --texture-filter\n              ";
+    for (const TextureFilterChoice& choice : kTextureFilterChoices) {
+        out << label << std::left << std::setw(21) << (std::string(choice.name) + ":")
+            << choice.description << "\n";
+        label = "              ";
+    }
+    out << "              how the color of a point of a texture is made from its texels (default: "
+        << FindTextureFilterChoice(defaults.settings.texture_filter).name << ")\n"
         << "  --output    output file, .png or .ppm (default: " << defaults.output << ")\n";
     return out.str();
 }
@@ -321,6 +361,18 @@ cgfs::TextureMapping ParseTextureMapping(std::string_view name, const std::strin
                              "'");
 }
 
+cgfs::TextureFilter ParseTextureFilter(std::string_view name, const std::string& text) {
+    std::string names;
+    for (const TextureFilterChoice& choice : kTextureFilterChoices) {
+        if (choice.name == text) {
+            return choice.texture_filter;
+        }
+        names += (names.empty() ? "" : ", ") + std::string(choice.name);
+    }
+    throw std::runtime_error(std::string(name) + " expects one of " + names + ", got '" + text +
+                             "'");
+}
+
 // Returns nullopt when --help was requested. Throws std::runtime_error on bad input.
 std::optional<Options> ParseArgs(int argc, char** argv) {
     Options options;
@@ -345,6 +397,8 @@ std::optional<Options> ParseArgs(int argc, char** argv) {
             options.settings.shading_model = ParseShadingModel(arg, value);
         } else if (arg == "--texture-mapping") {
             options.settings.texture_mapping = ParseTextureMapping(arg, value);
+        } else if (arg == "--texture-filter") {
+            options.settings.texture_filter = ParseTextureFilter(arg, value);
         } else if (arg == "--output") {
             options.output = value;
         } else {
@@ -395,7 +449,8 @@ int main(int argc, char** argv) {
         }
         if (scene->textured) {
             std::cout << " (" << FindTextureMappingChoice(settings.texture_mapping).name
-                      << " texture mapping)";
+                      << " texture mapping, "
+                      << FindTextureFilterChoice(settings.texture_filter).name << " filtering)";
         }
         std::cout << " at " << canvas.width() << "x" << canvas.height() << " -> " << options->output
                   << "\n"

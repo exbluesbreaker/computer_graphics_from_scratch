@@ -12,7 +12,7 @@ reflections) and a rasterizer (lines, filled and shaded triangles, perspective
 projection, objects made of triangles, scenes of transformed instances seen from a
 movable camera, clipping, hidden-surface removal by back-face culling and a depth
 buffer, shading under lights, flat, Gouraud or Phong, and textures, linear or
-perspective-correct with nearest neighbor filtering, so far). It exists for
+perspective-correct, with nearest neighbor or bilinear filtering, so far). It exists for
 learning: every algorithm is written by hand, reads like the book's listing and is
 pinned by unit tests and golden images. No graphics libraries, no GPU.
 

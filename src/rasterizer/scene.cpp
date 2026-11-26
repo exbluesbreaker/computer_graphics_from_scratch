@@ -64,7 +64,7 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
                  std::span<const Instance> instances, const Camera& camera,
                  std::span<const Light> lights, ShadingModel shading_model,
                  DepthBuffer* depth_buffer, BackFaceCulling back_face_culling,
-                 TextureMapping texture_mapping) {
+                 TextureMapping texture_mapping, TextureFilter texture_filter) {
     const Mat4 camera_matrix = MakeCameraMatrix(camera.position, camera.orientation);
     const std::vector<Model> clipped_scene =
         PlaceScene(models, instances, camera_matrix, camera, back_face_culling);
@@ -80,7 +80,7 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
     // their models' textures.
     for (const Model& instance : clipped_scene) {
         RenderObject(canvas, viewport, instance, lights_in_camera, shading_model, depth_buffer,
-                     texture_mapping);
+                     texture_mapping, texture_filter);
     }
 }
 

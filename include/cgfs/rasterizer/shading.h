@@ -3,6 +3,7 @@
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/lighting/light.h>
 #include <cgfs/rasterizer/model.h>
 #include <cgfs/rasterizer/triangle.h>
@@ -119,8 +120,10 @@ enum class ShadingModel { kFlat, kGouraudFaceted, kGouraud, kPhong };
 ///
 /// `texture_mapping` is how the texture coordinates get from the corners to the pixels,
 /// perspective-correct unless the caller asks for the linear mapping the book's chapter
-/// starts with (see TextureMapping). It makes no difference to an object without a
-/// texture.
+/// starts with (see TextureMapping). `texture_filter` is how the color at those
+/// coordinates is made from the texels there: the one texel the point falls in unless
+/// the caller asks for bilinear filtering, which blends the four around it (see
+/// TextureFilter). Neither makes a difference to an object without a texture.
 ///
 /// The triangles are drawn in list order, through `depth_buffer` if there is one, so
 /// that a pixel shows the nearest of them; without one the later triangle shows, as in
@@ -136,6 +139,7 @@ enum class ShadingModel { kFlat, kGouraudFaceted, kGouraud, kPhong };
 void RenderObject(Canvas& canvas, const Viewport& viewport, const Model& object,
                   std::span<const Light> lights, ShadingModel shading_model = ShadingModel::kPhong,
                   DepthBuffer* depth_buffer = nullptr,
-                  TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
+                  TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect,
+                  TextureFilter texture_filter = TextureFilter::kNearestNeighbor);
 
 }  // namespace cgfs

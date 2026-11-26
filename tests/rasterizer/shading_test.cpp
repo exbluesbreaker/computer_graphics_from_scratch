@@ -45,6 +45,7 @@ using cgfs::RenderObject;
 using cgfs::Rgb8;
 using cgfs::ShadingModel;
 using cgfs::Texture;
+using cgfs::TextureFilter;
 using cgfs::TextureMapping;
 using cgfs::ToRgb8;
 using cgfs::Uv;
@@ -713,6 +714,59 @@ TEST_CASE(
         RenderObject(asked_linear, TestViewport(), face, lights, shading_model, nullptr,
                      TextureMapping::kLinear);
         CHECK(Bytes(asked_linear) == Bytes(linear));
+    }
+}
+
+TEST_CASE(
+    "RenderObject under lights: the texture filter is the caller's choice, nearest neighbor "
+    "by default",
+    "[shading]") {
+    // The leaning face under full ambient light, where every shading model draws the
+    // textured triangle through the projected corners. The texels are sixteen levels
+    // apart, so that a blend of them shows.
+    const Texture texture = AddressTexture(16, 16, 16);
+    const std::vector<Light> lights = {AmbientLight{.intensity = 1.0}};
+    const Model face = LeaningTexturedFace(texture);
+    const std::array<Point, 3> corners = TexturedCorners(kLeaningCorners);
+    const auto textured = [&](TextureMapping texture_mapping, TextureFilter texture_filter) {
+        Canvas canvas(kSize, kSize, kBlack);
+        DrawTexturedTriangle(canvas, corners[0], corners[1], corners[2], texture, texture_mapping,
+                             nullptr, texture_filter);
+        return canvas;
+    };
+    const auto rendered = [&](ShadingModel shading_model, TextureMapping texture_mapping,
+                              TextureFilter texture_filter) {
+        Canvas canvas(kSize, kSize, kBlack);
+        RenderObject(canvas, TestViewport(), face, lights, shading_model, nullptr, texture_mapping,
+                     texture_filter);
+        return canvas;
+    };
+    const Canvas nearest =
+        textured(TextureMapping::kPerspectiveCorrect, TextureFilter::kNearestNeighbor);
+    const Canvas bilinear = textured(TextureMapping::kPerspectiveCorrect, TextureFilter::kBilinear);
+    REQUIRE(Bytes(bilinear) != Bytes(nearest));
+    REQUIRE(LitPixels(bilinear) == LitPixels(nearest));  // the same pixels, other colors
+
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        INFO("shading model " << static_cast<int>(shading_model));
+        CHECK(Bytes(Lit(face, lights, shading_model)) == Bytes(nearest));
+        CHECK(Bytes(rendered(shading_model, TextureMapping::kPerspectiveCorrect,
+                             TextureFilter::kNearestNeighbor)) == Bytes(nearest));
+        CHECK(Bytes(rendered(shading_model, TextureMapping::kPerspectiveCorrect,
+                             TextureFilter::kBilinear)) == Bytes(bilinear));
+        // The filter and the mapping are two choices, and both reach the triangle.
+        CHECK(Bytes(rendered(shading_model, TextureMapping::kLinear, TextureFilter::kBilinear)) ==
+              Bytes(textured(TextureMapping::kLinear, TextureFilter::kBilinear)));
+    }
+
+    // Without a texture there is nothing to filter.
+    Model pinned = Face(kYellow);
+    pinned.triangles[0].uvs = kFaceUvs;
+    for (const ShadingModel shading_model : kEveryShadingModel) {
+        Canvas filtered(kSize, kSize, kBlack);
+        RenderObject(filtered, TestViewport(), pinned, lights, shading_model, nullptr,
+                     TextureMapping::kPerspectiveCorrect, TextureFilter::kBilinear);
+        CHECK(Bytes(filtered) == Bytes(Lit(Face(kYellow), lights, shading_model)));
     }
 }
 

@@ -33,11 +33,12 @@ double Illumination(Vec3 point, Vec3 normal, double specular, std::span<const Li
 }
 
 /// How an object's triangles are painted, apart from the light on them: with the
-/// object's texture, carried across each triangle by the mapping, or, without a texture,
-/// each in its own color.
+/// object's texture, carried across each triangle by the mapping and looked up by the
+/// filter, or, without a texture, each in its own color.
 struct Paint {
     const Texture* texture = nullptr;
     TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect;
+    TextureFilter texture_filter = TextureFilter::kNearestNeighbor;
 };
 
 /// Draw the triangle through the points `p`, whose `h` are the light at its corners,
@@ -47,7 +48,7 @@ void DrawWithIntensities(Canvas& canvas, const std::array<Point, 3>& p, Color co
                          const Paint& paint, DepthBuffer* depth_buffer) {
     if (paint.texture != nullptr) {
         DrawTexturedTriangle(canvas, p[0], p[1], p[2], *paint.texture, paint.texture_mapping,
-                             depth_buffer);
+                             depth_buffer, paint.texture_filter);
     } else {
         DrawShadedTriangle(canvas, p[0], p[1], p[2], color, depth_buffer);
     }
@@ -95,7 +96,7 @@ void RenderTriangle(Canvas& canvas, const Viewport& viewport, const Triangle& tr
                     p[k].h = intensity;
                 }
                 DrawTexturedTriangle(canvas, p[0], p[1], p[2], *paint.texture,
-                                     paint.texture_mapping, depth_buffer);
+                                     paint.texture_mapping, depth_buffer, paint.texture_filter);
             } else {
                 DrawFilledTriangle(canvas, p[0], p[1], p[2], triangle.color * intensity,
                                    depth_buffer);
@@ -129,7 +130,8 @@ void RenderTriangle(Canvas& canvas, const Viewport& viewport, const Triangle& tr
                 p[k].normal = CornerNormal(triangle, k, triangle_normal);
             }
             DrawPhongTriangle(canvas, viewport, p[0], p[1], p[2], triangle.color, specular, lights,
-                              depth_buffer, paint.texture, paint.texture_mapping);
+                              depth_buffer, paint.texture, paint.texture_mapping,
+                              paint.texture_filter);
             break;
         }
     }
@@ -139,13 +141,16 @@ void RenderTriangle(Canvas& canvas, const Viewport& viewport, const Triangle& tr
 
 void RenderObject(Canvas& canvas, const Viewport& viewport, const Model& object,
                   std::span<const Light> lights, ShadingModel shading_model,
-                  DepthBuffer* depth_buffer, TextureMapping texture_mapping) {
+                  DepthBuffer* depth_buffer, TextureMapping texture_mapping,
+                  TextureFilter texture_filter) {
     std::vector<Point> projected;
     projected.reserve(object.vertices.size());
     for (const Vec3 vertex : object.vertices) {
         projected.push_back(ProjectVertex(viewport, vertex));
     }
-    const Paint paint{.texture = object.texture, .texture_mapping = texture_mapping};
+    const Paint paint{.texture = object.texture,
+                      .texture_mapping = texture_mapping,
+                      .texture_filter = texture_filter};
     for (const Triangle& triangle : object.triangles) {
         RenderTriangle(canvas, viewport, triangle, object.vertices, projected, object.specular,
                        lights, shading_model, paint, depth_buffer);

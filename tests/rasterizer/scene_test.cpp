@@ -57,6 +57,7 @@ using cgfs::RenderScene;
 using cgfs::Rgb8;
 using cgfs::ShadingModel;
 using cgfs::Texture;
+using cgfs::TextureFilter;
 using cgfs::TextureMapping;
 using cgfs::TransformModel;
 using cgfs::Uv;
@@ -1138,6 +1139,47 @@ TEST_CASE(
     const std::vector<Instance> facing = {kAhead};
     CHECK(Bytes(CanvasWithTexturedScene(models, facing, TextureMapping::kLinear)) ==
           Bytes(CanvasWithTexturedScene(models, facing, TextureMapping::kPerspectiveCorrect)));
+}
+
+TEST_CASE(
+    "RenderScene under lights: textures are looked up by nearest neighbor filtering unless "
+    "the caller asks for bilinear filtering",
+    "[rasterizer][shading]") {
+    // The instance of the first test, with texels sixteen levels apart so that a blend
+    // of them shows. The filter goes to RenderObject with the mapping, under every
+    // shading model.
+    const Texture texture = AddressTexture(16, 16, 16);
+    const Model model = TexturedTriangle(texture);
+    const std::vector<Model> models = {model};
+    const std::vector<Instance> instances = {{.model = 0,
+                                              .position = {0.125, -0.0625, 1.0},
+                                              .orientation = MakeOYRotationMatrix(40.0),
+                                              .scale = 0.75}};
+    const Model placed = TransformModel(model, MakeModelMatrix(instances[0]));
+    for (const TextureMapping texture_mapping :
+         {TextureMapping::kLinear, TextureMapping::kPerspectiveCorrect}) {
+        for (const ShadingModel shading_model : kEveryShadingModel) {
+            INFO("mapping " << static_cast<int>(texture_mapping) << ", shading model "
+                            << static_cast<int>(shading_model));
+            Canvas expected(kSize, kSize, kBlack);
+            RenderObject(expected, TestViewport(), placed, kLampAhead, shading_model, nullptr,
+                         texture_mapping, TextureFilter::kBilinear);
+            const auto scene = [&](auto... texture_filter) {
+                Canvas canvas(kSize, kSize, kBlack);
+                DepthBuffer depth_buffer(canvas);
+                RenderScene(canvas, TestViewport(), models, instances, Camera{}, kLampAhead,
+                            shading_model, &depth_buffer, BackFaceCulling::kOn, texture_mapping,
+                            texture_filter...);
+                return canvas;
+            };
+            const Canvas by_default = scene();
+            const Canvas bilinear = scene(TextureFilter::kBilinear);
+            CHECK(Bytes(bilinear) == Bytes(expected));
+            CHECK(Bytes(scene(TextureFilter::kNearestNeighbor)) == Bytes(by_default));
+            CHECK(Bytes(bilinear) != Bytes(by_default));
+            CHECK(LitPixels(bilinear) == LitPixels(by_default));  // the same pixels
+        }
+    }
 }
 
 TEST_CASE("RenderScene under lights: every instance is painted with the texture of its model",

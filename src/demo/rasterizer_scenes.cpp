@@ -1108,7 +1108,7 @@ void DrawShadingScene(Canvas& canvas, const Viewport& viewport, ShadingModel sha
 }
 
 void DrawTexturesScene(Canvas& canvas, const Viewport& viewport, const Texture& texture,
-                       TextureMapping texture_mapping) {
+                       TextureMapping texture_mapping, TextureFilter texture_filter) {
     constexpr Color kBackground{18.0, 20.0, 28.0};
 
     canvas.Clear(kBackground);
@@ -1122,10 +1122,11 @@ void DrawTexturesScene(Canvas& canvas, const Viewport& viewport, const Texture& 
     //
     // The floor is paved with the same texture, a tile 4 x 4, and runs from under the
     // camera to the horizon, so it is drawn at every size there is. In front of the
-    // camera a texel covers several pixels each way and shows as a block of one color.
-    // Toward the horizon a pixel covers more and more texels, hundreds in the end, and
-    // shows whichever one of them its coordinates happen to fall in: the boards break up
-    // into dashes and the wood into noise. Somewhere near the crate the floor is right.
+    // camera a texel covers several pixels each way and shows as a block of one color,
+    // unless the filter blends it with its neighbours. Toward the horizon a pixel covers
+    // more and more texels, hundreds in the end, and shows whichever one of them its
+    // coordinates happen to fall in, or four: the boards break up into dashes and the
+    // wood into noise under either filter. Somewhere near the crate the floor is right.
     constexpr std::size_t kFloor = 0;
     constexpr std::size_t kCrate = 1;
     constexpr double kTile = 4.0;
@@ -1181,7 +1182,7 @@ void DrawTexturesScene(Canvas& canvas, const Viewport& viewport, const Texture& 
     // only ever seen from above, which is its front.
     DepthBuffer depth_buffer(canvas);
     RenderScene(canvas, viewport, models, instances, camera, lights, ShadingModel::kFlat,
-                &depth_buffer, BackFaceCulling::kOn, texture_mapping);
+                &depth_buffer, BackFaceCulling::kOn, texture_mapping, texture_filter);
 }
 
 void DrawAxesScene(Canvas& canvas) {

@@ -4,6 +4,7 @@
 #include <cgfs/camera/viewport.h>
 #include <cgfs/image/canvas.h>
 #include <cgfs/image/depth_buffer.h>
+#include <cgfs/image/texture.h>
 #include <cgfs/lighting/light.h>
 #include <cgfs/rasterizer/culling.h>
 #include <cgfs/rasterizer/instance.h>
@@ -85,7 +86,8 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
 ///                    TransformLight(L, M_camera)
 ///     culled, clipped as above
 ///     for each instance C of clipped:
-///                    RenderObject(C, lit_by, shading_model, depth_buffer, texture_mapping)
+///                    RenderObject(C, lit_by, shading_model, depth_buffer, texture_mapping,
+///                                 texture_filter)
 ///
 /// `lights` are given in the world's coordinates, where the instances are placed and the
 /// camera stands. The light on a surface depends on where the surface, the lights and
@@ -118,8 +120,11 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
 /// own, which must be there while the scene is drawn. `texture_mapping` is how texture
 /// coordinates are carried across a triangle (see TextureMapping): perspective-correct
 /// unless the caller asks for the linear mapping, which is wrong for every face that
-/// leans away from the camera and is there to show that. It changes nothing in a scene
-/// without textures.
+/// leans away from the camera and is there to show that. `texture_filter` is how the
+/// color at those coordinates is made from the texels (see TextureFilter): nearest
+/// neighbor filtering unless the caller asks for bilinear filtering, which smooths a
+/// texture that is drawn larger than it is. Neither changes anything in a scene without
+/// textures.
 ///
 /// Preconditions: as above.
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
@@ -127,6 +132,7 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
                  std::span<const Light> lights, ShadingModel shading_model = ShadingModel::kPhong,
                  DepthBuffer* depth_buffer = nullptr,
                  BackFaceCulling back_face_culling = BackFaceCulling::kOn,
-                 TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
+                 TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect,
+                 TextureFilter texture_filter = TextureFilter::kNearestNeighbor);
 
 }  // namespace cgfs

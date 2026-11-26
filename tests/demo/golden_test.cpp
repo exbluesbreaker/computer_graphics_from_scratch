@@ -83,16 +83,17 @@ void CheckDrawingMatchesGolden(void (*draw)(cgfs::Canvas&), const std::string& f
 }
 
 // Draws the textures scene, with the crate texture carried across its triangles by
-// `texture_mapping`, on a canvas of the reference image's size.
+// `texture_mapping` and looked up by `texture_filter`, on a canvas of the reference
+// image's size.
 void CheckTexturesSceneMatchesGolden(cgfs::TextureMapping texture_mapping,
-                                     const std::string& file) {
+                                     cgfs::TextureFilter texture_filter, const std::string& file) {
     const std::filesystem::path path = GoldenPath(file);
     const cgfs::Image golden = cgfs::ReadPpm(path);
     const cgfs::Texture crate = cgfs::demo::CrateTexture();
 
     cgfs::Canvas canvas(golden.width, golden.height);
     cgfs::demo::DrawTexturesScene(canvas, cgfs::Viewport::MatchingCanvasAspect(canvas), crate,
-                                  texture_mapping);
+                                  texture_mapping, texture_filter);
     CheckCanvasMatches(canvas, golden, path);
 }
 
@@ -216,15 +217,25 @@ TEST_CASE("shading scene matches the reference drawing under Phong shading", "[g
         "shading_phong_320x180.ppm");
 }
 
-// The textures scene is one scene and two pictures, one per way of carrying a texture
-// across a triangle.
+// The textures scene is one scene and three pictures: one per way of carrying a texture
+// across a triangle, both looked up by nearest neighbor filtering, and the right one of
+// the two looked up by bilinear filtering.
 
 TEST_CASE("textures scene matches the reference drawing under perspective-correct mapping",
           "[golden]") {
     CheckTexturesSceneMatchesGolden(cgfs::TextureMapping::kPerspectiveCorrect,
+                                    cgfs::TextureFilter::kNearestNeighbor,
                                     "textures_perspective_correct_320x180.ppm");
 }
 
 TEST_CASE("textures scene matches the reference drawing under linear mapping", "[golden]") {
-    CheckTexturesSceneMatchesGolden(cgfs::TextureMapping::kLinear, "textures_linear_320x180.ppm");
+    CheckTexturesSceneMatchesGolden(cgfs::TextureMapping::kLinear,
+                                    cgfs::TextureFilter::kNearestNeighbor,
+                                    "textures_linear_320x180.ppm");
+}
+
+TEST_CASE("textures scene matches the reference drawing under bilinear filtering", "[golden]") {
+    CheckTexturesSceneMatchesGolden(cgfs::TextureMapping::kPerspectiveCorrect,
+                                    cgfs::TextureFilter::kBilinear,
+                                    "textures_bilinear_320x180.ppm");
 }

@@ -153,13 +153,16 @@ enum class TextureMapping { kLinear, kPerspectiveCorrect };
 /// The intensity h is interpolated over the picture in both cases, as DrawShadedTriangle
 /// does it; the book's chapter corrects the texture coordinates and nothing else.
 ///
-/// The texel is found by Texture::GetTexel, which rounds down to one texel: nearest
-/// neighbor filtering. Nothing here looks at how many texels a pixel covers or how many
-/// pixels a texel does, so a texture drawn much larger than it is shows its texels as
-/// blocks, and one drawn much smaller shows a scattering of the texels it has, which
-/// from a regular texture makes patterns that are not in it. The pixels covered are
-/// exactly those DrawFilledTriangle covers for the same three points. The vertex order
-/// does not matter; no clipping.
+/// The color at (u, v) is found by Texture::GetTexel with `texture_filter` (see
+/// TextureFilter). Nearest neighbor filtering, the default, rounds down to one texel,
+/// so a texture drawn much larger than it is shows its texels as blocks; bilinear
+/// filtering blends the four texels around the point, and the blocks become gradients.
+/// The filter is asked once per pixel, at the pixel's own (u, v). Nothing here looks at
+/// how many texels a pixel covers, so a texture drawn much smaller than it is shows a
+/// scattering of the texels it has under either filter, which from a regular texture
+/// makes patterns that are not in it. The pixels covered are exactly those
+/// DrawFilledTriangle covers for the same three points. The vertex order does not
+/// matter; no clipping.
 ///
 /// With a `depth_buffer` only the pixels where the triangle is the nearest thing so far
 /// are set, as in DrawFilledTriangle. Without one every pixel is set.
@@ -170,7 +173,8 @@ enum class TextureMapping { kLinear, kPerspectiveCorrect };
 /// size, asserted.
 void DrawTexturedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, const Texture& texture,
                           TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect,
-                          DepthBuffer* depth_buffer = nullptr);
+                          DepthBuffer* depth_buffer = nullptr,
+                          TextureFilter texture_filter = TextureFilter::kNearestNeighbor);
 
 /// Fill the triangle p0 p1 p2 with `color` lit pixel by pixel: the primitive of Phong
 /// shading.
@@ -210,7 +214,8 @@ void DrawTexturedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, const Te
 /// With a `texture` the triangle is painted with it instead of `color`, which is then not
 /// read: the texture coordinates of the vertices (see Point) travel along the sides and
 /// the rows as `texture_mapping` says, exactly as in DrawTexturedTriangle, and a pixel
-/// is set to its texel times the light computed for it.
+/// is set to the color `texture_filter` finds for it in the texture, as there, times the
+/// light computed for it.
 ///
 /// Preconditions: every point has `inv_z` > 0, as the projection of a vertex in front
 /// of the camera has, asserted by UnprojectVertex; every point has a normal that is not
@@ -219,6 +224,7 @@ void DrawTexturedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, const Te
 void DrawPhongTriangle(Canvas& canvas, const Viewport& viewport, Point p0, Point p1, Point p2,
                        Color color, double specular, std::span<const Light> lights,
                        DepthBuffer* depth_buffer = nullptr, const Texture* texture = nullptr,
-                       TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
+                       TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect,
+                       TextureFilter texture_filter = TextureFilter::kNearestNeighbor);
 
 }  // namespace cgfs

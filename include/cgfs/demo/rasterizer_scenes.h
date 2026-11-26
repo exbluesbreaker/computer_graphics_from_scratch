@@ -201,12 +201,12 @@ void DrawShadingScene(Canvas& canvas, const Viewport& viewport, ShadingModel sha
 /// that runs to the horizon, both painted with `texture`, which is meant to be the crate
 /// texture (see CrateTexture in textures.h), drawn with RenderScene under an ambient
 /// light and a sun, through a depth buffer. The texture is carried across the triangles
-/// by `texture_mapping`: the scene is one to be drawn twice, the two pictures of the
-/// chapter's first half.
+/// by `texture_mapping` and looked up by `texture_filter`: the scene is one to be drawn
+/// several times, the pictures of the chapter as far as it is implemented.
 ///
-/// The two objects are painted with one texture by one method, nearest neighbor
-/// filtering, a pixel taking the color of the one texel its point of the texture falls
-/// in. What tells them apart is the size the texture is drawn at:
+/// The two objects are painted with one texture by one method. With the default,
+/// nearest neighbor filtering, a pixel takes the color of the one texel its point of the
+/// texture falls in. What tells the objects apart is the size the texture is drawn at:
 ///
 /// - The crate, a cube of side 2 with the whole texture on every face, stands about 5
 ///   in front of the camera, turned to show two faces. At 1920 x 1080 a face is about
@@ -224,8 +224,12 @@ void DrawShadingScene(Canvas& canvas, const Viewport& viewport, ShadingModel sha
 ///   the wood into noise, patterns that are not in the texture: what mipmapping mends.
 ///   In between, around the crate, the floor is about right.
 ///
-/// Neither is mended here: this is the texturing of the chapter up to its first
-/// filter.
+/// With TextureFilter::kBilinear a pixel blends the four texels around its point, and the
+/// first of the two is mended: the blocks at the bottom of the picture are gone, the
+/// wood there running from one texel's color to the next. The crate is a little softer
+/// and otherwise as it was. The floor toward the horizon is no better: four texels of
+/// the hundreds under a pixel are as much of an accident as one, and the dashes and the
+/// noise stay, which is left to mipmapping.
 ///
 /// With TextureMapping::kLinear the picture is the chapter's first, and wrong: u and v
 /// are interpolated over the picture of every triangle, so on every face that leans away
@@ -245,7 +249,8 @@ void DrawShadingScene(Canvas& canvas, const Viewport& viewport, ShadingModel sha
 /// shading, which is then exact. Clears the canvas to a dark background first; depends
 /// on the viewport, so render_demo's --distance zooms it.
 void DrawTexturesScene(Canvas& canvas, const Viewport& viewport, const Texture& texture,
-                       TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
+                       TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect,
+                       TextureFilter texture_filter = TextureFilter::kNearestNeighbor);
 
 /// The coordinate axes through the origin, a dot at the origin and a colored dot in
 /// each corner (red top-left, green top-right, blue bottom-left, black bottom-right): a

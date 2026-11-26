@@ -22,7 +22,8 @@ through a depth buffer that removes the hidden surfaces and lit by the same ligh
 the same equation as the ray tracer's spheres, with flat, Gouraud or Phong shading,
 Gouraud shading in both of the forms the book shows it in, and painted with textures,
 images whose points are pinned to the corners of the triangles and carried across them
-to every pixel, by the linear mapping the book starts with or perspective-correct;
+to every pixel, by the linear mapping the book starts with or perspective-correct, and
+looked up there by nearest neighbor filtering or by bilinear filtering;
 section 13 lists what comes next.
 
 ## 2. Goals and non-goals
@@ -870,12 +871,12 @@ Scenes under lights:
 A crate could be modelled plank by plank and nail by nail, with a great many triangles.
 Painting a picture of planks and nails onto the twelve triangles of a cube is far
 cheaper and, from a little way off, looks the same. The picture is a texture. This is
-the first half of the book's Textures chapter, "Painting a Crate" and
-"Perspective-Correct Texture Mapping", up to the first of its filters. The filters,
-bilinear filtering, mipmapping and trilinear filtering, are not implemented (section
-13): a texture is looked up by nearest neighbor filtering and by nothing else, and what
-that looks like where a texture is drawn larger or smaller than it is belongs to the
-behaviour described here.
+the book's Textures chapter through "Painting a Crate", "Perspective-Correct Texture
+Mapping" and "Bilinear Filtering", the first of its filters. The other two, mipmapping
+and trilinear filtering, are not implemented (section 13): a texture is kept at one
+size and looked up by nearest neighbor filtering or by bilinear filtering, and what
+each of them looks like where a texture is drawn larger or smaller than it is belongs
+to the behaviour described here.
 
 Textures and their coordinates:
 
@@ -888,24 +889,67 @@ Textures and their coordinates:
   its bottom edge, with the origin at the top-left corner, as in the book. A model
   that says a corner shows `(1, 0)` means the top-right corner of whatever image it is
   painted with. The default is the origin.
-- `GetTexel(u, v)` is the color of the texel the point falls in:
+- `GetTexel(u, v, filter = kNearestNeighbor)` is the color of the texture at the point,
+  made from its texels by `filter`. `TextureFilter` is `kNearestNeighbor` or
+  `kBilinear`, the chapter's filters as far as they are implemented, in its order. Both
+  start from where the point is among the texels, counted from the top-left corner, as
+  real numbers:
 
   ```
-  tx = u * width     rounded down, then kept within 0 .. width - 1
-  ty = v * height    rounded down, then kept within 0 .. height - 1
+  tx = u * width     kept within 0 .. width - 1
+  ty = v * height    kept within 0 .. height - 1
   ```
 
-  and the result is the texel in column `tx` of row `ty`, counted from the top-left
-  corner, as a `Color` with channels 0..255. Rounding down is the book's nearest
-  neighbor filtering: every point of a texel has the texel's color, and how near the
-  next texel is does not show. A texel covers `u` from `tx / width` up to, not
-  including, `(tx + 1) / width`. The right and bottom edges, `u = 1` and `v = 1`, would
+- Nearest neighbor filtering rounds `tx` and `ty` down, and the result is the texel in
+  that column of that row, as a `Color` with channels 0..255. Every point of a texel
+  has the texel's color, and how near the next texel is does not show. A texel covers
+  `u` from `tx / width` up to, not including, `(tx + 1) / width`. (Rounding down first
+  and keeping the whole number within the texture afterwards is the same texel.)
+- Bilinear filtering uses the fractions that the rounding cuts off, `fx` of `tx` and
+  `fy` of `ty`. With `tx` and `ty` rounded down as before, the point lies among four
+  texels, and its color is interpolated linearly twice, across the top two and across
+  the bottom two and then between those two results, which is the name:
+
+  ```
+  TL = texel(tx, ty)        TR = texel(tx + 1, ty)
+  BL = texel(tx, ty + 1)    BR = texel(tx + 1, ty + 1)
+
+  CT = (1 - fx) TL + fx TR
+  CB = (1 - fx) BL + fx BR
+  C  = (1 - fy) CT + fy CB
+  ```
+
+  The weight of `TR` is `fx` and not `1 - fx`: the nearer the point is to the right,
+  the more of the right texel it shows. At `fx = fy = 0` the color is `TL`, the texel
+  that nearest neighbor filtering returns there, and from that point it changes evenly
+  toward the three others, with no jump at the border between two texels. On two texels
+  side by side, 0 and 200, sixteen equal steps of `u` from 0 to 1 give 0, 25, 50 and so
+  on to 200 at `u = 0.5` and 200 from there on, where nearest neighbor filtering gives
+  eight times 0 and then 200. The result is a `Color` whose channels are in general not
+  whole numbers; like any color it is truncated when it reaches the canvas (3.1), after
+  the light has multiplied it.
+- Where a texel is. Bilinear filtering takes a texel to be a point, the one at the whole
+  numbers `(tx, ty)`, and that point is the top-left corner of the square that nearest
+  neighbor filtering paints in the texel's color. So the bilinear picture of a texture
+  is not its blocks blurred in place: it lies half a texel nearer the texture's origin.
+  That is the book's listing as written (section 14, decision 20).
+- The three blends are each computed as `a + f (b - a)`. That is the same number as
+  `(1 - f) a + f b`, and in floating point it has two properties the other form lacks:
+  it is exactly `a` when the two colors are equal, and it is never outside the two.
+  `(1 - f) 255 + f 255` comes out as `254.99999999999997` for about one `f` in
+  twenty-six, which the canvas would truncate to 254 (decision 20).
+- The edges, under both filters. The right and bottom edges, `u = 1` and `v = 1`, would
   be column `width` and row `height`, one past the last, and belong to the last texel
   instead; so does every coordinate beyond an edge, which is taken to the texel at that
   edge. Nothing repeats and nothing wraps around. The corners of a model are at exactly
   0 and 1, and a coordinate interpolated between them can come out a rounding error
   outside, so what happens there has to be defined; the book does not say (section 14,
-  decision 19). Precondition: `u` and `v` are not NaN, asserted.
+  decision 19). Bilinear filtering asks for a column to the right of the last and a row
+  below the last, for every point in them. The last column and the last row are read in
+  their place, where `fx` or `fy` is 0 and the missing texel has no weight: from
+  `tx = width - 1` to the right edge the color is the last column's own, as under
+  nearest neighbor filtering, and nothing of the opposite edge shows. Precondition:
+  `u` and `v` are not NaN, asserted.
 
 The model:
 
@@ -934,15 +978,17 @@ From the corners to a pixel. `TextureMapping` is `kLinear` or `kPerspectiveCorre
 chapter's two ways, in its order.
 
 - `DrawTexturedTriangle(P0, P1, P2, texture, texture_mapping = kPerspectiveCorrect,
-  depth_buffer = none)` fills the triangle as `DrawFilledTriangle` does, the same pixels
-  (3.6), and sets a pixel to
+  depth_buffer = none, texture_filter = kNearestNeighbor)` fills the triangle as
+  `DrawFilledTriangle` does, the same pixels (3.6), and sets a pixel to
 
   ```
-  pixel = texture.GetTexel(u, v) * h
+  pixel = texture.GetTexel(u, v, texture_filter) * h
   ```
 
   with `h` the intensity of `DrawShadedTriangle`, interpolated from the points' `h` as
-  there, and `(u, v)` found from the points' `uv` by the mapping. Four quantities
+  there, and `(u, v)` found from the points' `uv` by the mapping. The mapping finds the
+  point of the texture and the filter the color there: the two are independent, and the
+  filter is asked once per pixel, at the pixel's own point. Four quantities
   travel along the sides and along every row with x, each by the calls of 3.13
   (`EdgeInterpolate` along the sides, `Interpolate` along a row): `h`, `1/z` and, for
   each of the two texture coordinates, what the mapping carries.
@@ -980,18 +1026,20 @@ chapter's two ways, in its order.
   in 3.12; without one every pixel is set. Preconditions: under perspective-correct
   mapping every point has `inv_z > 0`, asserted, as the projection of a vertex in front
   of the camera has; linear mapping reads the depths only for a depth buffer.
-- `DrawPhongTriangle` (3.13) takes a texture and a mapping as two more parameters, none
-  and perspective-correct by default. With a texture the two texture coordinates travel
-  with its other quantities in the same way, and the pixel is
-  `texture.GetTexel(u, v) * ComputeIllumination(P, N, V, s, lights)`; its `color` is
-  then not read.
+- `DrawPhongTriangle` (3.13) takes a texture, a mapping and a filter as three more
+  parameters, none, perspective-correct and nearest neighbor by default. With a texture
+  the two texture coordinates travel with its other quantities in the same way, and the
+  pixel is
+  `texture.GetTexel(u, v, texture_filter) * ComputeIllumination(P, N, V, s, lights)`;
+  its `color` is then not read.
 
 Painting an object. The book's sentence is "fetch the texel, apply shading, and paint
 the pixel with the resulting color": the texel takes the place of the triangle's color
 and the light multiplies it.
 
-- `RenderObject` under lights (3.13) takes `texture_mapping = kPerspectiveCorrect` as a
-  last parameter. For an object with a texture, each corner's point gets
+- `RenderObject` under lights (3.13) takes `texture_mapping = kPerspectiveCorrect` and
+  `texture_filter = kNearestNeighbor` as its last two parameters and hands both to the
+  primitive it draws with. For an object with a texture, each corner's point gets
   `uv = triangle.uvs[k]`, the light is computed as 3.13 says, and the triangle is drawn
   by
 
@@ -1002,12 +1050,12 @@ and the light multiplies it.
   ```
 
   The triangle's `color` is not read. An object without a texture is drawn exactly as
-  in 3.13, whatever texture coordinates its triangles state and whatever the mapping.
-  A texture of one color gives, under every shading model, the picture of the same
-  object in that color.
-- `RenderScene` under lights takes the mapping as a last parameter as well and hands it
-  to `RenderObject` for every instance. The textures are not a list of the scene: each
-  model points to its own.
+  in 3.13, whatever texture coordinates its triangles state and whatever the mapping
+  and the filter. A texture of one color gives, under every shading model and both
+  filters, the picture of the same object in that color.
+- `RenderScene` under lights takes the mapping and the filter as its last two
+  parameters as well and hands them to `RenderObject` for every instance. The textures
+  are not a list of the scene: each model points to its own.
 - The drawing with a triangle primitive (3.8, the first `RenderScene` and
   `RenderObject`) knows nothing of textures and draws every triangle in its color.
 - A triangle cut by a clipping plane is, under perspective-correct mapping, textured as
@@ -1034,10 +1082,32 @@ many texels a pixel covers or how many pixels a texel does.
   across it: on a floor seen from a height `H` a pixel at the distance `D` covers about
   `D / H` times as much floor in depth as across. So a floor is drawn too small in
   depth long before it is across.
-- Mending the first takes bilinear filtering, and the second mipmapping, with trilinear
-  filtering for the seams between its levels: the rest of the book's chapter. The
-  `textures` demo (section 9) is composed to show both, next to an object the texture
-  suits.
+- Bilinear filtering mends the first, below. Mending the second takes mipmapping, with
+  trilinear filtering for the seams between its levels: the rest of the book's chapter.
+  The `textures` demo (section 9) is composed to show both, next to an object the
+  texture suits.
+
+What bilinear filtering changes. The pixels that are set are the same; their colors are
+made of four texels instead of one.
+
+- Drawn larger than it is, a texture shows gradients where it showed blocks: a pixel
+  inside a texel is that much of the way from the texel's color to the next one's. The
+  texture of 2 x 2 texels on a face of 8 x 8 pixel steps climbs from the first texel's
+  color at the left edge to the second's in the middle of the face, a quarter of the
+  difference per pixel, and has the second's from there on, the second being the last
+  column. This is the book's Figure 14-8 beside its Figure 14-7.
+- Drawn at its own size, with every pixel's point at a texel's own place, a texture is
+  the same picture under both filters: nothing is cut off, and the blend is the texel.
+  A texture at about its own size, which is the usual case, is softened a little, a
+  point between texels showing some of each.
+- Drawn smaller, it is not mended. A pixel that covers many texels shows a blend of
+  four neighbouring ones around its own point, and the rest are never looked at, as
+  before. Sixteen texels across 4 pixel steps show the texels in columns 0, 4, 8 and
+  12 and the last, each exactly, the very picture nearest neighbor filtering draws.
+  Where the points do not fall on texels the noise is a little milder, every sample
+  being a mean of four, and is still noise.
+- A pixel reads four texels and does three blends where it read one texel: about a
+  sixth more time on the `textures` demo at 1920 x 1080 (section 15).
 
 ### 3.15 Numeric conventions
 
@@ -1137,9 +1207,9 @@ demo         raytracer_scenes, rasterizer_scenes, textures          the demo pic
   pixel of a canvas, for hidden-surface removal; in this layer because it depends on
   nothing but the canvas's size and coordinates. `image/image_io`: PPM writer and
   reader, PNG writer; used by `Canvas::Save` and the tests. `image/texture`: `Texture`,
-  an image to paint triangles with, looked up by nearest neighbor filtering, and `Uv`,
-  a point of it; in this layer because a texture is an image and needs nothing but
-  `Image` and `Color`.
+  an image to paint triangles with, `TextureFilter`, the two ways its texels make the
+  color of a point, nearest neighbor and bilinear, and `Uv`, a point of it; in this
+  layer because a texture is an image and needs nothing but `Image` and `Color`.
 - `camera/viewport`: pixel to viewport-point mapping and field of view. Used by the ray
   tracer and by the rasterizer's projection. `camera/camera`: `Camera`, a position, an
   orientation and a list of clipping planes, and `MakeCameraMatrix`; plain data for
@@ -1358,6 +1428,9 @@ struct Uv {                          // a point of a texture: u to the right, v 
     bool operator==(const Uv&) const = default;
 };
 
+enum class TextureFilter { kNearestNeighbor, kBilinear };
+// how the texels make the color of a point: the one it falls in, or the four around it
+
 class Texture {                      // an image to paint triangles with
 public:
     explicit Texture(Image image);
@@ -1367,9 +1440,12 @@ public:
     int width() const;
     int height() const;
 
-    Color GetTexel(double u, double v) const;
-    // the texel in column floor(u * width) of row floor(v * height), counted from the
-    // top-left corner; a coordinate at or beyond an edge gives the edge's texel
+    Color GetTexel(double u, double v,
+                   TextureFilter filter = TextureFilter::kNearestNeighbor) const;
+    // kNearestNeighbor: the texel in column floor(u * width) of row floor(v * height),
+    // counted from the top-left corner; kBilinear: that texel, the next in its row and
+    // the two below them, blended by the fractions the rounding cut off; a coordinate
+    // at or beyond an edge gives the edge's texel under both
 };
 ```
 
@@ -1377,7 +1453,9 @@ A texture is made of an `Image`, what `ReadPpm` returns, so reading one from a f
 `Texture(ReadPpm(path))` and there is no loader of its own. It is a class for the reason
 the canvas and the depth buffer are: its size and its bytes have to stay in step.
 `GetTexel` takes the two coordinates as the book's `getTexel(u, v)` does; `Uv` is what
-a triangle and a point carry.
+a triangle and a point carry. The filter is a parameter of the lookup and not a
+property of the texture (section 14, decision 20): one texture can be asked both ways,
+and it defaults to nearest neighbor filtering, so `GetTexel(u, v)` is what it was.
 
 ### 5.5 `camera/viewport.h`, `camera/camera.h`, `camera/clipping_planes.h`
 
@@ -1547,16 +1625,19 @@ enum class TextureMapping { kLinear, kPerspectiveCorrect };
 // what carries a texture across a triangle: u and v, or u/z and v/z (section 3.14)
 void DrawTexturedTriangle(Canvas& canvas, Point p0, Point p1, Point p2, const Texture& texture,
                           TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect,
-                          DepthBuffer* depth_buffer = nullptr);
-// texture.GetTexel(u, v) * h at every pixel, (u, v) from the points' uv by the mapping;
-// perspective-correct mapping needs inv_z > 0 at every point
+                          DepthBuffer* depth_buffer = nullptr,
+                          TextureFilter texture_filter = TextureFilter::kNearestNeighbor);
+// texture.GetTexel(u, v, texture_filter) * h at every pixel, (u, v) from the points' uv
+// by the mapping; perspective-correct mapping needs inv_z > 0 at every point
 void DrawPhongTriangle(Canvas& canvas, const Viewport& viewport, Point p0, Point p1, Point p2,
                        Color color, double specular, std::span<const Light> lights,
                        DepthBuffer* depth_buffer = nullptr, const Texture* texture = nullptr,
-                       TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
+                       TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect,
+                       TextureFilter texture_filter = TextureFilter::kNearestNeighbor);
 // color * ComputeIllumination at every pixel, from the interpolated 1/z and normals; the
 // lights in the camera's coordinates; every point with inv_z > 0 and a normal (section
-// 3.13); with a texture, its texel in the place of color (section 3.14)
+// 3.13); with a texture, its color at the pixel's point in the place of color, found by
+// the mapping and the filter (section 3.14)
 
 // projection.h
 Point ViewportToCanvas(const Viewport& viewport, double x, double y);  // truncated (section 3.7)
@@ -1630,10 +1711,12 @@ void RenderObject(Canvas& canvas, const Viewport& viewport, const Model& object,
                   std::span<const Light> lights,
                   ShadingModel shading_model = ShadingModel::kPhong,
                   DepthBuffer* depth_buffer = nullptr,
-                  TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
+                  TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect,
+                  TextureFilter texture_filter = TextureFilter::kNearestNeighbor);
 // the object, a Model in the camera's coordinates, under lights in the same coordinates:
 // every triangle in its color times the light computed per triangle, per corner or per
-// pixel; an object with a texture in its texels times that light (section 3.14)
+// pixel; an object with a texture in its texels, as the filter makes a color of them,
+// times that light (section 3.14)
 
 // scene.h
 void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model> models,
@@ -1650,10 +1733,11 @@ void RenderScene(Canvas& canvas, const Viewport& viewport, std::span<const Model
                  ShadingModel shading_model = ShadingModel::kPhong,
                  DepthBuffer* depth_buffer = nullptr,
                  BackFaceCulling back_face_culling = BackFaceCulling::kOn,
-                 TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect);
+                 TextureMapping texture_mapping = TextureMapping::kPerspectiveCorrect,
+                 TextureFilter texture_filter = TextureFilter::kNearestNeighbor);
 // the same steps under lights, which are given in the world's coordinates and taken into
 // the camera's with the scene; every instance drawn by RenderObject with the shading model
-// and, where its model has a texture, the texture mapping
+// and, where its model has a texture, the texture mapping and the texture filter
 ```
 
 One header per primitive. Free functions that take the canvas as their first parameter,
@@ -1715,6 +1799,13 @@ was (decision 11). The texture reaches the primitives by the model, which the li
 `RenderObject` is handed whole; the `RenderObject` and `RenderScene` that take a triangle
 primitive are handed vertices and triangles, or draw through a `DrawTriangleFunction`,
 and do not paint.
+Bilinear filtering arrived the same way (section 14, decision 20): `TextureFilter` is a
+defaulted last parameter of `GetTexel`, of the two primitives that paint, and of the
+`RenderObject` and the `RenderScene` that light, each of which hands it to the next. Its
+default is nearest neighbor filtering, what all of them did before, so no call written
+before it draws anything else; a caller who wants bilinear filtering says so. It comes
+after the depth buffer in `DrawTexturedTriangle`, where the mapping comes before it: a
+new parameter goes last.
 
 ## 6. Build system
 
@@ -1860,6 +1951,24 @@ Unit tests:
   outside it, at `1e300` or infinite is taken to the edge, and nothing wraps around; a
   picture of four texels and the same picture with every texel repeated 2 x 2 show the
   same color at the same `(u, v)`; a texture of one texel has one color everywhere.
+  Bilinear filtering: nearest neighbor filtering is the filter unless another is given;
+  at whole `tx` and `ty` the color is the texel's own, the one nearest neighbor
+  filtering returns; between two texels, black and (200, 100, 40), it is a quarter,
+  half and three quarters of the right one at `fx` = 1/4, 1/2 and 3/4; over sixteen
+  equal steps of `u` across two texels of 0 and 200 it climbs by 25 a step to 200 at
+  `u = 0.5` and stays, where nearest neighbor filtering has eight times 0 and then 200;
+  among four texels the point with `fx` = 1/4 and `fy` = 3/4 has (40, 60, 45) by the
+  three formulas, the middle has the mean of the four, the top row and the left column
+  blend two, and the same fractions the other way round give another color; on a
+  texture of 8 x 4 texels whose colors rise by 32 per column and per row the color at
+  every eighth of a texel is 32 times its own `tx` and `ty`; from the last column's
+  place to the right edge and from the last row's to the bottom edge the color is the
+  last column's and row's own, with the last two still blended just before; a
+  coordinate a rounding error outside an edge, far outside it, at `1e300` or infinite
+  is taken to the edge while the other coordinate is still blended; sixteen texels of
+  (255, 128, 1) give exactly that color at each of 90601 points, which `(1 - f) a + f b`
+  written out does not; on a checkerboard of 254 and 255 no blend is outside the two;
+  and a texture of one texel has one color everywhere.
 - `viewport`: a table of points for a 1920 x 1080 canvas and a 1 x 1 x 1 viewport
   (center, top-right `(0.5, 0.5, 1)`, bottom-left, quarter); the aspect-matched
   viewport maps the top-right corner to `(16/18, 0.5, 1)`; `Fov()` of the default
@@ -2019,7 +2128,10 @@ Unit tests:
     that light as every vertex's intensity, under both mappings; under a lamp close to
     the face a texture of one color gives the canvas of the same triangle in that
     color, shiny; the color is not read, and the mapping is perspective-correct unless
-    given.
+    given. With a filter: under ambient light it is the canvas of `DrawTexturedTriangle`
+    with that filter, for both filters and both mappings; without one it is nearest
+    neighbor filtering, bilinear filtering being another picture of the same pixels;
+    and without a texture the filter changes nothing.
   - `DrawTexturedTriangle` (a 32 x 32 canvas; textures whose every texel has the color
     (column, row, 200), so that a pixel shows which texel it was painted with): a
     texture of one color gives the canvas of `DrawShadedTriangle` in that color, for
@@ -2045,6 +2157,26 @@ Unit tests:
     (1, 2, 100), and clamped by the canvas at 2; through a depth buffer the nearer of
     two shows in either order, the picture of the filled triangles, and the buffer
     holds what a filled triangle leaves in it; a face larger than the canvas fills it.
+    With bilinear filtering (textures whose texels are 16 to 128 levels apart, so that
+    a blend of two shows in a pixel): nearest neighbor filtering is the filter unless
+    another is given, and bilinear filtering sets the same pixels in other colors,
+    under both mappings; on the right triangle above with a 4 x 4 texture, a texel two
+    pixels wide, the pixel `(x, y)` shows the color at `tx = x/2`, `ty = y/2`, steps of
+    32 where nearest neighbor filtering has steps of 64 every other pixel, (96, 0, 200)
+    at the pixel (3, 0) between the texels of 64 and 128, up to the last column and
+    row at the pixel 6 and their color from there on; on the leaning triangle every
+    pixel shows the blend at the `(u, v)` perspective-correct mapping finds, 51 halfway
+    along the bottom side, where `tx` is 1.6, and linear mapping 128; a 2 x 2 texture
+    on a face of 8 x 8 pixel steps is 0, 32, 64, 96 and then 128 along the top, where
+    nearest neighbor filtering draws four blocks, in either order of drawing the two
+    triangles; an 8 x 8 texture on that face, texel for pixel, and a 16 x 16 texture on
+    a face of 4 pixel steps are each one canvas under both filters, every pixel's point
+    being a texel's own place; sixteen texels of one color give the canvas of
+    `DrawShadedTriangle` in that color, for five shapes at three depths, under both
+    mappings, at full intensity and with three intensities; the blend is multiplied by
+    the intensity and truncated, (96, 32, 200) at 0.5 giving (48, 16, 100); and through
+    a depth buffer bilinear filtering sets the same pixels and leaves the same depths
+    as nearest neighbor filtering, and a triangle behind it changes nothing.
   - `ViewportToCanvas`: the viewport test's table the other way round (the default
     viewport on 1920 x 1080); a 2 x 1 viewport scales each axis by its own ratio;
     truncation toward zero (`33.7 -> 33`, `-33.7 -> -33`, `0.5` and `-0.5` to 0); the
@@ -2273,6 +2405,10 @@ Unit tests:
     textured triangle parallel to the viewport, cut by the plane `x = 0`, is under both
     mappings pixel for pixel the whole one with everything behind the plane removed, the
     new corners on the cut showing the texels (8, 4) and (8, 7) of a 16 x 8 texture.
+    The filter: the leaning instance is, for each shading model and each mapping, with
+    bilinear filtering the canvas of `RenderObject` on its placed model with bilinear
+    filtering, and without a filter the canvas with nearest neighbor filtering, the
+    same pixels in other colors.
   - Shading, `RenderObject` under lights (one triangle on the viewport plane that faces
     the camera, its corners on the pixels (0, 12), (12, -12) and (-12, -12) and its
     center on (0, -4)): Phong shading by default; under ambient light alone every
@@ -2323,8 +2459,11 @@ Unit tests:
     texture the texture coordinates and the mapping change nothing; a face leaning from
     z = 1 to z = 2 and 4 is drawn perspective-correct by default and as asked, and
     linear when asked, each the canvas of the primitive with that mapping, the same
-    pixels with other texels; and through a depth buffer the nearer of two textured
-    triangles shows under all four.
+    pixels with other texels; the same face is drawn with nearest neighbor filtering by
+    default and as asked, and with bilinear filtering when asked, under either mapping,
+    each the canvas of the primitive with that filter under all four shading models,
+    and without a texture the filter changes nothing; and through a depth buffer the
+    nearer of two textured triangles shows under all four.
 
 - `demo`: the crate texture is 512 x 512 texels, and seven of them, the four corners
   among them, have the colors of the file as it was converted, so that a texture
@@ -2347,8 +2486,9 @@ Golden-image tests:
   `clipping_320x180.ppm`, `filled_320x180.ppm` and the four of the shading scene,
   `shading_flat_320x180.ppm`, `shading_gouraud_faceted_320x180.ppm`,
   `shading_gouraud_320x180.ppm` and
-  `shading_phong_320x180.ppm`, and the two of the textures scene,
-  `textures_perspective_correct_320x180.ppm` and `textures_linear_320x180.ppm`, are the
+  `shading_phong_320x180.ppm`, and the three of the textures scene,
+  `textures_perspective_correct_320x180.ppm`, `textures_linear_320x180.ppm` and
+  `textures_bilinear_320x180.ppm`, are the
   rasterizer's demos (section
   9): every pixel of them comes from `DrawLine`, `DrawFilledTriangle`,
   `DrawShadedTriangle`, `DrawPhongTriangle` or `DrawTexturedTriangle`, the objects'
@@ -2380,7 +2520,10 @@ Golden-image tests:
   a pixel shows one texel, and a texture coordinate that came out differently in its
   last bit, at a pixel where it is within that of the border between two texels, would
   show the neighbouring texel, a difference of any size. Section 15 has the margins of
-  its vertices.
+  its vertices. The reference drawn with bilinear filtering does not have that border:
+  the blend changes evenly with the coordinate, so a coordinate that differs in its
+  last bit moves a channel by far less than a level, and by one level at most where the
+  blend is within that of a whole number, which is inside the test's tolerance.
 - `golden_test.cpp` renders the same scenes and compares every channel of every pixel
   with the reference image. The test passes when no channel differs by more than 1. The
   tolerance absorbs floating-point differences between compilers and standard
@@ -2393,8 +2536,10 @@ Golden-image tests:
   for the four of the shading scene, the second into
   `shading_gouraud_faceted_320x180.ppm`,
   and `render_demo --scene textures --texture-mapping <perspective-correct|linear> ...`
-  for the two of the textures scene, into
+  for the two of the textures scene under nearest neighbor filtering, into
   `textures_perspective_correct_320x180.ppm` and `textures_linear_320x180.ppm`,
+  and `render_demo --scene textures --texture-filter bilinear ...` for the third, into
+  `textures_bilinear_320x180.ppm`,
   from a Release build, and the pictures are reviewed before they are committed. The
   `flat` reference doubles as a regression test: neither the specular nor the shadow code
   path may change the output of an ambient-only scene, `diffuse` pins the shadows of
@@ -2422,18 +2567,26 @@ Golden-image tests:
   look at is the large one. They are drawn with culling, so they would notice a face of
   the crate or a tile of the floor listed the wrong way round, and a face whose picture
   was pinned on upside down or mirrored. Textures changed no other reference: the
-  eighteen from before them are byte for byte what they were.
+  eighteen from before them are byte for byte what they were. The third textures
+  reference pins the same scene under perspective-correct mapping and bilinear
+  filtering: the same 47420 pixels, of which 46802 have another color than under
+  nearest neighbor filtering, by 17 levels a channel on average. At this size the
+  texture is nowhere drawn larger than it is (a texel is at most two thirds of a pixel
+  wide), so the reference shows none of what the filter is for and pins its arithmetic:
+  the four texels, the two fractions and the edge. Bilinear filtering changed no other
+  reference either, the filter being nearest neighbor unless it is asked for: the
+  twenty from before it are byte for byte what they were.
 
 ## 9. Demo application
 
 `render_demo` renders one of the demo pictures to a file:
 
 ```
-render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|filled|shading|textures|axes] [--width N] [--height N] [--distance D] [--shading flat|gouraud-faceted|gouraud|phong] [--texture-mapping linear|perspective-correct] [--output PATH]
+render_demo [--scene reflective|specular|diffuse|flat|mirrorball|lines|triangles|shaded|cube|objects|instances|camera|clipping|filled|shading|textures|axes] [--width N] [--height N] [--distance D] [--shading flat|gouraud-faceted|gouraud|phong] [--texture-mapping linear|perspective-correct] [--texture-filter nearest-neighbor|bilinear] [--output PATH]
 ```
 
 Defaults: `reflective`, 1920 x 1080, distance 1, Phong shading, perspective-correct
-texture mapping, `render.png`. The `mirrorball` scene is
+texture mapping, nearest neighbor filtering, `render.png`. The `mirrorball` scene is
 the project's own composition, built from the same features as the book's scene: a chrome
 ball ringed by six colored spheres of different finishes on a dark polished floor,
 marbles in front, spheres floating above, two point lights for crossing shadows and a
@@ -2621,16 +2774,19 @@ with the round ones the top of a ball projected exactly onto the border between 
 pixels (section 15). At the default distance on a 16:9 canvas the whole floor is in
 view and no triangle is cut by a clipping plane, which matters to this picture: a cut
 floor would be lit as its pieces (3.13), more of them than its two triangles. The
-`textures` scene is the picture of the Textures chapter up to its first filter, and the
-first that is painted: `DrawTexturesScene(canvas, viewport, texture, texture_mapping)`
+`textures` scene is the picture of the Textures chapter as far as it is implemented,
+and the first that is painted:
+`DrawTexturesScene(canvas, viewport, texture, texture_mapping, texture_filter)`
 draws two instances of two models, a crate and a floor, both painted with the one
 texture it is handed, with
-`RenderScene(..., camera, lights, ShadingModel::kFlat, &depth_buffer, BackFaceCulling::kOn, texture_mapping)`,
+`RenderScene(..., camera, lights, ShadingModel::kFlat, &depth_buffer, BackFaceCulling::kOn, texture_mapping, texture_filter)`,
 and `--texture-mapping linear|perspective-correct` chooses the mapping,
-perspective-correct when it is not given. The texture is the crate texture,
+perspective-correct when it is not given, and
+`--texture-filter nearest-neighbor|bilinear` the filter, nearest neighbor when it is
+not given. The texture is the crate texture,
 `CrateTexture()` of the demo layer: 512 x 512 texels, the side of a wooden crate, a
 frame of four boards around upright planks with one plank nailed across from the
-top-left corner to the bottom-right one. It is one scene with two things to show.
+top-left corner to the bottom-right one. It is one scene with three things to show.
 The first is one texture drawn at the size it suits and at every other size, by one
 method, nearest neighbor filtering (3.14). The crate is a cube of side 2 standing on
 its origin, the whole texture on each of its six faces, the right way up on the four
@@ -2657,9 +2813,27 @@ sixty texels wide, are hit by one row of pixels and missed by the next and break
 into dashes and then dots, and the wood between them turns into noise, patterns that
 are not in the texture. The first is what bilinear filtering mends and the second
 what mipmapping mends, with trilinear filtering for the seams between its levels: the
-rest of the book's chapter, of which nothing is implemented, so that this picture is
-what those steps will change.
-The second thing is the chapter's first half itself, the two mappings. Drawn with
+rest of the book's chapter.
+The second thing is the first of those filters. Drawn with `--texture-filter bilinear`
+the same scene has no blocks: at the bottom of the picture, where a texel is 4 pixels
+wide and 3 high, a pixel is a blend of the four texels around its point, and the wood
+runs from one texel's color to the next, the book's Figure 14-8 after its Figure 14-7.
+In the bottom hundred rows at 1920 x 1080, 130711 of the 191900 pairs of pixels side by
+side have one color under nearest neighbor filtering, and 2407 under bilinear
+filtering. The filter shows wherever a texel is larger than a pixel one way or the
+other, which by the figures above is the bottom three tenths of the picture in depth
+and its bottom six tenths across, less and less on the way up. The crate, at about a
+texel to a pixel, is a little softer,
+the fine lines of its grain losing their stair steps, and otherwise the same. The
+floor toward the horizon is not mended: four neighbouring texels of the hundreds under
+a pixel are as much of an accident as one, the boards are still dashes and dots and
+the wood still noise, a little milder for being means of four. That is left for
+mipmapping, of which nothing is implemented, so that this picture is what that step
+will change. The two pictures cover the same 1701644 pixels and differ on 1686787 of
+them. Seen side by side the bilinear one also lies half a texel toward the top-left
+corner of the texture on every face, two pixels at the bottom of the picture: where
+the listing puts a texel (3.14).
+The third thing is the chapter's first half itself, the two mappings. Drawn with
 `--texture-mapping linear` the same scene is the book's Figure 14-3: every face leans
 away from the camera, so on every face the two triangles are each stretched their own
 way and a straight board bends where they meet. On the crate that is slight, a kink in
@@ -2698,7 +2872,9 @@ near plane out with the viewport as well); it has no effect on the 2D pictures.
 `--shading` has an effect on the shading scene alone, the one picture whose shading
 model is a choice; its four values are `flat`, `gouraud-faceted`, `gouraud` and
 `phong`. `--texture-mapping` has an effect on the textures scene alone, the one
-picture that is painted; its two values are `linear` and `perspective-correct`. The
+picture that is painted; its two values are `linear` and `perspective-correct`.
+`--texture-filter` has an effect on that scene alone as well; its two values are
+`nearest-neighbor` and `bilinear`, and it combines with either mapping. The
 texture of the textures scene is not a choice of the command line: the program reads
 it, with `CrateTexture()`, before it starts to draw. The output format follows
 the extension. After every render the program prints two lines: what it drew, at what
@@ -2718,11 +2894,11 @@ rendered 'shading' (gouraud-faceted shading) at 1920x1080 -> faceted.png
 render time: 27.60 ms
 ```
 
-and for a picture that is painted, the texture mapping:
+and for a picture that is painted, the texture mapping and the filter:
 
 ```
-rendered 'textures' (linear texture mapping) at 1920x1080 -> linear.png
-render time: 62.64 ms
+rendered 'textures' (perspective-correct texture mapping, bilinear filtering) at 1920x1080 -> bilinear.png
+render time: 71.89 ms
 ```
 
 The time is that of the
@@ -2736,8 +2912,10 @@ non-zero with a message on bad arguments or I/O failure. Argument parsing is han
 is added for it. The scene table in `render_demo.cpp` is the single list of pictures: the
 usage text, the default and the dispatch are derived from it, so a new picture is a new
 row. The shading models are a table of the same kind, each with its name on the command
-line and a line of the usage text, and so are the texture mappings. What a picture is
-drawn with besides the canvas, the distance, the shading model and the texture mapping
+line and a line of the usage text, and so are the texture mappings and the texture
+filters. What a picture is
+drawn with besides the canvas, the distance, the shading model, the texture mapping and
+the texture filter
 that the command line says and, for a row of the table that is marked as painted, the
 texture that the program has read, reaches a picture as one small struct of which each
 reads what applies to it.
@@ -2824,8 +3002,10 @@ Targets apply to Release builds on a single core. Debug builds have no targets.
 | shading demo, Gouraud, faceted or with the model's normals | 1920 x 1080 | under 80 ms; about 27 ms measured      |
 | shading demo, Phong (the light at 891120 pixels and more) | 1920 x 1080 | under 250 ms; about 74 ms measured      |
 | shading demo, each of the four                   | 320 x 180   | under 15 ms; 1.7, 2.1, 2.1 and 3.8 ms measured   |
-| textures demo, either mapping (2 instances, 2318 of 4620 triangles drawn, a 512 x 512 texture, depth buffer) | 1920 x 1080 | under 200 ms; about 63 ms measured |
-| textures demo, either mapping                    | 320 x 180   | under 20 ms; about 6 ms measured                 |
+| textures demo, nearest neighbor filtering, either mapping (2 instances, 2318 of 4620 triangles drawn, a 512 x 512 texture, depth buffer) | 1920 x 1080 | under 200 ms; about 63 ms measured |
+| textures demo, nearest neighbor filtering, either mapping | 320 x 180   | under 20 ms; about 6 ms measured                 |
+| textures demo, bilinear filtering, either mapping (four texels a pixel) | 1920 x 1080 | under 220 ms; about 71 ms measured |
+| textures demo, bilinear filtering, either mapping | 320 x 180   | under 20 ms; about 6.5 ms measured               |
 
 The render loop iterates rows in the outer loop so the canvas is written sequentially.
 Rows are independent, which keeps the door open for a row-parallel `Render` later; no
@@ -2866,17 +3046,23 @@ section 4 is meant to absorb these steps as additions:
   `RenderObject` under lights with the book's three shading models, flat, Gouraud and
   Phong, Gouraud in both the forms the chapter shows it in, with the triangles' own
   normals and with the model's, and Phong through `DrawPhongTriangle`, which lights
-  every pixel; and textures, the first half of the book's chapter: `Texture`, an image
-  looked up by nearest neighbor filtering, texture coordinates at the corners of a
+  every pixel; and textures, the book's chapter through its first filter: `Texture`, an
+  image looked up by nearest neighbor filtering or by bilinear filtering, which blends
+  the four texels around a point and mends a texture drawn larger than it is (the
+  blocks at the bottom of the `textures` demo), texture coordinates at the corners of a
   model's triangles, carried through the clipping, a texture per model, and
   `DrawTexturedTriangle`, which carries the coordinates across a triangle by the linear
   mapping the chapter starts with or perspective-correct, under every shading model.
-  Next, in the book's order, the second half of that chapter, the filters, each of
-  which mends something the `textures` demo shows: bilinear filtering, for a texture
-  drawn larger than it is (the blocks at the bottom of that picture); mipmapping, for
-  one drawn smaller (the noise toward its horizon); and trilinear filtering, for the
-  seams between the levels of a mipmap. All three change what `GetTexel` returns or
-  which texture it is asked, and so the two `textures` references. Perspective-correct
+  Next, in the book's order, the rest of that chapter, each step of which mends
+  something the `textures` demo still shows: mipmapping, for a texture drawn smaller
+  than it is (the noise toward the horizon of that picture), and trilinear filtering,
+  for the seams between the levels of a mipmap. Mipmapping changes which texture
+  `GetTexel` is asked, a smaller copy for a triangle that is drawn small, and so needs
+  to know how large a triangle is drawn, which nothing computes yet; trilinear
+  filtering would be a third value of `TextureFilter`. Once there is a filter that is
+  right at every size, the default filter is to be decided again, the default mapping
+  and the default shading model being the ones that are right everywhere; until then
+  it stays nearest neighbor (section 14, decision 20). Perspective-correct
   interpolation is applied to texture coordinates only, as in the book; applying it to
   the intensities and the normals as well, so that they too are interpolated over the
   triangle in space and those of a clipped triangle stop depending on where it was
@@ -3202,7 +3388,8 @@ The judgment calls behind this design, so they are not relitigated by accident.
     the chapter's first filter begins. These are the calls that fit them to this code.
     - The step is "Painting a Crate" and "Perspective-Correct Texture Mapping" and no
       more: a texel is looked up by nearest neighbor filtering, and bilinear filtering,
-      mipmapping and trilinear filtering are left for steps of their own (section 13).
+      mipmapping and trilinear filtering are left for steps of their own (section 13);
+      the first of them has since been taken (decision 20).
       What nearest neighbor filtering does to a texture drawn larger or smaller than it
       is is therefore not a defect to be worked around here but the behaviour of this
       step, stated in 3.14, pinned by unit tests and shown by the demo, so that each of
@@ -3281,6 +3468,81 @@ The judgment calls behind this design, so they are not relitigated by accident.
       crate comes out at about a texel to a pixel; its references are six times
       smaller, which a reference has to be to stay small, and show a crate that is
       drawn too small as well (section 8).
+20. Bilinear filtering follows the listing of the book's chapter, and is asked for.
+    These are the calls that fit it to this code.
+    - The step is "Bilinear Filtering" and no more: mipmapping and trilinear filtering
+      are left for steps of their own (section 13). What bilinear filtering leaves of a
+      texture drawn smaller than it is, which is all of it, is the behaviour of this
+      step, stated in 3.14 and pinned by a unit test, as the blocks were of the step
+      before (decision 19).
+    - The filter is a parameter, `TextureFilter`, as the mapping is (decision 19) and
+      for the reason `kLinear` and `kGouraudFaceted` are kept (decision 18): the chapter
+      draws a picture with each filter, its Figures 14-7 and 14-8, and the step from
+      the one to the other is what it teaches. The chapter links no demo for this
+      section. The book's repository has an unfinished one, `demos/raster-13.html`,
+      which calls itself a work in progress, and it has the same shape:
+      `getTexel(u, v, filter)`.
+    - It is a parameter of the lookup and not a property of the `Texture`. One texture
+      is then looked up both ways by two calls, which the tests and the demo do,
+      without a second copy of 786 KB, and a texture stays what it is, an image. The
+      cost is one more parameter on five functions, the eleventh of the `RenderScene`
+      that lights (decision 11).
+    - The default is nearest neighbor filtering, where the default mapping and the
+      default shading model are the last of their chapters. Those two are right
+      everywhere. Bilinear filtering is not: it mends a texture drawn larger than it is
+      and leaves one drawn smaller as it was, for four times the texels. And with this
+      default the step is an addition and nothing else: every call, every test and
+      every reference from before it is what it was, where back-face culling, whose
+      default is on, changed a reference (decision 16). The roadmap had expected this
+      step to change the two `textures` references; a third was added instead. The
+      default is to be decided again when there is a filter that is right at every
+      size (section 13).
+    - `tx = u * width`, with no half texel taken off, as the listing has it:
+      `fx = frac(tx)` and `TL = texture[floor(tx)][floor(ty)]`. That makes a texel a
+      point at the top-left corner of the square nearest neighbor filtering gives it,
+      so the bilinear picture lies half a texel nearer the texture's origin than the
+      nearest neighbor one, and the last half texel before the right and the bottom
+      edge is flat. The usual convention puts a texel in the middle of its square,
+      `tx = u * width - 0.5`, which keeps the two pictures in register and is what the
+      unfinished demo does. The listing is followed, as it is for pixel coordinates
+      (decision 8): it is what the chapter says; half a texel shows in no picture
+      unless the two are laid over each other; and with it the two filters agree at
+      every whole `(tx, ty)`, which is what lets the tests of both be exact on the same
+      triangles. Changing it is one line and a deliberate decision, not a tidy-up: it
+      changes the bilinear reference and every expectation of those tests.
+    - A texel beyond the right or the bottom edge is the edge's, as decision 19 has it
+      for a coordinate beyond an edge: nothing wraps. The listing reads
+      `texture[tx+1][ty]` without a word about the last column, and the unfinished demo
+      reads the four bytes that follow in its buffer, which are the first texel of the
+      next row. Wrapping around would suit a texture made to tile and would draw a line
+      of the opposite edge along every face of the crate. In the code the coordinate is
+      kept within `0 .. width - 1` before it is split into a whole part and a fraction,
+      which gives the same color as keeping each of the four texels inside the texture
+      and is less to read.
+    - The blend is computed as `a + f (b - a)` and not as the listing's
+      `(1 - f) a + f b`. This is the one place where a formula is not written the way
+      the book writes it, and the reason is the canvas, which truncates (decision 1).
+      The two forms are one number and not one floating-point number: of 51.2 million
+      blends of a level with itself, every level from 0 to 255 with 200000 random
+      fractions each, the listing's form came out below the level 1013153 times and
+      above it 1012177 times, by a rounding error, and for the level 255 on 3.8% of the
+      fractions. After the three blends of one lookup a plain white texture is below
+      255 at 6.5% of its points, as little as `254.99999999999994`: it would have been
+      drawn with one pixel in fifteen at 254. `a + f (b - a)` gives a level blended
+      with itself exactly, the difference being exactly 0, in all of them, and is never
+      outside the two levels it blends. The doc comment of `GetTexel` states the book's
+      form and says which one is computed.
+    - `GetTexel` returns the blend as it is, a `Color` with fractional channels. Nothing
+      is rounded there: the light multiplies it and the canvas truncates the product,
+      once, like every other color (decision 1).
+    - The texture still keeps the image's bytes (decision 19), and bilinear filtering
+      converts four texels to colors per lookup instead of one.
+    - The `textures` demo got no new object and no new camera: its floor under the
+      camera was composed to show the blocks that this step removes (decision 19), and
+      `--texture-filter` chooses between the two pictures. Its bilinear reference is
+      320 x 180 like the others, a size at which the texture is nowhere drawn larger
+      than it is; it pins the arithmetic, and the unit tests pin the gradients
+      (section 8).
 
 ## 15. Implementation notes
 
@@ -3290,8 +3552,9 @@ filled triangles and the reorganisation into layers, 2026-11-05 with shaded tria
 the perspective projection and objects made of triangles, 2026-11-09 with models,
 instances and scenes and, the same day, with model and camera transforms,
 2026-11-16 with clipping and shaded objects, 2026-11-20 with back-face culling,
-2026-11-24 with the lighting layer and with shading, and 2026-11-25 with the shading
-demo as it is now, the larger of its two scenes, and, the same day, with textures.
+2026-11-24 with the lighting layer and with shading, 2026-11-25 with the shading
+demo as it is now, the larger of its two scenes, and, the same day, with textures, and
+2026-11-26 with bilinear filtering.
 
 - Catch2 is pinned to v3.16.1.
 - The golden images are 320 x 180. The ±1 tolerance in the test has never been needed on
@@ -3712,8 +3975,36 @@ demo as it is now, the larger of its two scenes, and, the same day, with texture
 - The crate texture is a picture by another author, converted once from the JPEG that
   lies beside it (`assets/textures/README.md`). The PPM is what the build reads and
   what the tests pin, seven texels of it: converting the JPEG again with another
-  decoder may give bytes that differ by a level here and there, and with them two
+  decoder may give bytes that differ by a level here and there, and with them three
   references.
+- Bilinear filtering in the textures demo, 2026-11-26. It sets the pixels nearest
+  neighbor filtering sets, 1701644 at 1920 x 1080 and 47420 at 320 x 180, and gives
+  1686787 and 46802 of them another color, at the small size by 17 levels a channel on
+  average and by as much as 241. What it is for shows at the bottom of the large
+  picture, where a texel is 4 pixels wide and 3 high: in the bottom hundred rows 130711
+  of the 191900 pairs of pixels side by side have one color under nearest neighbor
+  filtering, the blocks, and 2407 under bilinear filtering. The small picture has no
+  such place, six times as many texels falling on every pixel.
+- Render times of the textures demo under the two filters, as `render_demo` prints
+  them, nine runs each in one session on 2026-11-26, Release, the smallest, the median
+  and the largest. At 1920 x 1080 under perspective-correct mapping 60.0, 61.5 and
+  63.3 ms with nearest neighbor filtering and 69.4, 71.9 and 74.5 ms with bilinear
+  filtering; under linear mapping 58.0, 58.7 and 61.6 ms and 68.1, 69.2 and 71.0 ms. At
+  320 x 180, perspective-correct, 5.1, 5.9 and 6.4 ms and 5.7, 6.5 and 7.7 ms. Four
+  texels and three blends in the place of one texel cost about 10 ms over the 1954518
+  lookups of the large picture, 5 ns each, a sixth of the whole; at the small size
+  they are lost among the triangles.
+- The bilinear reference is as reproducible as the others: the Debug build with
+  sanitizers draws it byte for byte as the Release build does. It has no border of the
+  second kind above, a blend being a continuous function of the coordinate (section 8).
+- Bilinear filtering changed no picture that does not ask for it: the twenty earlier
+  references and the twenty-one pictures at 640 x 360, at 321 x 181 and at 1920 x 1080,
+  the two of the textures demo among them, are byte for byte what they were, compared
+  with renders of the build before it. The lookup now asks every time which filter it
+  was given, and five functions pass one more argument; neither shows in the timings,
+  medians of nine single runs at 1920 x 1080 from the two builds: the textures demo
+  60.2 ms before and 60.3 after, the clipping demo 50.4 and 50.4, the filled demo 18.7
+  and 17.3, the shading demo under Phong shading 71.9 and 71.9.
 - The `.clang-format` file is in place and clang-format 18 is now installed on the
   development machine, but the sources were formatted by hand to its rules and
   `clang-format --dry-run` still reports a handful of differences in older files. A

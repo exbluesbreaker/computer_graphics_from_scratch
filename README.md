@@ -29,9 +29,11 @@ shading, with each triangle's own normal or with the normals of the model's surf
 at every pixel from interpolated normals (Phong shading). And a model can be painted
 with a texture: an image whose points are pinned to the corners of the triangles and
 carried across them to every pixel, perspective-correct, so that a cube becomes a
-wooden crate. The texel under a pixel is picked by the simplest rule there is, nearest
-neighbor filtering; the filters that the book goes on to, bilinear filtering and
-mipmapping, are the next steps and are not there yet.
+wooden crate. The color of a pixel is that of the one texel its point falls in, nearest
+neighbor filtering, the simplest rule there is, or, when asked for, a blend of the four
+texels around the point, bilinear filtering, which smooths a texture that is drawn
+larger than it is. Mipmapping, which the book goes on to for a texture drawn smaller
+than it is, is the next step and is not there yet.
 `docs/SPEC.md` describes the design, the architecture and the roadmap.
 
 ## Requirements
@@ -71,6 +73,7 @@ Use `--preset release` for an optimized build in `build/release`. Then:
 ./build/release/apps/render_demo --scene shading --shading phong --output phong.png   # four ways
 ./build/release/apps/render_demo --scene textures --output textures.png   # a texture, at every size
 ./build/release/apps/render_demo --scene textures --texture-mapping linear --output bent.png
+./build/release/apps/render_demo --scene textures --texture-filter bilinear --output smooth.png
 ./build/release/apps/render_demo --help
 ```
 
@@ -87,8 +90,9 @@ millisecond; it is a single run, so compare several before trusting a small diff
 The first line names the shading model for the `shading` scene, the one picture it
 changes, so the four can be told apart: at 1920 x 1080 they take about 23 ms (flat),
 27 ms (Gouraud, in either form) and 74 ms (Phong) on the development machine. For the
-`textures` scene it names the texture mapping instead; that picture takes about 63 ms
-either way, and its texture is read before the clock starts.
+`textures` scene it names the texture mapping and the texture filter instead; that
+picture takes about 62 ms under either mapping with nearest neighbor filtering and
+about 71 ms with bilinear filtering, and its texture is read before the clock starts.
 
 Scenes: `reflective` (three shiny spheres on a shiny yellow floor with ambient, point and
 directional lights; the lights show up as highlights, the spheres cast shadows and mirror
@@ -123,8 +127,8 @@ order would put the back of every cube over its front and every cube over the on
 front of it; back-face culling removes the faces a cube turns away, 102 of the 180
 triangles, and through the depth buffer each cube shows the three faces it should),
 `shading` (the picture of the Shading chapter, described below), `textures` (the
-picture of the Textures chapter up to its first filter: a wooden crate on a floor paved
-with the same texture, also described below),
+picture of the Textures chapter as far as it is implemented: a wooden crate on a floor
+paved with the same texture, also described below),
 `axes` (the coordinate axes and corner dots, no ray tracing). A larger `--distance`
 narrows the field of view of the ray-traced scenes, the cube, the objects, the
 instances, the camera scene, the clipping scene, the filled cubes, the shading scene and
@@ -205,34 +209,60 @@ the formulas, and section 14, decision 18, the choices.
 The `textures` scene is a wooden crate standing on a floor that runs to the horizon.
 Both are painted with one texture, `assets/textures/wooden_crate.ppm`, 512 x 512
 texels, and by one method: a pixel finds the point `(u, v)` of the texture that its
-triangle shows there and takes the color of the one texel that point falls in. The book
-calls that nearest neighbor filtering. This is the book's Textures chapter up to its
-first filter, and the scene is made to show both what it gets right and what it
-leaves:
+triangle shows there and, unless it is told otherwise, takes the color of the one texel
+that point falls in. The book calls that nearest neighbor filtering. The scene is made
+to show what that gets right, what it leaves, and what the filters of the chapter's
+second half do about it:
 
-| where | how large the texture is drawn (at 1920 x 1080) | what it looks like |
-|---|---|---|
-| the crate | one to one and a half texels to a pixel: a face is some 340 pixels wide and 400 to 580 high | right: this is the size the texture was made for |
-| the floor at the bottom of the picture, under 2 from the camera | too large: a texel is 4 pixels wide and 3 high | blocks of one color with sharp borders |
-| the floor 3 to 5 from the camera, in front of the crate | within a factor of about 2 of its own size, too large across and then too small in depth | nearly right |
-| the floor toward the horizon | too small, mostly in depth: a pixel covers 2 texels in the middle of the picture, 25 at 18 away, 120 at 41 away, over 1600 under the horizon | the boards break up into dashes and dots, the wood into noise |
+| where | how large the texture is drawn (at 1920 x 1080) | nearest neighbor filtering | bilinear filtering |
+|---|---|---|---|
+| the crate | one to one and a half texels to a pixel: a face is some 340 pixels wide and 400 to 580 high | right: this is the size the texture was made for | the same, a little softer |
+| the floor at the bottom of the picture, under 2 from the camera | too large: a texel is 4 pixels wide and 3 high | blocks of one color with sharp borders | right: the wood runs smoothly from one texel's color to the next |
+| the floor 3 to 5 from the camera, in front of the crate | within a factor of about 2 of its own size, too large across and then too small in depth | nearly right | nearly right, smoother across |
+| the floor toward the horizon | too small, mostly in depth: a pixel covers 2 texels in the middle of the picture, 25 at 18 away, 120 at 41 away, over 1600 under the horizon | the boards break up into dashes and dots, the wood into noise | the same dashes and noise, a little milder |
 
 The crate looks good because a pixel there shows about one texel. The floor is the
-object that needs the filters the chapter goes on to. Where a texture is drawn larger
-than it is, every pixel inside a texel gets the texel's one color, and the texels show
-as blocks: bilinear filtering, which blends the four texels around a point, mends that.
-Where it is drawn smaller, a pixel covers many texels and shows whichever one its
-point happens to fall in; the rest are never looked at, so fine detail turns into noise
-and regular detail into patterns that are not in the texture: mipmapping, which keeps
-the texture at several sizes and picks the one that fits, mends that, and trilinear
-filtering the seams between those sizes. **None of the three is implemented yet**, on
-purpose: this picture is what they will change. (A floor is drawn too small in depth
+object that needs the filters. Where a texture is drawn larger than it is, every pixel
+inside a texel gets the texel's one color, and the texels show as blocks. Where it is
+drawn smaller, a pixel covers many texels and shows whichever one its point happens to
+fall in; the rest are never looked at, so fine detail turns into noise and regular
+detail into patterns that are not in the texture. (A floor is drawn too small in depth
 long before it is across, because it leans away: at a distance of 40 a pixel covers 25
 times as much floor in depth as across.)
 
+`--texture-filter nearest-neighbor|bilinear` chooses how the color at a point of the
+texture is made from its texels, nearest neighbor when it is not given:
+
+- `nearest-neighbor` takes the texel the point falls in: `tx = u * width` and
+  `ty = v * height`, rounded down.
+- `bilinear` keeps the fractions `fx` and `fy` that the rounding cuts off and blends the
+  four texels around the point with them, the texel at `(tx, ty)`, the next in its row
+  and the two below them: across the top pair, across the bottom pair, and then between
+  the two results. The color changes evenly from one texel to the next instead of
+  jumping at the border, so the blocks become gradients. This is the book's bilinear
+  filtering, and it mends the first of the two faults: compare the bottom of
+  `--texture-filter bilinear` with the default picture. In its lowest hundred rows two
+  pixels side by side have the same color 68% of the time under nearest neighbor
+  filtering and 1% of the time under bilinear filtering.
+
+Bilinear filtering does nothing for the second fault. Four neighbouring texels of the
+hundreds under a pixel are as much of an accident as one, and the floor toward the
+horizon is still noise. Mipmapping, which keeps the texture at several sizes and picks
+the one that fits, mends that, and trilinear filtering the seams between those sizes.
+**Neither is implemented yet**, on purpose: that part of the picture is what they will
+change. This is also why bilinear filtering is something to ask for and not the
+default: it is right where the texture is drawn too large and no better anywhere else,
+at four texels a pixel, about a sixth more time on this picture.
+
+The bilinear picture follows the listing in the book, in which a texel is the point at
+the top-left corner of the square that nearest neighbor filtering gives it. It
+therefore lies half a texel nearer the texture's top-left corner than the default
+picture, which shows only when the two are laid over each other.
+
 `--texture-mapping linear|perspective-correct` chooses how the texture coordinates get
 from the corners of a triangle to its pixels, perspective-correct when it is not given.
-These are the chapter's two pictures before the filters:
+These are the two pictures of the chapter's first half, and either goes with either
+filter:
 
 - `linear` interpolates `u` and `v` over the picture of the triangle, like a color.
   That is what one tries first, and it is wrong for every face that leans away from
@@ -260,17 +290,19 @@ face.texture = &crate;   // the model points to its texture; keep it alive
 
 cgfs::RenderScene(canvas, viewport, models, instances, camera, lights,
                   cgfs::ShadingModel::kFlat, &depth_buffer, cgfs::BackFaceCulling::kOn,
-                  cgfs::TextureMapping::kPerspectiveCorrect);
+                  cgfs::TextureMapping::kPerspectiveCorrect, cgfs::TextureFilter::kBilinear);
 ```
 
 `u` runs from the left edge of the texture, 0, to its right edge, 1, and `v` from its
 top, 0, to its bottom, 1, whatever its size; the coordinates belong to the corners of
 the triangles, not to the vertices, since a corner of a crate is a different corner of
 the picture on each face that meets there. The texels take the place of the triangle's
-color and the light multiplies them, under any shading model. A coordinate beyond an
-edge of the texture gives the texel at that edge; nothing repeats, and the floor is
-paved by having a face for every tile. `docs/SPEC.md`, section 3.14, has the formulas
-and section 14, decision 19, the choices.
+color and the light multiplies them, under any shading model. The last two arguments
+may be left out: the mapping is then perspective-correct and the filter nearest
+neighbor. A coordinate beyond an edge of the texture gives the texel at that edge under
+either filter; nothing repeats, and the floor is paved by having a face for every tile.
+`docs/SPEC.md`, section 3.14, has the formulas and section 14, decisions 19 and 20, the
+choices.
 
 The texture is a picture by another author (the file name in `assets/textures/` names
 them); its licence is not recorded in the repository, which `assets/textures/README.md`
@@ -312,7 +344,8 @@ include/cgfs/   public headers: one folder per layer, one file per concept
                                 removal
                 image_io.h      PPM writer and reader, PNG writer
                 texture.h       Texture: an image to paint triangles with, looked up by
-                                GetTexel(u, v), and Uv, a point of it
+                                GetTexel(u, v) with a TextureFilter (nearest neighbor or
+                                bilinear), and Uv, a point of it
   camera/       viewport.h      Viewport: CanvasToViewport(x, y), field of view
                 camera.h        Camera (position, orientation and clipping planes) and
                                 MakeCameraMatrix
@@ -336,7 +369,8 @@ include/cgfs/   public headers: one folder per layer, one file per concept
                                 (the last two through a depth buffer when given one),
                                 DrawTriangleFunction, the signature they share,
                                 DrawTexturedTriangle, which paints a texture, carried across
-                                by a TextureMapping (linear or perspective-correct), and
+                                by a TextureMapping (linear or perspective-correct) and
+                                looked up by a TextureFilter, and
                                 DrawPhongTriangle, which computes the light at every pixel
                 projection.h    ViewportToCanvas and ProjectVertex: a Vec3 seen through a
                                 Viewport becomes the Point the primitives draw; UnprojectVertex,
@@ -410,8 +444,10 @@ committing:
 ./build/release/apps/render_demo --scene shading --shading phong --width 320 --height 180 --output tests/demo/golden/shading_phong_320x180.ppm
 ./build/release/apps/render_demo --scene textures --texture-mapping perspective-correct --width 320 --height 180 --output tests/demo/golden/textures_perspective_correct_320x180.ppm
 ./build/release/apps/render_demo --scene textures --texture-mapping linear --width 320 --height 180 --output tests/demo/golden/textures_linear_320x180.ppm
+./build/release/apps/render_demo --scene textures --texture-filter bilinear --width 320 --height 180 --output tests/demo/golden/textures_bilinear_320x180.ppm
 ```
 
-The two `textures` references are 320 x 180 pictures of a scene composed for
-1920 x 1080: in them the crate is drawn six times too small as well. They pin the
-arithmetic; the picture to look at is the large one.
+The three `textures` references are 320 x 180 pictures of a scene composed for
+1920 x 1080: in them the crate is drawn six times too small as well, and the texture is
+nowhere drawn larger than it is, so the bilinear one shows no blocks removed. They pin
+the arithmetic; the picture to look at is the large one.
